@@ -110,6 +110,23 @@ make clean
 - `ATLAS_VIEW=<name>` opens a specific view at startup (e.g. `apps`,
   `services`, `gpu`, `memory`, `disk:nvme0n1`, `net:wlp7s0`) — handy for testing.
 
+## Versioning
+
+Atlas Monitor follows [Semantic Versioning](https://semver.org):
+`MAJOR.MINOR.PATCH`.
+
+- **MAJOR** — large or breaking changes.
+- **MINOR** — new, backward-compatible features.
+- **PATCH** — backward-compatible bugfixes.
+
+`0.x` releases are pre-1.0 (the app is still evolving); `1.0.0` will mark the
+first release declared stable. The current version lives in [`VERSION`](VERSION)
+and is shown in **Settings → Application → Version**.
+
+Tagged releases land on `main` (e.g. `v0.1.0`). Day-to-day development happens on
+the `beta` branch (versioned `X.Y.Z-beta`); once a beta is approved it is merged
+to `main`, the `-beta` suffix dropped, and the release tagged.
+
 ## Project layout
 
 ```

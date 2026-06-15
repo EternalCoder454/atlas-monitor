@@ -11,7 +11,7 @@ import (
 
 // ShowSettings presents the settings dialog over parent. onChange runs whenever
 // a setting is saved; onRestart rebuilds-and-restarts the app.
-func ShowSettings(parent gtk.Widgetter, s *config.Settings, onChange, onRestart func()) {
+func ShowSettings(parent gtk.Widgetter, s *config.Settings, onChange, onRestart func(), version string) {
 	dlg := adw.NewPreferencesDialog()
 	dlg.SetTitle("Settings")
 	page := adw.NewPreferencesPage()
@@ -85,6 +85,15 @@ func ShowSettings(parent gtk.Widgetter, s *config.Settings, onChange, onRestart 
 	appGroup := adw.NewPreferencesGroup()
 	appGroup.SetTitle("Application")
 	appGroup.SetDescription("Rebuild from source if it changed, then restart to load the latest version.")
+
+	if version == "" {
+		version = "unknown"
+	}
+	versionRow := adw.NewActionRow()
+	versionRow.SetTitle("Version")
+	versionRow.SetSubtitle(version)
+	appGroup.Add(versionRow)
+
 	update := adw.NewButtonRow()
 	update.SetTitle("Update and restart")
 	update.AddCSSClass("suggested-action")

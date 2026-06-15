@@ -21,17 +21,23 @@
   margin: 12px 16px 2px 16px;
 }
 
-/* Make the Disk/Network dropdown headers as compact as the plain rows, and
-   pull their disclosure arrow in from the far edge. */
-.am-sidebar row.expander row.header {
-  min-height: 0;
-  padding-top: 6px;
-  padding-bottom: 6px;
+/* Make the Disk/Network dropdown headers render identically to the plain rows.
+   The default expander header sits wider with a square highlight because its
+   own padding stacks on top of the navigation row's; zero the outer row's
+   padding and give the header the same height, padding and 9px rounded
+   highlight that `.navigation-sidebar > row` uses. */
+.am-sidebar row.expander {
+  padding: 0;
+}
+
+.am-sidebar row.expander > box > list > row.header {
+  min-height: 36px;
+  padding: 0 8px;
+  border-radius: 9px;
 }
 
 .am-sidebar row.expander image.expander-row-arrow {
   -gtk-icon-size: 14px;
-  margin-left: 0;
   margin-right: 2px;
   opacity: 0.7;
 }
