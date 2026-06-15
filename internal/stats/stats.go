@@ -10,10 +10,9 @@ import (
 	"atlas-monitor/internal/gpu"
 )
 
-// CoreStat holds one logical CPU core's usage and current frequency.
+// CoreStat holds one logical CPU core's usage.
 type CoreStat struct {
 	Usage float64 // percent 0..100
-	Freq  float64 // MHz
 }
 
 // CPUStats is the aggregate + per-core CPU state.
@@ -152,7 +151,6 @@ type Collector struct {
 
 	// collectCPU scratch — only the CPU goroutine touches these, so no locking.
 	cpuFreqPaths []string    // precomputed /sys cpufreq paths, one per logical core
-	cpuFreqs     []float64   // reused per-core frequency buffer
 	cpuStatBuf   []byte      // reused /proc/stat scan buffer (avoids per-tick line allocs)
 	cpuSamples   []cpuSample // reused /proc/stat parse results
 }
@@ -167,9 +165,6 @@ func New(gpuReader *gpu.Reader) *Collector {
 		cpuPrev: make(map[string]cpuTimes),
 	}
 }
-
-// Stats returns the shared snapshot for the UI to read.
-func (c *Collector) Stats() *Stats { return c.stats }
 
 // Read runs f while holding the read lock. f must not block.
 func (c *Collector) Read(f func(*Stats)) {

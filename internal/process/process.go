@@ -26,7 +26,6 @@ const netScanThreshold = 8192
 // Proc is a single process snapshot for the Apps table.
 type Proc struct {
 	PID       int
-	PPID      int
 	Name      string
 	CPU       float64 // percent of one core (may exceed 100 for threaded procs)
 	RSS       uint64  // resident bytes
@@ -186,11 +185,11 @@ func (c *Collector) collect() {
 			continue
 		}
 
-		name, ppid, cpuJiffies, ok := c.readStat(pid)
+		name, cpuJiffies, ok := c.readStat(pid)
 		if !ok {
 			continue
 		}
-		p := Proc{PID: pid, PPID: ppid, Name: name, GPU: -1}
+		p := Proc{PID: pid, Name: name, GPU: -1}
 		p.RSS = c.readRSS(pid)
 
 		rb, wb := c.readIO(pid)
@@ -282,25 +281,24 @@ func (c *Collector) slurp(path string) []byte {
 	return c.buf[:n]
 }
 
-// readStat parses /proc/[pid]/stat for name, ppid, and utime+stime jiffies.
-func (c *Collector) readStat(pid int) (name string, ppid int, cpuJiffies uint64, ok bool) {
+// readStat parses /proc/[pid]/stat for the process name and utime+stime jiffies.
+func (c *Collector) readStat(pid int) (name string, cpuJiffies uint64, ok bool) {
 	b := c.slurp("/proc/" + strconv.Itoa(pid) + "/stat")
 	if b == nil {
-		return "", 0, 0, false
+		return "", 0, false
 	}
 	// comm is parenthesised and may contain spaces; split after the last ')'.
 	lp := bytes.IndexByte(b, '(')
 	rp := bytes.LastIndexByte(b, ')')
 	if lp < 0 || rp < 0 || rp < lp {
-		return "", 0, 0, false
+		return "", 0, false
 	}
 	name = string(b[lp+1 : rp]) // small copy out of the shared buffer
 	rest := b[rp+2:]
-	// rest field 0 is field 3 (state); ppid=field 4, utime=field 14, stime=field 15.
-	ppid = int(fieldUint(rest, 1))
+	// rest field 0 is field 3 (state); utime=field 14, stime=field 15.
 	utime := fieldUint(rest, 11)
 	stime := fieldUint(rest, 12)
-	return name, ppid, utime + stime, true
+	return name, utime + stime, true
 }
 
 // readRSS returns resident set size in bytes from /proc/[pid]/statm.

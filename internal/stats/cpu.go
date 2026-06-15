@@ -77,7 +77,6 @@ func (c *Collector) initCPUStatic() {
 	for i := range c.cpuFreqPaths {
 		c.cpuFreqPaths[i] = fmt.Sprintf("/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq", i)
 	}
-	c.cpuFreqs = make([]float64, logical)
 	c.cpuStatBuf = make([]byte, 0, 16*1024)
 	c.cpuSamples = make([]cpuSample, 0, logical+1)
 
@@ -130,12 +129,10 @@ func (c *Collector) collectCPU() {
 	f.Close()
 
 	maxFreq := 0.0
-	for i := range c.cpuFreqs {
-		c.cpuFreqs[i] = 0
-		if v, err := readUint(c.cpuFreqPaths[i]); err == nil {
-			c.cpuFreqs[i] = float64(v) / 1000.0
-			if c.cpuFreqs[i] > maxFreq {
-				maxFreq = c.cpuFreqs[i]
+	for _, p := range c.cpuFreqPaths {
+		if v, err := readUint(p); err == nil {
+			if mhz := float64(v) / 1000.0; mhz > maxFreq {
+				maxFreq = mhz
 			}
 		}
 	}
@@ -166,9 +163,6 @@ func (c *Collector) collectCPU() {
 			} else if idx, ok := coreIndex(sm.name); ok && idx < len(s.CPU.Cores) {
 				s.CPU.Cores[idx].Usage = usage
 			}
-		}
-		for i := 0; i < len(s.CPU.Cores) && i < len(c.cpuFreqs); i++ {
-			s.CPU.Cores[i].Freq = c.cpuFreqs[i]
 		}
 		s.CPU.CurFreq = maxFreq
 		if temp >= 0 {
@@ -206,13 +200,6 @@ func parseCPUStatLine(line []byte) (name string, idle, total uint64, ok bool) {
 		field++
 	}
 	return name, idle, total, field >= 5
-}
-
-// Cores returns a copy of the per-core slice length (used internally).
-func (s *Stats) Cores() []CoreStat {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.CPU.Cores
 }
 
 func coreIndex(name string) (int, bool) {
