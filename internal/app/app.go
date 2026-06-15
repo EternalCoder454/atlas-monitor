@@ -76,7 +76,11 @@ func (a *App) activate() {
 	win.SetSizeRequest(900, 600)
 
 	header := adw.NewHeaderBar()
-	header.SetTitleWidget(adw.NewWindowTitle("Atlas Monitor", ""))
+	subtitle := ""
+	if a.version != "" {
+		subtitle = "v" + a.version
+	}
+	header.SetTitleWidget(adw.NewWindowTitle("Atlas Monitor", subtitle))
 
 	gear := gtk.NewButtonFromIconName("emblem-system-symbolic")
 	gear.SetTooltipText("Settings")
