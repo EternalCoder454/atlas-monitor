@@ -112,7 +112,7 @@ func newAssistantView(col *stats.Collector, proc *process.Collector, client *ai.
 	v.setIdleAnswer()
 
 	answerBox := gtk.NewBox(gtk.OrientationVertical, 0)
-	answerBox.SetMarginTop(10)
+	answerBox.SetMarginTop(28)
 	answerBox.Append(v.answer)
 
 	v.scroller = gtk.NewScrolledWindow()
