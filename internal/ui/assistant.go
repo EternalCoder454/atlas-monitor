@@ -30,7 +30,7 @@ type assistantView struct {
 
 	titleLabel *gtk.Label
 	caption    *gtk.Label
-	logo       *gtk.DrawingArea
+	logo       *logoOrb
 	answer     *gtk.Label // the single, Markdown-rendered reply
 	scroller   *gtk.ScrolledWindow
 	entry      *gtk.Entry
@@ -80,11 +80,7 @@ func newAssistantView(col *stats.Collector, proc *process.Collector, client *ai.
 	header := gtk.NewBox(gtk.OrientationVertical, 6)
 	header.SetHAlign(gtk.AlignCenter)
 	header.SetMarginTop(18)
-	v.logo = gtk.NewDrawingArea()
-	v.logo.SetContentWidth(92)
-	v.logo.SetContentHeight(92)
-	v.logo.SetHAlign(gtk.AlignCenter)
-	v.logo.SetDrawFunc(drawAtlasLogo)
+	v.logo = newLogoOrb()
 	header.Append(v.logo)
 	v.titleLabel = newTitle(settings.AssistantTitle)
 	v.titleLabel.SetHAlign(gtk.AlignCenter)
@@ -164,6 +160,7 @@ func (v *assistantView) Update() {
 	v.entry.SetSensitive(!v.busy && v.ready)
 	v.send.SetSensitive(!v.busy && v.ready)
 	v.quickBtn.SetSensitive(!v.busy && v.ready)
+	v.logo.setActive(v.busy)
 }
 
 func (v *assistantView) refreshCaption() {
@@ -346,6 +343,7 @@ func (v *assistantView) sendText(q string) {
 	v.entry.SetSensitive(false)
 	v.send.SetSensitive(false)
 	v.quickBtn.SetSensitive(false)
+	v.logo.setActive(true)
 	v.refreshCaption()
 
 	go func() {
@@ -377,6 +375,7 @@ func (v *assistantView) finish(full string, stats ai.Stats, err error) {
 		v.history = v.history[len(v.history)-8:]
 	}
 	v.busy = false
+	v.logo.setActive(false)
 	v.refreshCaption()
 	v.entry.SetSensitive(true)
 	v.send.SetSensitive(true)
