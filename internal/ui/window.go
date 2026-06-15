@@ -21,6 +21,7 @@ type Window struct {
 	settings     *config.Settings
 	stack        *gtk.Stack
 	views        map[string]View
+	asst         *assistantView
 	assistantRow *adw.ActionRow
 	active       string
 	visible      bool
@@ -75,7 +76,8 @@ func (w *Window) Build() gtk.Widgetter {
 		w.addView("gpu", newGPUView(w.col))
 	}
 
-	w.addView("assistant", newAssistantView(w.col, w.proc, w.ai, w.settings))
+	w.asst = newAssistantView(w.col, w.proc, w.ai, w.settings)
+	w.addView("assistant", w.asst)
 	w.addView("apps", newAppsView(w.proc))
 	w.addView("services", newServicesView())
 
@@ -122,6 +124,14 @@ func (w *Window) SetAIEnabled(enabled bool) {
 	}
 	if !enabled && w.active == "assistant" {
 		w.selectView("cpu")
+	}
+}
+
+// RefreshQuickPrompts rebuilds the assistant's quick-prompt dropdown after the
+// prompts are edited in Settings.
+func (w *Window) RefreshQuickPrompts() {
+	if w.asst != nil {
+		w.asst.RefreshQuickPrompts()
 	}
 }
 

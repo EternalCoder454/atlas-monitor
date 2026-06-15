@@ -22,6 +22,31 @@ var obsoletePromptLines = []string{
 	"Per-process GPU usage is unavailable, so only discuss overall GPU load.",
 }
 
+// QuickPrompt is one entry in the assistant's quick-prompts dropdown: a display
+// name and the message sent when it is chosen. Both are user-editable.
+type QuickPrompt struct {
+	Name   string `json:"name"`
+	Prompt string `json:"prompt"`
+}
+
+// DefaultQuickPrompts are the three built-in quick prompts.
+func DefaultQuickPrompts() []QuickPrompt {
+	return []QuickPrompt{
+		{
+			Name:   "Detailed Overview",
+			Prompt: "Give me a detailed overview of this computer right now — CPU, memory, GPU, disks, and network — and call out anything notable.",
+		},
+		{
+			Name:   "Top Processes",
+			Prompt: "List the top 10 processes using the most resources right now. Show each one's CPU% and memory, highest first.",
+		},
+		{
+			Name:   "Quick Check",
+			Prompt: "Quick health check: current CPU usage, RAM used and total, network up/down, and uptime. One short line each.",
+		},
+	}
+}
+
 // Settings is the user-configurable state.
 type Settings struct {
 	AIEnabled      bool   `json:"ai_enabled"`
@@ -30,6 +55,8 @@ type Settings struct {
 	AssistantTitle string `json:"assistant_title"` // page header / chat label; sidebar stays "Assistant"
 	SystemPrompt   string `json:"system_prompt"`
 	UpdateChannel  string `json:"update_channel"` // "main" (Release) or "beta" (newest features/fixes)
+
+	QuickPrompts []QuickPrompt `json:"quick_prompts"` // exactly 3, shown in the assistant dropdown
 }
 
 // Defaults returns the built-in defaults.
@@ -41,6 +68,7 @@ func Defaults() Settings {
 		AssistantTitle: "Assistant",
 		SystemPrompt:   DefaultSystemPrompt,
 		UpdateChannel:  "main",
+		QuickPrompts:   DefaultQuickPrompts(),
 	}
 }
 
@@ -80,6 +108,19 @@ func Load() Settings {
 	}
 	if s.UpdateChannel != "main" && s.UpdateChannel != "beta" {
 		s.UpdateChannel = "main" // default/repair: Release channel
+	}
+	// Quick prompts: keep exactly three, filling any missing slot from defaults.
+	if def := DefaultQuickPrompts(); len(s.QuickPrompts) != len(def) {
+		s.QuickPrompts = def
+	} else {
+		for i := range s.QuickPrompts {
+			if strings.TrimSpace(s.QuickPrompts[i].Name) == "" {
+				s.QuickPrompts[i].Name = def[i].Name
+			}
+			if strings.TrimSpace(s.QuickPrompts[i].Prompt) == "" {
+				s.QuickPrompts[i].Prompt = def[i].Prompt
+			}
+		}
 	}
 	return s
 }

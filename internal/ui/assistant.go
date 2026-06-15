@@ -34,8 +34,10 @@ type assistantView struct {
 	scroller   *gtk.ScrolledWindow
 	entry      *gtk.Entry
 	send       *gtk.Button
-	endMark    *gtk.TextMark // right gravity: scroll target at the very end
-	respStart  *gtk.TextMark // left gravity: start of the in-flight response
+	quickBtn   *gtk.MenuButton // dropdown of saved quick prompts
+	quickPop   *gtk.Popover    // its content, rebuilt from settings on change
+	endMark    *gtk.TextMark   // right gravity: scroll target at the very end
+	respStart  *gtk.TextMark   // left gravity: start of the in-flight response
 
 	// Setup card: shown when Ollama is unreachable or the model isn't installed,
 	// so a fresh user is told exactly what to run instead of hitting a cryptic
@@ -104,6 +106,12 @@ func newAssistantView(col *stats.Collector, proc *process.Collector, client *ai.
 	v.root.Append(v.scroller)
 
 	inputRow := gtk.NewBox(gtk.OrientationHorizontal, 8)
+	v.quickBtn = gtk.NewMenuButton()
+	v.quickBtn.SetIconName("view-list-symbolic")
+	v.quickBtn.SetTooltipText("Quick prompts")
+	v.quickPop = gtk.NewPopover()
+	v.quickBtn.SetPopover(v.quickPop)
+	v.RefreshQuickPrompts()
 	v.entry = gtk.NewEntry()
 	v.entry.SetHExpand(true)
 	v.entry.SetPlaceholderText("Ask about your CPU, memory, processes, services…")
@@ -111,6 +119,7 @@ func newAssistantView(col *stats.Collector, proc *process.Collector, client *ai.
 	v.send = gtk.NewButtonWithLabel("Send")
 	v.send.AddCSSClass("suggested-action")
 	v.send.ConnectClicked(v.onSend)
+	inputRow.Append(v.quickBtn)
 	inputRow.Append(v.entry)
 	inputRow.Append(v.send)
 	v.root.Append(inputRow)
@@ -128,6 +137,7 @@ func (v *assistantView) Update() {
 		v.caption.SetText("AI disabled — enable it in Settings")
 		v.entry.SetSensitive(false)
 		v.send.SetSensitive(false)
+		v.quickBtn.SetSensitive(false)
 		return
 	}
 	v.titleLabel.SetText(v.settings.AssistantTitle)
@@ -139,6 +149,7 @@ func (v *assistantView) Update() {
 	}
 	v.entry.SetSensitive(!v.busy && v.ready)
 	v.send.SetSensitive(!v.busy && v.ready)
+	v.quickBtn.SetSensitive(!v.busy && v.ready)
 }
 
 func (v *assistantView) refreshCaption() {
@@ -265,6 +276,7 @@ func (v *assistantView) onProbe(model string, models []string, err error) {
 	if v.settings.AIEnabled && !v.busy {
 		v.entry.SetSensitive(v.ready)
 		v.send.SetSensitive(v.ready)
+		v.quickBtn.SetSensitive(v.ready)
 		if v.ready {
 			v.refreshCaption()
 		} else {
@@ -273,12 +285,37 @@ func (v *assistantView) onProbe(model string, models []string, err error) {
 	}
 }
 
-func (v *assistantView) onSend() {
-	if v.busy || !v.settings.AIEnabled || !v.ready {
-		return
+// RefreshQuickPrompts rebuilds the dropdown's buttons from the current settings.
+// Called on construction and whenever the quick prompts are edited in Settings.
+func (v *assistantView) RefreshQuickPrompts() {
+	box := gtk.NewBox(gtk.OrientationVertical, 2)
+	box.SetMarginTop(4)
+	box.SetMarginBottom(4)
+	box.SetMarginStart(4)
+	box.SetMarginEnd(4)
+	for _, qp := range v.settings.QuickPrompts {
+		qp := qp // capture per iteration
+		btn := gtk.NewButton()
+		lbl := gtk.NewLabel(qp.Name)
+		lbl.SetXAlign(0)
+		btn.SetChild(lbl)
+		btn.AddCSSClass("flat")
+		btn.SetTooltipText(qp.Prompt)
+		btn.ConnectClicked(func() {
+			v.quickPop.Popdown()
+			v.sendText(qp.Prompt)
+		})
+		box.Append(btn)
 	}
-	q := strings.TrimSpace(v.entry.Text())
-	if q == "" {
+	v.quickPop.SetChild(box)
+}
+
+func (v *assistantView) onSend() { v.sendText(strings.TrimSpace(v.entry.Text())) }
+
+// sendText runs one chat turn for q (typed in the entry or chosen from the
+// quick-prompts dropdown).
+func (v *assistantView) sendText(q string) {
+	if v.busy || !v.settings.AIEnabled || !v.ready || q == "" {
 		return
 	}
 	v.entry.SetText("")
@@ -295,6 +332,7 @@ func (v *assistantView) onSend() {
 	v.streamTokens = 0
 	v.entry.SetSensitive(false)
 	v.send.SetSensitive(false)
+	v.quickBtn.SetSensitive(false)
 	v.refreshCaption()
 
 	go func() {
@@ -333,6 +371,7 @@ func (v *assistantView) finish(full string, stats ai.Stats, err error) {
 	v.refreshCaption()
 	v.entry.SetSensitive(true)
 	v.send.SetSensitive(true)
+	v.quickBtn.SetSensitive(true)
 	v.entry.GrabFocus()
 }
 
@@ -404,11 +443,11 @@ func (v *assistantView) buildContext() string {
 	if snap := v.proc.Snapshot(); len(snap) > 0 {
 		fmt.Fprintf(&b, "\n[PROCESSES] %d running\n", len(snap))
 		b.WriteString("Top by CPU:\n")
-		for _, p := range topProcs(snap, func(a, b process.Proc) bool { return a.CPU > b.CPU }, 6) {
+		for _, p := range topProcs(snap, func(a, b process.Proc) bool { return a.CPU > b.CPU }, 10) {
 			fmt.Fprintf(&b, "- %s (pid %d): %.0f%% CPU, %s\n", p.Name, p.PID, p.CPU, format.Bytes(p.RSS))
 		}
 		b.WriteString("Top by memory:\n")
-		for _, p := range topProcs(snap, func(a, b process.Proc) bool { return a.RSS > b.RSS }, 6) {
+		for _, p := range topProcs(snap, func(a, b process.Proc) bool { return a.RSS > b.RSS }, 10) {
 			fmt.Fprintf(&b, "- %s (pid %d): %s, %.0f%% CPU\n", p.Name, p.PID, format.Bytes(p.RSS), p.CPU)
 		}
 		// GPU: Proc.GPU is -1 for processes that hold no GPU handle and >= 0 for
