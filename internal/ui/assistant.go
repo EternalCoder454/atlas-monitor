@@ -37,15 +37,34 @@ type assistantView struct {
 	endMark    *gtk.TextMark // right gravity: scroll target at the very end
 	respStart  *gtk.TextMark // left gravity: start of the in-flight response
 
-	history     []ai.Message
-	busy        bool
-	streamStart time.Time
+	// Setup card: shown when Ollama is unreachable or the model isn't installed,
+	// so a fresh user is told exactly what to run instead of hitting a cryptic
+	// error after their first question.
+	setupCard  *gtk.Box
+	setupTitle *gtk.Label
+	setupBody  *gtk.Label
+	setupCmd   *gtk.Label
+	copyBtn    *gtk.Button
+
+	ready       bool      // Ollama reachable AND the configured model installed
+	probing     bool      // a readiness probe is in flight
+	lastProbe   time.Time // when the last probe completed
+	statusShort string    // short caption shown while not ready
+
+	history      []ai.Message
+	busy         bool
+	streamStart  time.Time
 	streamTokens int
-	lastStats   ai.Stats
+	lastStats    ai.Stats
 }
 
+// probeInterval is how often the Assistant view re-checks Ollama while visible,
+// so the setup card clears (or reappears) within a few seconds of Ollama
+// starting or stopping. Each probe is a single localhost GET /api/tags.
+const probeInterval = 5 * time.Second
+
 func newAssistantView(col *stats.Collector, proc *process.Collector, client *ai.Client, settings *config.Settings) *assistantView {
-	v := &assistantView{col: col, proc: proc, ai: client, settings: settings}
+	v := &assistantView{col: col, proc: proc, ai: client, settings: settings, ready: true}
 	v.svc, _ = services.NewClient()
 
 	v.root = gtk.NewBox(gtk.OrientationVertical, 10)
@@ -62,6 +81,8 @@ func newAssistantView(col *stats.Collector, proc *process.Collector, client *ai.
 	v.caption.SetXAlign(0)
 	header.Append(v.caption)
 	v.root.Append(header)
+
+	v.root.Append(v.buildSetupCard())
 
 	v.transcript = gtk.NewTextView()
 	v.transcript.SetEditable(false)
@@ -103,15 +124,21 @@ func (v *assistantView) Root() gtk.Widgetter { return v.root }
 
 func (v *assistantView) Update() {
 	if !v.settings.AIEnabled {
+		v.setupCard.SetVisible(false)
 		v.caption.SetText("AI disabled — enable it in Settings")
 		v.entry.SetSensitive(false)
 		v.send.SetSensitive(false)
 		return
 	}
 	v.titleLabel.SetText(v.settings.AssistantTitle)
-	v.refreshCaption()
-	v.entry.SetSensitive(!v.busy)
-	v.send.SetSensitive(!v.busy)
+	v.maybeProbe()
+	if v.busy || v.ready {
+		v.refreshCaption()
+	} else {
+		v.caption.SetText(v.statusShort)
+	}
+	v.entry.SetSensitive(!v.busy && v.ready)
+	v.send.SetSensitive(!v.busy && v.ready)
 }
 
 func (v *assistantView) refreshCaption() {
@@ -134,8 +161,120 @@ func (v *assistantView) refreshCaption() {
 	}
 }
 
+// buildSetupCard constructs the (initially hidden) panel that walks a user
+// through installing Ollama / pulling the model. onProbe fills in its text.
+func (v *assistantView) buildSetupCard() *gtk.Box {
+	card := gtk.NewBox(gtk.OrientationVertical, 8)
+	card.AddCSSClass("am-setup-card")
+	card.SetVisible(false)
+
+	v.setupTitle = gtk.NewLabel("")
+	v.setupTitle.AddCSSClass("am-setup-title")
+	v.setupTitle.SetXAlign(0)
+	v.setupTitle.SetWrap(true)
+	card.Append(v.setupTitle)
+
+	v.setupBody = gtk.NewLabel("")
+	v.setupBody.AddCSSClass("am-subtle")
+	v.setupBody.SetXAlign(0)
+	v.setupBody.SetWrap(true)
+	card.Append(v.setupBody)
+
+	v.setupCmd = gtk.NewLabel("")
+	v.setupCmd.AddCSSClass("am-setup-cmd")
+	v.setupCmd.SetXAlign(0)
+	v.setupCmd.SetWrap(true)
+	v.setupCmd.SetSelectable(true)
+	card.Append(v.setupCmd)
+
+	btnRow := gtk.NewBox(gtk.OrientationHorizontal, 8)
+	v.copyBtn = gtk.NewButtonWithLabel("Copy commands")
+	v.copyBtn.ConnectClicked(func() {
+		v.copyBtn.Clipboard().SetText(v.setupCmd.Text())
+		v.copyBtn.SetLabel("Copied")
+		glib.TimeoutAdd(1200, func() bool { v.copyBtn.SetLabel("Copy commands"); return false })
+	})
+	recheck := gtk.NewButtonWithLabel("Recheck")
+	recheck.ConnectClicked(func() {
+		if !v.probing {
+			v.setupBody.SetText("Checking for Ollama…")
+			v.startProbe()
+		}
+	})
+	btnRow.Append(v.copyBtn)
+	btnRow.Append(recheck)
+	card.Append(btnRow)
+
+	v.setupCard = card
+	return card
+}
+
+// maybeProbe kicks a readiness check at most once per probeInterval. It is
+// driven by Update, so it only runs while the Assistant view is visible.
+func (v *assistantView) maybeProbe() {
+	if v.busy || v.probing {
+		return
+	}
+	if !v.lastProbe.IsZero() && time.Since(v.lastProbe) < probeInterval {
+		return
+	}
+	v.startProbe()
+}
+
+// startProbe asks Ollama for its installed models off the main thread, then
+// applies the result back on it.
+func (v *assistantView) startProbe() {
+	v.probing = true
+	model := v.ai.Model()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer cancel()
+		models, err := v.ai.Tags(ctx)
+		glib.IdleAdd(func() { v.onProbe(model, models, err) })
+	}()
+}
+
+// onProbe updates readiness and the setup card from a completed probe.
+func (v *assistantView) onProbe(model string, models []string, err error) {
+	v.probing = false
+	v.lastProbe = time.Now()
+	reachable := err == nil
+	v.ready = reachable && modelInstalled(models, model)
+
+	switch {
+	case !reachable:
+		v.statusShort = "Ollama not detected — see setup above"
+		v.setupTitle.SetText("The assistant needs Ollama")
+		v.setupBody.SetText(fmt.Sprintf("Atlas couldn't reach an Ollama server at %s. Ollama runs the "+
+			"model locally on your machine. Install it and pull the model — this panel clears itself "+
+			"once it's ready. (Or run \"make setup-ai\" from the Atlas Monitor source folder.)",
+			v.settings.OllamaURL))
+		v.setupCmd.SetText("curl -fsSL https://ollama.com/install.sh | sh\nollama pull " + model)
+		v.setupCard.SetVisible(true)
+	case !v.ready:
+		v.statusShort = "Model not installed — see setup above"
+		v.setupTitle.SetText("Model not installed")
+		v.setupBody.SetText(fmt.Sprintf("Ollama is running, but the model \"%s\" isn't installed yet. "+
+			"Pull it once (a few GB) — this panel clears itself when it's ready.", model))
+		v.setupCmd.SetText("ollama pull " + model)
+		v.setupCard.SetVisible(true)
+	default:
+		v.setupCard.SetVisible(false)
+	}
+
+	if v.settings.AIEnabled && !v.busy {
+		v.entry.SetSensitive(v.ready)
+		v.send.SetSensitive(v.ready)
+		if v.ready {
+			v.refreshCaption()
+		} else {
+			v.caption.SetText(v.statusShort)
+		}
+	}
+}
+
 func (v *assistantView) onSend() {
-	if v.busy || !v.settings.AIEnabled {
+	if v.busy || !v.settings.AIEnabled || !v.ready {
 		return
 	}
 	q := strings.TrimSpace(v.entry.Text())
@@ -321,6 +460,26 @@ func pctStr(used, total uint64) string {
 		return "0%"
 	}
 	return fmt.Sprintf("%.0f%%", float64(used)/float64(total)*100)
+}
+
+// modelInstalled reports whether want is among the Ollama tags. An untagged
+// want (e.g. "qwen2.5") matches any of its tags, since Ollama defaults to
+// ":latest" when pulling without one.
+func modelInstalled(models []string, want string) bool {
+	want = strings.TrimSpace(want)
+	if want == "" {
+		return false
+	}
+	hasTag := strings.Contains(want, ":")
+	for _, m := range models {
+		if m == want {
+			return true
+		}
+		if !hasTag && (m == want+":latest" || strings.HasPrefix(m, want+":")) {
+			return true
+		}
+	}
+	return false
 }
 
 // systemFacts gathers OS / kernel / host / uptime / load so the assistant knows

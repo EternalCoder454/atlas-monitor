@@ -146,3 +146,42 @@ func (c *Client) Available(ctx context.Context) bool {
 	defer resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
 }
+
+type tagsResp struct {
+	Models []struct {
+		Name  string `json:"name"`
+		Model string `json:"model"`
+	} `json:"models"`
+}
+
+// Tags returns the names of the models installed on the Ollama server. A nil
+// error means the server is reachable; the slice may still be empty if no models
+// are pulled. Used by the UI to tell "Ollama down" from "model not installed".
+func (c *Client) Tags(ctx context.Context) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url+"/api/tags", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("cannot reach Ollama at %s: %w", c.url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ollama returned %d", resp.StatusCode)
+	}
+	var tr tagsResp
+	if err := json.NewDecoder(resp.Body).Decode(&tr); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(tr.Models))
+	for _, m := range tr.Models {
+		switch {
+		case m.Name != "":
+			names = append(names, m.Name)
+		case m.Model != "":
+			names = append(names, m.Model)
+		}
+	}
+	return names, nil
+}

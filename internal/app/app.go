@@ -29,17 +29,20 @@ const AppID = "com.atlas.Monitor"
 type App struct {
 	app      *adw.Application
 	css      string
+	version  string
 	col      *stats.Collector
 	settings config.Settings
 	aiClient *ai.Client
 	content  *ui.Window
 }
 
-// New creates the application. css is the embedded stylesheet contents.
-func New(css string) *App {
+// New creates the application. css is the embedded stylesheet contents and
+// version is the embedded VERSION string.
+func New(css, version string) *App {
 	a := &App{
-		app: adw.NewApplication(AppID, gio.ApplicationFlagsNone),
-		css: css,
+		app:     adw.NewApplication(AppID, gio.ApplicationFlagsNone),
+		css:     css,
+		version: version,
 	}
 	a.app.ConnectActivate(a.activate)
 	a.app.ConnectShutdown(func() {
@@ -78,7 +81,7 @@ func (a *App) activate() {
 	gear := gtk.NewButtonFromIconName("emblem-system-symbolic")
 	gear.SetTooltipText("Settings")
 	gear.ConnectClicked(func() {
-		ui.ShowSettings(win, &a.settings, a.onSettingsChanged, a.onRestart)
+		ui.ShowSettings(win, &a.settings, a.onSettingsChanged, a.onRestart, a.version)
 	})
 	header.PackEnd(gear)
 
@@ -97,7 +100,7 @@ func (a *App) activate() {
 	// Dev aid: ATLAS_OPEN_SETTINGS=1 opens the settings dialog at startup.
 	if os.Getenv("ATLAS_OPEN_SETTINGS") == "1" {
 		glib.TimeoutAdd(400, func() bool {
-			ui.ShowSettings(win, &a.settings, a.onSettingsChanged, a.onRestart)
+			ui.ShowSettings(win, &a.settings, a.onSettingsChanged, a.onRestart, a.version)
 			return false
 		})
 	}

@@ -5,6 +5,25 @@ libadwaita. It is a lighter-weight alternative to Mission Center with a fixed
 two-pane layout (the sidebar never overlaps the content) and first-class AMD GPU
 support read straight from sysfs.
 
+## Screenshots
+
+![Atlas Monitor — CPU view](images/cpu.png)
+
+<table>
+  <tr>
+    <td width="50%"><img src="images/assistant.png" alt="Assistant view"><br><sub><b>Assistant</b> — a local Ollama model answering from live system context, rendered Markdown with tokens/sec</sub></td>
+    <td width="50%"><img src="images/apps.png" alt="Apps / process table"><br><sub><b>Apps</b> — sortable process table with per-process CPU, RAM, GPU, network and disk</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="images/gpu.png" alt="GPU view"><br><sub><b>GPU</b> — AMD utilisation, VRAM, clocks, temperature and power, from sysfs</sub></td>
+    <td width="50%"><img src="images/disk.png" alt="Disk view"><br><sub><b>Disk</b> — drives by hardware model (primary first); zram shown as Swap</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="images/memory.png" alt="Memory view"><br><sub><b>Memory</b> — RAM/swap history with a Used/Cached/Free breakdown</sub></td>
+    <td width="50%"><img src="images/services.png" alt="Services view"><br><sub><b>Services</b> — systemd units over D-Bus with start/stop/enable</sub></td>
+  </tr>
+</table>
+
 ## Quick install
 
 Fedora (one line — installs build deps, then clones, builds and installs to
@@ -76,6 +95,35 @@ make clean
 
 `make install` honours `PREFIX` (default `~/.local`).
 
+## Setting up the assistant
+
+The **Assistant** view is optional and runs a model locally through
+[Ollama](https://ollama.com) — nothing leaves your machine. The easiest way to
+set it up is one command from the source folder:
+
+```sh
+make setup-ai
+```
+
+That installs Ollama (via its official installer — it prompts first if Ollama
+isn't already present), starts the local server, and pulls the default model
+(`qwen2.5:3b`, ~1.9 GB). It is safe to re-run and only does what is missing.
+
+Prefer to do it by hand? Install Ollama, then pull the model:
+
+```sh
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull qwen2.5:3b
+```
+
+If you open the Assistant before this is done, Atlas shows an in-app panel with
+the exact commands (and a **Copy** button) and clears it automatically the
+moment Ollama is ready — no need to restart. To use a different model, set it in
+**Settings** (the gear) and run `make setup-ai <model>` (or `ollama pull
+<model>`); GPU acceleration is detected automatically by Ollama's installer. You
+can turn the assistant off entirely in Settings, which hides the view and stops
+all AI activity.
+
 ## Notes
 
 - **AMD GPU**: stats are read from `/sys/class/drm/card*/` and the `amdgpu`
@@ -94,12 +142,13 @@ make clean
   authentication. Without authorisation the action returns an error shown in the
   view.
 - **AI assistant**: talks to a local [Ollama](https://ollama.com) server
-  (default `http://localhost:11434`, model `qwen2.5:3b`). Each question sends a
-  compact live snapshot — specs, top processes, services — as the system prompt;
-  the model runs entirely on your machine. Configure the model/endpoint or turn
-  it off completely via the gear → **Settings**. With AI disabled, no network
-  calls are made and the Assistant entry is hidden. Settings persist to
-  `~/.config/atlas-monitor/settings.json`.
+  (default `http://localhost:11434`, model `qwen2.5:3b`) — see [Setting up the
+  assistant](#setting-up-the-assistant) for the one-command install. Each
+  question sends a compact live snapshot — specs, top processes, services — as
+  the system prompt; the model runs entirely on your machine. Configure the
+  model/endpoint or turn it off completely via the gear → **Settings**. With AI
+  disabled, no network calls are made and the Assistant entry is hidden.
+  Settings persist to `~/.config/atlas-monitor/settings.json`.
 
 ## Development
 
@@ -109,6 +158,23 @@ make clean
   `go test ./internal/stats/ ./internal/process/ ./internal/services/ -v`.
 - `ATLAS_VIEW=<name>` opens a specific view at startup (e.g. `apps`,
   `services`, `gpu`, `memory`, `disk:nvme0n1`, `net:wlp7s0`) — handy for testing.
+
+## Versioning
+
+Atlas Monitor follows [Semantic Versioning](https://semver.org):
+`MAJOR.MINOR.PATCH`.
+
+- **MAJOR** — large or breaking changes.
+- **MINOR** — new, backward-compatible features.
+- **PATCH** — backward-compatible bugfixes.
+
+`0.x` releases are pre-1.0 (the app is still evolving); `1.0.0` will mark the
+first release declared stable. The current version lives in [`VERSION`](VERSION)
+and is shown in **Settings → Application → Version**.
+
+Tagged releases land on `main` (e.g. `v0.1.0`). Day-to-day development happens on
+the `beta` branch (versioned `X.Y.Z-beta`); once a beta is approved it is merged
+to `main`, the `-beta` suffix dropped, and the release tagged.
 
 ## Project layout
 
