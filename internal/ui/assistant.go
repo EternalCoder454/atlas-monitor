@@ -411,14 +411,22 @@ func (v *assistantView) buildContext() string {
 		for _, p := range topProcs(snap, func(a, b process.Proc) bool { return a.RSS > b.RSS }, 6) {
 			fmt.Fprintf(&b, "- %s (pid %d): %s, %.0f%% CPU\n", p.Name, p.PID, format.Bytes(p.RSS), p.CPU)
 		}
-		if gpu := topProcs(snap, func(a, b process.Proc) bool { return a.GPU > b.GPU }, 6); len(gpu) > 0 && gpu[0].GPU > 0 {
+		// GPU: Proc.GPU is -1 for processes that hold no GPU handle and >= 0 for
+		// DRM clients (0 when idle), so a positive value is real engine load. Always
+		// emit a line when GPU clients exist — otherwise the model is told nothing
+		// and (per its rules) reports it cannot find per-process GPU data.
+		gpu := topProcs(snap, func(a, b process.Proc) bool { return a.GPU > b.GPU }, 6)
+		switch {
+		case len(gpu) > 0 && gpu[0].GPU > 0.05:
 			b.WriteString("Top by GPU:\n")
 			for _, p := range gpu {
-				if p.GPU <= 0 {
+				if p.GPU <= 0.05 {
 					break
 				}
-				fmt.Fprintf(&b, "- %s (pid %d): %.0f%% GPU\n", p.Name, p.PID, p.GPU)
+				fmt.Fprintf(&b, "- %s (pid %d): %.1f%% GPU\n", p.Name, p.PID, p.GPU)
 			}
+		case anyGPUClient(snap):
+			b.WriteString("Per-process GPU: no process is using the GPU right now (per-process load ~0%).\n")
 		}
 	} else {
 		b.WriteString("\n(Process list is still warming up.)\n")
@@ -443,6 +451,17 @@ func (v *assistantView) buildContext() string {
 		}
 	}
 	return b.String()
+}
+
+// anyGPUClient reports whether the snapshot saw at least one process holding a
+// GPU (DRM) handle — i.e. per-process GPU data is available, even if idle.
+func anyGPUClient(procs []process.Proc) bool {
+	for _, p := range procs {
+		if p.GPU >= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func topProcs(procs []process.Proc, less func(a, b process.Proc) bool, n int) []process.Proc {
