@@ -30,14 +30,14 @@ type assistantView struct {
 
 	titleLabel *gtk.Label
 	caption    *gtk.Label
-	transcript *gtk.TextView
+	logo       *gtk.DrawingArea
+	answer     *gtk.Label // the single, Markdown-rendered reply
 	scroller   *gtk.ScrolledWindow
 	entry      *gtk.Entry
 	send       *gtk.Button
-	quickBtn   *gtk.MenuButton // dropdown of saved quick prompts
-	quickPop   *gtk.Popover    // its content, rebuilt from settings on change
-	endMark    *gtk.TextMark   // right gravity: scroll target at the very end
-	respStart  *gtk.TextMark   // left gravity: start of the in-flight response
+	quickBtn   *gtk.MenuButton  // dropdown of saved quick prompts
+	quickPop   *gtk.Popover     // its content, rebuilt from settings on change
+	respText   strings.Builder  // accumulates the streaming reply
 
 	// Setup card: shown when Ollama is unreachable or the model isn't installed,
 	// so a fresh user is told exactly what to run instead of hitting a cryptic
@@ -75,34 +75,50 @@ func newAssistantView(col *stats.Collector, proc *process.Collector, client *ai.
 	v.root.SetMarginStart(14)
 	v.root.SetMarginEnd(14)
 
-	header := gtk.NewBox(gtk.OrientationVertical, 2)
+	// Fixed, centred header: the Atlas mark with the assistant's name and live
+	// model status beneath it.
+	header := gtk.NewBox(gtk.OrientationVertical, 6)
+	header.SetHAlign(gtk.AlignCenter)
+	header.SetMarginTop(18)
+	v.logo = gtk.NewDrawingArea()
+	v.logo.SetContentWidth(92)
+	v.logo.SetContentHeight(92)
+	v.logo.SetHAlign(gtk.AlignCenter)
+	v.logo.SetDrawFunc(drawAtlasLogo)
+	header.Append(v.logo)
 	v.titleLabel = newTitle(settings.AssistantTitle)
+	v.titleLabel.SetHAlign(gtk.AlignCenter)
+	v.titleLabel.SetXAlign(0.5)
 	header.Append(v.titleLabel)
 	v.caption = gtk.NewLabel("")
 	v.caption.AddCSSClass("am-subtle")
-	v.caption.SetXAlign(0)
+	v.caption.SetHAlign(gtk.AlignCenter)
+	v.caption.SetXAlign(0.5)
 	header.Append(v.caption)
 	v.root.Append(header)
 
 	v.root.Append(v.buildSetupCard())
 
-	v.transcript = gtk.NewTextView()
-	v.transcript.SetEditable(false)
-	v.transcript.SetCursorVisible(false)
-	v.transcript.SetWrapMode(gtk.WrapWordChar)
-	v.transcript.SetLeftMargin(8)
-	v.transcript.SetRightMargin(8)
-	v.transcript.SetTopMargin(8)
-	v.transcript.SetBottomMargin(8)
-	buf := v.transcript.Buffer()
-	v.endMark = buf.CreateMark("end", buf.EndIter(), false)
-	v.respStart = buf.CreateMark("resp", buf.EndIter(), true)
+	// A single Markdown answer, centred in a readable column under the logo.
+	v.answer = gtk.NewLabel("")
+	v.answer.SetWrap(true)
+	v.answer.SetXAlign(0)
+	v.answer.SetYAlign(0)
+	v.answer.SetHAlign(gtk.AlignCenter)
+	v.answer.SetVAlign(gtk.AlignStart)
+	v.answer.SetSelectable(true)
+	v.answer.SetMaxWidthChars(72)
+	v.answer.AddCSSClass("am-answer")
+	v.setIdleAnswer()
+
+	answerBox := gtk.NewBox(gtk.OrientationVertical, 0)
+	answerBox.SetMarginTop(10)
+	answerBox.Append(v.answer)
 
 	v.scroller = gtk.NewScrolledWindow()
-	v.scroller.SetChild(v.transcript)
+	v.scroller.SetChild(answerBox)
 	v.scroller.SetPolicy(gtk.PolicyNever, gtk.PolicyAutomatic)
 	v.scroller.SetVExpand(true)
-	v.scroller.AddCSSClass("am-chat")
 	v.root.Append(v.scroller)
 
 	inputRow := gtk.NewBox(gtk.OrientationHorizontal, 8)
@@ -124,8 +140,6 @@ func newAssistantView(col *stats.Collector, proc *process.Collector, client *ai.
 	inputRow.Append(v.send)
 	v.root.Append(inputRow)
 
-	v.appendPlain("Ask me about this computer — e.g. \"what's using the most memory?\", " +
-		"\"any failed services?\", or \"what are my specs?\"\n\n")
 	return v
 }
 
@@ -319,12 +333,11 @@ func (v *assistantView) sendText(q string) {
 		return
 	}
 	v.entry.SetText("")
-	v.appendMarkup("<b>You:</b> ")
-	v.appendPlain(q + "\n\n")
-	v.appendMarkup("<b>" + pangoEscape(v.settings.AssistantTitle) + ":</b> ")
-
-	buf := v.transcript.Buffer()
-	buf.MoveMark(v.respStart, buf.EndIter()) // response (raw stream) begins here
+	v.respText.Reset()
+	v.answer.SetText("") // tokens stream in below; the prompt itself is not echoed
+	if adj := v.scroller.VAdjustment(); adj != nil {
+		adj.SetValue(0)
+	}
 
 	v.history = append(v.history, ai.Message{Role: "user", Content: q})
 	v.busy = true
@@ -343,7 +356,8 @@ func (v *assistantView) sendText(q string) {
 		full, stats, err := v.ai.Chat(ctx, msgs, func(tok string) {
 			glib.IdleAdd(func() {
 				v.streamTokens++
-				v.appendPlain(tok)
+				v.respText.WriteString(tok)
+				v.answer.SetText(v.respText.String())
 				v.refreshCaption()
 			})
 		})
@@ -353,14 +367,9 @@ func (v *assistantView) sendText(q string) {
 
 func (v *assistantView) finish(full string, stats ai.Stats, err error) {
 	if err != nil {
-		v.appendPlain("\n[error: " + err.Error() + "]\n\n")
+		v.answer.SetText("⚠  " + err.Error())
 	} else {
-		// Replace the raw streamed text with its Markdown-rendered version.
-		buf := v.transcript.Buffer()
-		start := buf.IterAtMark(v.respStart)
-		buf.Delete(start, buf.EndIter())
-		buf.InsertMarkup(buf.EndIter(), markdownToPango(full))
-		v.appendPlain("\n\n")
+		v.answer.SetMarkup(markdownToPango(full))
 		v.history = append(v.history, ai.Message{Role: "assistant", Content: full})
 		v.lastStats = stats
 	}
@@ -375,20 +384,9 @@ func (v *assistantView) finish(full string, stats ai.Stats, err error) {
 	v.entry.GrabFocus()
 }
 
-func (v *assistantView) appendPlain(s string) {
-	buf := v.transcript.Buffer()
-	buf.Insert(buf.EndIter(), s)
-	v.scrollToEnd()
-}
-
-func (v *assistantView) appendMarkup(m string) {
-	buf := v.transcript.Buffer()
-	buf.InsertMarkup(buf.EndIter(), m)
-	v.scrollToEnd()
-}
-
-func (v *assistantView) scrollToEnd() {
-	v.transcript.ScrollToMark(v.endMark, 0, false, 0, 0)
+// setIdleAnswer shows a faint hint in the answer area before any question.
+func (v *assistantView) setIdleAnswer() {
+	v.answer.SetMarkup(`<span alpha='55%'>Ask about this machine, or pick a quick prompt from the list button below.</span>`)
 }
 
 // buildContext assembles the live system snapshot sent as the system prompt.
