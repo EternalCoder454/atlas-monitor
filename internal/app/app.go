@@ -113,16 +113,20 @@ func (a *App) onSettingsChanged() {
 }
 
 // onRestart relaunches a fresh instance and quits this one. If the source
-// checkout is known (recorded by `make install`), it first rebuilds and
-// reinstalls from there. The helper is detached with setsid so it survives this
-// process exiting; the sleep lets the single-instance lock release before the
-// new instance registers.
+// checkout is known (recorded by `make install`), it first runs update.sh to
+// pull the selected channel (Release=main / Beta=beta) from GitHub and reinstall.
+// The helper is detached with setsid so it survives this process exiting; the
+// sleep lets the single-instance lock release before the new instance registers.
 func (a *App) onRestart() {
 	rebuild := ""
 	if src := sourceDir(); src != "" {
-		script := filepath.Join(src, "scripts", "auto-reinstall.sh")
+		script := filepath.Join(src, "scripts", "update.sh")
 		if _, err := os.Stat(script); err == nil {
-			rebuild = fmt.Sprintf("bash %q >/tmp/atlas-monitor-reinstall.log 2>&1; ", script)
+			branch := a.settings.UpdateChannel
+			if branch != "main" && branch != "beta" {
+				branch = "main"
+			}
+			rebuild = fmt.Sprintf("bash %q %q; ", script, branch)
 		}
 	}
 	helper := rebuild + fmt.Sprintf("sleep 1; gtk-launch %s", AppID)

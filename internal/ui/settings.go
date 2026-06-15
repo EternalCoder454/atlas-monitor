@@ -84,7 +84,8 @@ func ShowSettings(parent gtk.Widgetter, s *config.Settings, onChange, onRestart 
 	// --- Application ---
 	appGroup := adw.NewPreferencesGroup()
 	appGroup.SetTitle("Application")
-	appGroup.SetDescription("Rebuild from source if it changed, then restart to load the latest version.")
+	appGroup.SetDescription("Download and install the latest version from GitHub on the selected channel, " +
+		"then restart. Your own local edits, if any, are never overwritten.")
 
 	if version == "" {
 		version = "unknown"
@@ -93,6 +94,26 @@ func ShowSettings(parent gtk.Widgetter, s *config.Settings, onChange, onRestart 
 	versionRow.SetTitle("Version")
 	versionRow.SetSubtitle(version)
 	appGroup.Add(versionRow)
+
+	// Update channel: index 0 = main (Release), 1 = beta (newest).
+	channelIDs := []string{"main", "beta"}
+	channel := adw.NewComboRow()
+	channel.SetTitle("Update channel")
+	channel.SetSubtitle("Release is the stable main branch; Beta has the newest features and fixes")
+	channel.SetModel(gtk.NewStringList([]string{"Release (main)", "Beta (beta)"}))
+	if s.UpdateChannel == "beta" {
+		channel.SetSelected(1)
+	} else {
+		channel.SetSelected(0)
+	}
+	channel.NotifyProperty("selected", func() {
+		if idx := int(channel.Selected()); idx >= 0 && idx < len(channelIDs) {
+			s.UpdateChannel = channelIDs[idx]
+			_ = config.Save(*s)
+			onChange()
+		}
+	})
+	appGroup.Add(channel)
 
 	update := adw.NewButtonRow()
 	update.SetTitle("Update and restart")

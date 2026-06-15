@@ -368,6 +368,9 @@ func (v *appsView) openLocation() {
 }
 
 func gpuText(p process.Proc) string {
+	if p.GPU < 0 {
+		return "—" // not a GPU client
+	}
 	return fmt.Sprintf("%.0f%%", p.GPU)
 }
 

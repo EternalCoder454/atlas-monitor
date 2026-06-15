@@ -30,7 +30,7 @@ type Proc struct {
 	Name      string
 	CPU       float64 // percent of one core (may exceed 100 for threaded procs)
 	RSS       uint64  // resident bytes
-	GPU       float64 // -1 when unavailable
+	GPU       float64 // percent of GPU engine time; -1 if the process holds no GPU handle
 	NetIn     float64 // estimated bytes/sec
 	NetOut    float64 // estimated bytes/sec
 	DiskRead  float64 // bytes/sec
@@ -190,7 +190,7 @@ func (c *Collector) collect() {
 		if !ok {
 			continue
 		}
-		p := Proc{PID: pid, PPID: ppid, Name: name}
+		p := Proc{PID: pid, PPID: ppid, Name: name, GPU: -1}
 		p.RSS = c.readRSS(pid)
 
 		rb, wb := c.readIO(pid)
@@ -216,6 +216,7 @@ func (c *Collector) collect() {
 			if ns, hasDRM := c.readGPUEngineNs(pid); hasDRM {
 				newGPUPids[pid] = true
 				newGPUEngine[pid] = ns
+				p.GPU = 0 // holds a GPU handle: report 0 until a delta is measurable
 				if prev, ok := c.gpuPrev[pid]; ok && !first && ns >= prev {
 					p.GPU = clampPct(float64(ns-prev) / (dt * 1e9) * 100)
 				}
