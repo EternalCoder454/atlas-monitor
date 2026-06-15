@@ -109,12 +109,13 @@ type GPUStats struct {
 // Stats is the shared snapshot. The embedded RWMutex guards all scalar fields.
 // Ring buffers carry their own locks and may be read without holding mu.
 type Stats struct {
-	mu    sync.RWMutex
-	CPU   CPUStats
-	Mem   MemStats
-	Disks []*DiskStats
-	Nets  []*NetStats
-	GPU   GPUStats
+	mu        sync.RWMutex
+	CPU       CPUStats
+	Mem       MemStats
+	Disks     []*DiskStats
+	Nets      []*NetStats
+	GPU       GPUStats
+	ActiveNet string // kernel name of the default-route interface (computed off the UI thread)
 }
 
 // gate implements the pause/resume mechanism. Collectors block in wait() while
@@ -146,6 +147,14 @@ type Collector struct {
 	diskLast time.Time
 	netLast  time.Time
 	tempPath string
+
+	netTick int // collectNets tick counter; throttles the per-interface address refresh
+
+	// collectCPU scratch — only the CPU goroutine touches these, so no locking.
+	cpuFreqPaths []string    // precomputed /sys cpufreq paths, one per logical core
+	cpuFreqs     []float64   // reused per-core frequency buffer
+	cpuStatBuf   []byte      // reused /proc/stat scan buffer (avoids per-tick line allocs)
+	cpuSamples   []cpuSample // reused /proc/stat parse results
 }
 
 // New creates a Collector. gpuReader may report Available()==false.

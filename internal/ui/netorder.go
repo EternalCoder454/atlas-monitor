@@ -1,42 +1,8 @@
 package ui
 
 import (
-	"bufio"
-	"os"
-	"strconv"
-	"strings"
-
 	"atlas-monitor/internal/stats"
 )
-
-// activeNetName returns the interface carrying the default route (the one
-// you're "actually using" for the internet), or "" if there is none.
-func activeNetName() string {
-	f, err := os.Open("/proc/net/route")
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-
-	best := ""
-	bestMetric := int(^uint(0) >> 1)
-	sc := bufio.NewScanner(f)
-	header := true
-	for sc.Scan() {
-		if header {
-			header = false
-			continue
-		}
-		fields := strings.Fields(sc.Text())
-		if len(fields) < 8 || fields[1] != "00000000" { // destination 0.0.0.0 = default route
-			continue
-		}
-		if metric, _ := strconv.Atoi(fields[6]); metric < bestMetric {
-			bestMetric, best = metric, fields[0]
-		}
-	}
-	return best
-}
 
 // orderByActive returns nets with the active interface moved to the front.
 func orderByActive(nets []*stats.NetStats, active string) []*stats.NetStats {

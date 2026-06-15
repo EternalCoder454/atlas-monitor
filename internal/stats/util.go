@@ -39,6 +39,19 @@ func atou(s string) uint64 {
 	return v
 }
 
+// parseUintBytes parses the leading ASCII digits of b into a uint64 without
+// allocating (no string conversion). Used on hot /proc parse paths.
+func parseUintBytes(b []byte) uint64 {
+	var v uint64
+	for _, ch := range b {
+		if ch < '0' || ch > '9' {
+			break
+		}
+		v = v*10 + uint64(ch-'0')
+	}
+	return v
+}
+
 // clamp constrains v to [lo, hi].
 func clamp(v, lo, hi float64) float64 {
 	if v < lo {

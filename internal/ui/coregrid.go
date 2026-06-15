@@ -15,6 +15,7 @@ import (
 type coreGrid struct {
 	*gtk.DrawingArea
 	usages []float64
+	labels []string // "Core N", built once (kept out of the draw hot path)
 	cols   int
 }
 
@@ -24,7 +25,11 @@ func newCoreGrid(n int) *coreGrid {
 	g := &coreGrid{
 		DrawingArea: gtk.NewDrawingArea(),
 		usages:      make([]float64, n),
+		labels:      make([]string, n),
 		cols:        cpuColumns,
+	}
+	for i := range g.labels {
+		g.labels[i] = fmt.Sprintf("Core %d", i)
 	}
 	rows := (n + g.cols - 1) / g.cols
 	g.SetContentHeight(rows * coreRowHeight)
@@ -61,7 +66,7 @@ func (g *coreGrid) draw(area *gtk.DrawingArea, cr *cairo.Context, w, h int) {
 
 		cr.SetSourceRGBA(fr, fg, fb, 0.6)
 		cr.MoveTo(x+2, y+12)
-		cr.ShowText(fmt.Sprintf("Core %d", i))
+		cr.ShowText(g.labels[i])
 
 		barX, barY := x+2, y+18.0
 		barW, barH := cellW-8, 7.0

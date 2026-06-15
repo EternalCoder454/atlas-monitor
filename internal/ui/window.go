@@ -58,10 +58,12 @@ func (w *Window) Build() gtk.Widgetter {
 	var disks []*stats.DiskStats
 	var nets []*stats.NetStats
 	var gpuAvail bool
+	var activeNet string
 	w.col.Read(func(s *stats.Stats) {
 		disks = append(disks, s.Disks...)
 		nets = append(nets, s.Nets...)
 		gpuAvail = s.GPU.Available
+		activeNet = s.ActiveNet
 	})
 	for _, d := range disks {
 		w.addView("disk:"+d.Name, newDiskView(w.col, d))
@@ -81,7 +83,7 @@ func (w *Window) Build() gtk.Widgetter {
 	for i, n := range nets {
 		w.netStable[i] = n.Name
 	}
-	orderedNets := orderByActive(nets, activeNetName())
+	orderedNets := orderByActive(nets, activeNet)
 
 	sb := buildSidebar(disks, orderedNets, gpuAvail, w.selectView)
 	w.assistantRow = sb.assistantRow
@@ -91,7 +93,7 @@ func (w *Window) Build() gtk.Widgetter {
 	for i, n := range orderedNets {
 		w.netCurrent[i] = n.Name
 	}
-	w.updateNetIcon(activeNetName())
+	w.updateNetIcon(activeNet)
 	w.SetAIEnabled(w.settings.AIEnabled)
 
 	hbox := gtk.NewBox(gtk.OrientationHorizontal, 0)
@@ -182,7 +184,8 @@ func (w *Window) reorderNets() {
 	if w.netExp == nil || len(w.netRows) == 0 {
 		return
 	}
-	active := activeNetName()
+	var active string
+	w.col.Read(func(s *stats.Stats) { active = s.ActiveNet })
 	desired := orderNames(w.netStable, active)
 	if equalStrings(desired, w.netCurrent) {
 		return

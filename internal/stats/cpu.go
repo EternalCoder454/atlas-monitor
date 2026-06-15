@@ -2,6 +2,7 @@ package stats
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,16 @@ type cpuTimes struct {
 	idle  uint64
 	total uint64
 }
+
+// cpuSample is one parsed /proc/stat cpu line, carried from the lock-free read
+// phase to the locked update phase.
+type cpuSample struct {
+	name        string
+	idle, total uint64
+}
+
+// cpuPrefix gates the /proc/stat scan to the leading cpu* lines.
+var cpuPrefix = []byte("cpu")
 
 // initCPUStatic fills the unchanging CPU fields and allocates ring buffers.
 func (c *Collector) initCPUStatic() {
@@ -60,6 +71,16 @@ func (c *Collector) initCPUStatic() {
 		sockets[""] = struct{}{}
 	}
 
+	// Precompute the per-second collectCPU scratch (paths + reusable buffers) so
+	// the hot path allocates nothing per tick.
+	c.cpuFreqPaths = make([]string, logical)
+	for i := range c.cpuFreqPaths {
+		c.cpuFreqPaths[i] = fmt.Sprintf("/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq", i)
+	}
+	c.cpuFreqs = make([]float64, logical)
+	c.cpuStatBuf = make([]byte, 0, 16*1024)
+	c.cpuSamples = make([]cpuSample, 0, logical+1)
+
 	temp := -1.0
 	c.tempPath = findCPUTempPath()
 	if c.tempPath != "" {
@@ -86,52 +107,35 @@ func (c *Collector) initCPUStatic() {
 	})
 }
 
-// collectCPU samples /proc/stat, per-core frequencies, and temperature.
+// collectCPU samples /proc/stat, per-core frequencies, and temperature. The
+// /proc/stat parse reuses a buffer and parses bytes directly (no per-line string
+// or field-slice allocation); the cpufreq paths are precomputed in initCPUStatic.
 func (c *Collector) collectCPU() {
 	f, err := os.Open("/proc/stat")
 	if err != nil {
 		return
 	}
-	type sample struct {
-		name        string
-		idle, total uint64
-	}
-	var samples []sample
+	c.cpuSamples = c.cpuSamples[:0]
 	sc := bufio.NewScanner(f)
+	sc.Buffer(c.cpuStatBuf, 64*1024) // reuse our buffer; do no per-tick allocation
 	for sc.Scan() {
-		line := sc.Text()
-		if !strings.HasPrefix(line, "cpu") {
-			break
+		line := sc.Bytes()
+		if !bytes.HasPrefix(line, cpuPrefix) {
+			break // cpu* lines lead the file; stop before the large intr line
 		}
-		fields := strings.Fields(line)
-		if len(fields) < 5 {
-			continue
+		if name, idle, total, ok := parseCPUStatLine(line); ok {
+			c.cpuSamples = append(c.cpuSamples, cpuSample{name: name, idle: idle, total: total})
 		}
-		var nums []uint64
-		var total uint64
-		for _, f := range fields[1:] {
-			n := atou(f)
-			nums = append(nums, n)
-			total += n
-		}
-		idle := nums[3]
-		if len(nums) > 4 {
-			idle += nums[4] // + iowait
-		}
-		samples = append(samples, sample{name: fields[0], idle: idle, total: total})
 	}
 	f.Close()
 
-	logical := len(c.stats.Cores())
-	freqs := make([]float64, logical)
 	maxFreq := 0.0
-	for i := 0; i < logical; i++ {
-		p := fmt.Sprintf("/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq", i)
-		if v, err := readUint(p); err == nil {
-			mhz := float64(v) / 1000.0
-			freqs[i] = mhz
-			if mhz > maxFreq {
-				maxFreq = mhz
+	for i := range c.cpuFreqs {
+		c.cpuFreqs[i] = 0
+		if v, err := readUint(c.cpuFreqPaths[i]); err == nil {
+			c.cpuFreqs[i] = float64(v) / 1000.0
+			if c.cpuFreqs[i] > maxFreq {
+				maxFreq = c.cpuFreqs[i]
 			}
 		}
 	}
@@ -144,7 +148,7 @@ func (c *Collector) collectCPU() {
 	}
 
 	c.write(func(s *Stats) {
-		for _, sm := range samples {
+		for _, sm := range c.cpuSamples {
 			prev := c.cpuPrev[sm.name]
 			dTotal := float64(sm.total - prev.total)
 			dIdle := float64(sm.idle - prev.idle)
@@ -163,14 +167,45 @@ func (c *Collector) collectCPU() {
 				s.CPU.Cores[idx].Usage = usage
 			}
 		}
-		for i := 0; i < len(s.CPU.Cores) && i < len(freqs); i++ {
-			s.CPU.Cores[i].Freq = freqs[i]
+		for i := 0; i < len(s.CPU.Cores) && i < len(c.cpuFreqs); i++ {
+			s.CPU.Cores[i].Freq = c.cpuFreqs[i]
 		}
 		s.CPU.CurFreq = maxFreq
 		if temp >= 0 {
 			s.CPU.Temp = temp
 		}
 	})
+}
+
+// parseCPUStatLine parses one "cpu..." line of /proc/stat. idle folds in iowait
+// (column 4), matching the historical behaviour; total is the sum of all
+// columns. ok is false if the line is too short to hold an idle figure. The
+// returned name (e.g. "cpu", "cpu0") is the only allocation, used as a map key.
+func parseCPUStatLine(line []byte) (name string, idle, total uint64, ok bool) {
+	field := 0
+	for i := 0; i < len(line); {
+		for i < len(line) && line[i] == ' ' {
+			i++
+		}
+		start := i
+		for i < len(line) && line[i] != ' ' {
+			i++
+		}
+		if i == start {
+			break
+		}
+		if field == 0 {
+			name = string(line[start:i])
+		} else {
+			v := parseUintBytes(line[start:i])
+			total += v
+			if field == 4 || field == 5 { // columns idle and iowait
+				idle += v
+			}
+		}
+		field++
+	}
+	return name, idle, total, field >= 5
 }
 
 // Cores returns a copy of the per-core slice length (used internally).
