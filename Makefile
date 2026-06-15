@@ -7,7 +7,7 @@ APPDIR  := $(PREFIX)/share/applications
 ICONDIR := $(PREFIX)/share/icons/hicolor/scalable/apps
 ICONACT := $(PREFIX)/share/icons/hicolor/scalable/actions
 
-.PHONY: build run install uninstall clean vet
+.PHONY: build run install uninstall clean vet setup-ai
 
 build:
 	go build -ldflags="-s -w" -o $(BINDIR)/$(BINARY) .
@@ -17,6 +17,9 @@ run: build
 
 vet:
 	go vet ./...
+
+setup-ai:
+	bash scripts/setup-ai.sh
 
 install: build
 	install -Dm755 $(BINDIR)/$(BINARY) $(PREFIX)/bin/$(BINARY)
