@@ -5,6 +5,25 @@ libadwaita. It is a lighter-weight alternative to Mission Center with a fixed
 two-pane layout (the sidebar never overlaps the content) and first-class AMD GPU
 support read straight from sysfs.
 
+## Screenshots
+
+![Atlas Monitor — CPU view](images/cpu.png)
+
+<table>
+  <tr>
+    <td width="50%"><img src="images/assistant.png" alt="Assistant view"><br><sub><b>Assistant</b> — a local Ollama model answering from live system context, rendered Markdown with tokens/sec</sub></td>
+    <td width="50%"><img src="images/apps.png" alt="Apps / process table"><br><sub><b>Apps</b> — sortable process table with per-process CPU, RAM, GPU, network and disk</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="images/gpu.png" alt="GPU view"><br><sub><b>GPU</b> — AMD utilisation, VRAM, clocks, temperature and power, from sysfs</sub></td>
+    <td width="50%"><img src="images/disk.png" alt="Disk view"><br><sub><b>Disk</b> — drives by hardware model (primary first); zram shown as Swap</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="images/memory.png" alt="Memory view"><br><sub><b>Memory</b> — RAM/swap history with a Used/Cached/Free breakdown</sub></td>
+    <td width="50%"><img src="images/services.png" alt="Services view"><br><sub><b>Services</b> — systemd units over D-Bus with start/stop/enable</sub></td>
+  </tr>
+</table>
+
 ## Quick install
 
 Fedora (one line — installs build deps, then clones, builds and installs to

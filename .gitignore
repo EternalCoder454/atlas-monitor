@@ -8,6 +8,3 @@
 *.swp
 *~
 .DS_Store
-
-# Pasted screenshots / scratch images
-/images/
