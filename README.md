@@ -124,6 +124,18 @@ moment Ollama is ready — no need to restart. To use a different model, set it 
 can turn the assistant off entirely in Settings, which hides the view and stops
 all AI activity.
 
+## Updating
+
+Open **Settings** (the gear) → **Application** and click **Update and restart**.
+Atlas pulls the latest version of the selected **Update channel** from GitHub,
+rebuilds, and relaunches:
+
+- **Release (main)** — the stable `main` branch (the default).
+- **Beta (beta)** — the newest features and fixes, for trying things early.
+
+The pull is fast-forward only and is skipped entirely if the source checkout has
+local changes, so a tree you are editing is never overwritten.
+
 ## Notes
 
 - **AMD GPU**: stats are read from `/sys/class/drm/card*/` and the `amdgpu`

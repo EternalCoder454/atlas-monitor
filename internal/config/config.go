@@ -29,6 +29,7 @@ type Settings struct {
 	Model          string `json:"model"`
 	AssistantTitle string `json:"assistant_title"` // page header / chat label; sidebar stays "Assistant"
 	SystemPrompt   string `json:"system_prompt"`
+	UpdateChannel  string `json:"update_channel"` // "main" (Release) or "beta" (newest features/fixes)
 }
 
 // Defaults returns the built-in defaults.
@@ -39,6 +40,7 @@ func Defaults() Settings {
 		Model:          "qwen2.5:3b",
 		AssistantTitle: "Assistant",
 		SystemPrompt:   DefaultSystemPrompt,
+		UpdateChannel:  "main",
 	}
 }
 
@@ -75,6 +77,9 @@ func Load() Settings {
 			s.SystemPrompt = strings.ReplaceAll(s.SystemPrompt, line, "")
 		}
 		s.SystemPrompt = strings.TrimSpace(s.SystemPrompt)
+	}
+	if s.UpdateChannel != "main" && s.UpdateChannel != "beta" {
+		s.UpdateChannel = "main" // default/repair: Release channel
 	}
 	return s
 }
