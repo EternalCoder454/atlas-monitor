@@ -1,0 +1,36 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5ba3f5"/>
+      <stop offset="1" stop-color="#1c5fb4"/>
+    </linearGradient>
+    <linearGradient id="fill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.38"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.02"/>
+    </linearGradient>
+  </defs>
+
+  <!-- rounded base -->
+  <rect x="16" y="16" width="480" height="480" rx="116" fill="url(#bg)"/>
+  <!-- top sheen -->
+  <path d="M16 132 Q16 16 132 16 L380 16 Q496 16 496 132 L496 250 Q256 200 16 250 Z"
+        fill="#ffffff" opacity="0.07"/>
+
+  <!-- gridlines -->
+  <g stroke="#ffffff" stroke-opacity="0.16" stroke-width="3">
+    <line x1="96" y1="190" x2="416" y2="190"/>
+    <line x1="96" y1="270" x2="416" y2="270"/>
+    <line x1="96" y1="350" x2="416" y2="350"/>
+  </g>
+
+  <!-- area chart -->
+  <path d="M96 410 L96 300 L150 255 L204 288 L258 198 L312 240 L366 162 L416 205 L416 410 Z"
+        fill="url(#fill)"/>
+  <path d="M96 300 L150 255 L204 288 L258 198 L312 240 L366 162 L416 205"
+        fill="none" stroke="#ffffff" stroke-width="19"
+        stroke-linejoin="round" stroke-linecap="round"/>
+
+  <!-- latest sample -->
+  <circle cx="416" cy="205" r="30" fill="#ffffff" opacity="0.25"/>
+  <circle cx="416" cy="205" r="17" fill="#ffffff"/>
+</svg>

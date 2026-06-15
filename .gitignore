@@ -1,0 +1,10 @@
+# Build output
+/bin/
+
+# Local Claude Code session config (personal hooks, absolute paths)
+/.claude/
+
+# Editor / OS cruft
+*.swp
+*~
+.DS_Store

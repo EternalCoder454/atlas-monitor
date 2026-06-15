@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Atlas Monitor
+GenericName=System Monitor
+Comment=Lightweight system monitor — CPU, memory, disk, network, GPU, processes and services
+Exec=@BIN@
+Icon=com.atlas.Monitor
+Terminal=false
+Categories=System;Monitor;GTK;
+Keywords=system;monitor;cpu;memory;ram;gpu;disk;network;process;task;performance;resources;
+StartupNotify=true
+StartupWMClass=com.atlas.Monitor
