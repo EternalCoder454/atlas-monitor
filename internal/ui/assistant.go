@@ -391,51 +391,154 @@ func (v *assistantView) setIdleAnswer() {
 // buildContext assembles the live system snapshot sent as the system prompt.
 // Runs off the main thread (called from the send goroutine).
 func (v *assistantView) buildContext() string {
-	var b strings.Builder
+	var b, hw strings.Builder
 	b.WriteString(v.settings.SystemPrompt)
-	b.WriteString("\n\n[MACHINE]\n")
-	b.WriteString(systemFacts())
 
-	b.WriteString("\n[HARDWARE]\n")
+	// One locked read: copy out the scalars the SUMMARY/alerts need and write the
+	// detailed [HARDWARE] block. Pointer fields (disks, nets) are only touched
+	// inside the closure, so there is no race.
+	var (
+		cpuUsage, cpuFreq, cpuTemp  float64
+		memUsed, memTotal, memAvail uint64
+		swapUsed, swapTotal         uint64
+		gpuAvail                    bool
+		gpuUsage, gpuTemp           float64
+		netLabel                    string
+		netRx, netTx                float64
+	)
+	type diskAlert struct{ label, free string }
+	var fullDisks []diskAlert
+
 	v.col.Read(func(s *stats.Stats) {
 		c := s.CPU
-		fmt.Fprintf(&b, "CPU: %s, %d cores / %d threads, base %s, now %.0f%% @ %s",
+		cpuUsage, cpuFreq, cpuTemp = c.Usage, c.CurFreq, c.Temp
+		fmt.Fprintf(&hw, "CPU: %s, %d cores / %d threads, base %s, now %.0f%% @ %s",
 			c.Model, c.PhysCores, c.Logical, format.MHz(c.BaseFreq), c.Usage, format.MHz(c.CurFreq))
 		if c.Temp >= 0 {
-			fmt.Fprintf(&b, ", %.0f°C", c.Temp)
+			fmt.Fprintf(&hw, ", %.0f°C", c.Temp)
 		}
-		b.WriteByte('\n')
+		hw.WriteByte('\n')
 		if c.L2 != "" || c.L3 != "" {
-			fmt.Fprintf(&b, "CPU cache: L2 %s, L3 %s\n", orDash(c.L2), orDash(c.L3))
+			fmt.Fprintf(&hw, "CPU cache: L2 %s, L3 %s\n", orDash(c.L2), orDash(c.L3))
 		}
 		m := s.Mem
-		fmt.Fprintf(&b, "Memory: %s used of %s (%s), %s cached, %s available; swap %s of %s\n",
+		memUsed, memTotal, memAvail = m.Used, m.Total, m.Available
+		swapUsed, swapTotal = m.SwapUsed, m.SwapTotal
+		fmt.Fprintf(&hw, "Memory: %s used of %s (%s), %s cached, %s available; swap %s of %s\n",
 			format.GiB(m.Used), format.GiB(m.Total), pctStr(m.Used, m.Total),
 			format.GiB(m.Cached), format.GiB(m.Available), format.GiB(m.SwapUsed), format.GiB(m.SwapTotal))
 		if s.GPU.Available {
 			g := s.GPU
-			fmt.Fprintf(&b, "GPU: %s, %.0f%% used, VRAM %s of %s, %.0f°C, %.0fW\n",
+			gpuAvail, gpuUsage, gpuTemp = true, g.Usage, g.Temp
+			fmt.Fprintf(&hw, "GPU: %s, %.0f%% used, VRAM %s of %s, %.0f°C, %.0fW\n",
 				g.Name, g.Usage, format.GiB(g.VramUsed), format.GiB(g.VramTotal), g.Temp, g.PowerW)
 		}
 		for _, d := range s.Disks {
 			if d.IsSwap {
-				fmt.Fprintf(&b, "Disk %s (%s): %s, compressed-RAM swap\n", d.Label(), d.Name, format.Bytes(d.SizeBytes))
-			} else {
-				fmt.Fprintf(&b, "Disk %s (%s): %s total, %s used, %s free\n",
-					d.Label(), d.Name, format.Bytes(d.SizeBytes), format.Bytes(d.Used), format.Bytes(d.Free))
+				fmt.Fprintf(&hw, "Disk %s (%s): %s, compressed-RAM swap\n", d.Label(), d.Name, format.Bytes(d.SizeBytes))
+				continue
+			}
+			fmt.Fprintf(&hw, "Disk %s (%s): %s total, %s used, %s free\n",
+				d.Label(), d.Name, format.Bytes(d.SizeBytes), format.Bytes(d.Used), format.Bytes(d.Free))
+			if d.SizeBytes > 0 && float64(d.Free)/float64(d.SizeBytes) < 0.05 {
+				fullDisks = append(fullDisks, diskAlert{d.Label(), format.Bytes(d.Free)})
 			}
 		}
 		for _, n := range s.Nets {
 			if n.IPv4 == "" && n.RxRate == 0 && n.TxRate == 0 {
 				continue // skip unconfigured/idle virtual interfaces
 			}
-			fmt.Fprintf(&b, "Network %s (%s): ", n.Label(), n.Name)
-			if n.IPv4 != "" {
-				fmt.Fprintf(&b, "%s, ", n.IPv4)
+			if n.Name == s.ActiveNet {
+				netLabel, netRx, netTx = n.Label(), n.RxRate, n.TxRate
 			}
-			fmt.Fprintf(&b, "down %s, up %s\n", format.Rate(n.RxRate), format.Rate(n.TxRate))
+			fmt.Fprintf(&hw, "Network %s (%s): ", n.Label(), n.Name)
+			if n.IPv4 != "" {
+				fmt.Fprintf(&hw, "%s, ", n.IPv4)
+			}
+			fmt.Fprintf(&hw, "down %s, up %s\n", format.Rate(n.RxRate), format.Rate(n.TxRate))
 		}
 	})
+
+	// Services — collected once, used by both the SUMMARY alerts and [SERVICES].
+	var failed []string
+	svcTotal, svcRunning, haveSvc := 0, 0, false
+	if v.svc != nil {
+		if list, err := v.svc.List(true); err == nil {
+			haveSvc, svcTotal = true, len(list)
+			for _, s := range list {
+				switch s.Status {
+				case services.Running:
+					svcRunning++
+				case services.Failed:
+					failed = append(failed, s.Name)
+				}
+			}
+		}
+	}
+
+	// Alerts: computed in Go because a small model can't reliably compare figures
+	// to thresholds across the data blob.
+	const giB = 1 << 30
+	var alerts []string
+	if cpuTemp > 85 {
+		alerts = append(alerts, fmt.Sprintf("CPU %.0f°C", cpuTemp))
+	}
+	if gpuAvail && gpuTemp > 85 {
+		alerts = append(alerts, fmt.Sprintf("GPU %.0f°C", gpuTemp))
+	}
+	if memTotal > 0 && (memAvail < 2*giB || float64(memUsed)/float64(memTotal) > 0.90) {
+		alerts = append(alerts, fmt.Sprintf("low memory (%s available, %s used)", format.GiB(memAvail), pctStr(memUsed, memTotal)))
+	}
+	if swapTotal > 0 && float64(swapUsed)/float64(swapTotal) > 0.25 {
+		alerts = append(alerts, fmt.Sprintf("swap %s used", pctStr(swapUsed, swapTotal)))
+	}
+	for _, d := range fullDisks {
+		alerts = append(alerts, fmt.Sprintf("disk %s nearly full (%s free)", d.label, d.free))
+	}
+	if len(failed) > 0 {
+		alerts = append(alerts, "service failed: "+strings.Join(failed, ", "))
+	}
+
+	// [SUMMARY]: pre-extracted overall figures + alerts, so the model reads rather
+	// than parses.
+	b.WriteString("\n\n[SUMMARY]\n")
+	fmt.Fprintf(&b, "CPU: %.0f%% overall, %s", cpuUsage, format.MHz(cpuFreq))
+	if cpuTemp >= 0 {
+		fmt.Fprintf(&b, ", %.0f°C", cpuTemp)
+	}
+	b.WriteByte('\n')
+	fmt.Fprintf(&b, "RAM: %s used of %s (%s); %s available\n",
+		format.GiB(memUsed), format.GiB(memTotal), pctStr(memUsed, memTotal), format.GiB(memAvail))
+	if gpuAvail {
+		fmt.Fprintf(&b, "GPU: %.0f%% used", gpuUsage)
+		if gpuTemp > 0 {
+			fmt.Fprintf(&b, ", %.0f°C", gpuTemp)
+		}
+		b.WriteByte('\n')
+	}
+	if swapTotal > 0 {
+		fmt.Fprintf(&b, "Swap: %s of %s\n", format.GiB(swapUsed), format.GiB(swapTotal))
+	}
+	if netLabel != "" {
+		fmt.Fprintf(&b, "Network %s: down %s, up %s\n", netLabel, format.Rate(netRx), format.Rate(netTx))
+	}
+	if up := uptimeStr(); up != "" {
+		fmt.Fprintf(&b, "Uptime: %s", up)
+		if l := loadAvg1(); l != "" {
+			fmt.Fprintf(&b, "; load %s (1-min)", l)
+		}
+		b.WriteByte('\n')
+	}
+	if len(alerts) == 0 {
+		b.WriteString("Alerts: none — all monitored readings are normal\n")
+	} else {
+		b.WriteString("Alerts: " + strings.Join(alerts, "; ") + "\n")
+	}
+
+	b.WriteString("\n[MACHINE]\n")
+	b.WriteString(systemFacts())
+	b.WriteString("\n[HARDWARE]\n")
+	b.WriteString(hw.String())
 
 	if snap := v.proc.Snapshot(); len(snap) > 0 {
 		fmt.Fprintf(&b, "\n[PROCESSES] %d running\n", len(snap))
@@ -468,22 +571,10 @@ func (v *assistantView) buildContext() string {
 		b.WriteString("\n(Process list is still warming up.)\n")
 	}
 
-	if v.svc != nil {
-		if list, err := v.svc.List(true); err == nil {
-			running := 0
-			var failed []string
-			for _, s := range list {
-				switch s.Status {
-				case services.Running:
-					running++
-				case services.Failed:
-					failed = append(failed, s.Name)
-				}
-			}
-			fmt.Fprintf(&b, "\n[SERVICES] %d total, %d running, %d failed\n", len(list), running, len(failed))
-			if len(failed) > 0 {
-				b.WriteString("Failed: " + strings.Join(failed, ", ") + "\n")
-			}
+	if haveSvc {
+		fmt.Fprintf(&b, "\n[SERVICES] %d total, %d running, %d failed\n", svcTotal, svcRunning, len(failed))
+		if len(failed) > 0 {
+			b.WriteString("Failed: " + strings.Join(failed, ", ") + "\n")
 		}
 	}
 	return b.String()
@@ -515,6 +606,18 @@ func pctStr(used, total uint64) string {
 		return "0%"
 	}
 	return fmt.Sprintf("%.0f%%", float64(used)/float64(total)*100)
+}
+
+// loadAvg1 returns the 1-minute load average from /proc/loadavg, or "".
+func loadAvg1() string {
+	data, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return ""
+	}
+	if f := strings.Fields(string(data)); len(f) > 0 {
+		return f[0]
+	}
+	return ""
 }
 
 // modelInstalled reports whether want is among the Ollama tags. An untagged
