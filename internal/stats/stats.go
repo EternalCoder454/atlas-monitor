@@ -10,10 +10,9 @@ import (
 	"atlas-monitor/internal/gpu"
 )
 
-// CoreStat holds one logical CPU core's usage and current frequency.
+// CoreStat holds one logical CPU core's usage.
 type CoreStat struct {
 	Usage float64 // percent 0..100
-	Freq  float64 // MHz
 }
 
 // CPUStats is the aggregate + per-core CPU state.
@@ -109,12 +108,13 @@ type GPUStats struct {
 // Stats is the shared snapshot. The embedded RWMutex guards all scalar fields.
 // Ring buffers carry their own locks and may be read without holding mu.
 type Stats struct {
-	mu    sync.RWMutex
-	CPU   CPUStats
-	Mem   MemStats
-	Disks []*DiskStats
-	Nets  []*NetStats
-	GPU   GPUStats
+	mu        sync.RWMutex
+	CPU       CPUStats
+	Mem       MemStats
+	Disks     []*DiskStats
+	Nets      []*NetStats
+	GPU       GPUStats
+	ActiveNet string // kernel name of the default-route interface (computed off the UI thread)
 }
 
 // gate implements the pause/resume mechanism. Collectors block in wait() while
@@ -146,6 +146,13 @@ type Collector struct {
 	diskLast time.Time
 	netLast  time.Time
 	tempPath string
+
+	netTick int // collectNets tick counter; throttles the per-interface address refresh
+
+	// collectCPU scratch — only the CPU goroutine touches these, so no locking.
+	cpuFreqPaths []string    // precomputed /sys cpufreq paths, one per logical core
+	cpuStatBuf   []byte      // reused /proc/stat scan buffer (avoids per-tick line allocs)
+	cpuSamples   []cpuSample // reused /proc/stat parse results
 }
 
 // New creates a Collector. gpuReader may report Available()==false.
@@ -158,9 +165,6 @@ func New(gpuReader *gpu.Reader) *Collector {
 		cpuPrev: make(map[string]cpuTimes),
 	}
 }
-
-// Stats returns the shared snapshot for the UI to read.
-func (c *Collector) Stats() *Stats { return c.stats }
 
 // Read runs f while holding the read lock. f must not block.
 func (c *Collector) Read(f func(*Stats)) {

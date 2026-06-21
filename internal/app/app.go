@@ -76,12 +76,16 @@ func (a *App) activate() {
 	win.SetSizeRequest(900, 600)
 
 	header := adw.NewHeaderBar()
-	header.SetTitleWidget(adw.NewWindowTitle("Atlas Monitor", ""))
+	subtitle := ""
+	if a.version != "" {
+		subtitle = "v" + a.version
+	}
+	header.SetTitleWidget(adw.NewWindowTitle("Atlas Monitor", subtitle))
 
 	gear := gtk.NewButtonFromIconName("emblem-system-symbolic")
 	gear.SetTooltipText("Settings")
 	gear.ConnectClicked(func() {
-		ui.ShowSettings(win, &a.settings, a.onSettingsChanged, a.onRestart, a.version)
+		ui.ShowSettings(win, &a.settings, a.settingsHooks())
 	})
 	header.PackEnd(gear)
 
@@ -100,7 +104,7 @@ func (a *App) activate() {
 	// Dev aid: ATLAS_OPEN_SETTINGS=1 opens the settings dialog at startup.
 	if os.Getenv("ATLAS_OPEN_SETTINGS") == "1" {
 		glib.TimeoutAdd(400, func() bool {
-			ui.ShowSettings(win, &a.settings, a.onSettingsChanged, a.onRestart, a.version)
+			ui.ShowSettings(win, &a.settings, a.settingsHooks())
 			return false
 		})
 	}
@@ -110,6 +114,7 @@ func (a *App) activate() {
 func (a *App) onSettingsChanged() {
 	a.aiClient.SetConfig(a.settings.OllamaURL, a.settings.Model)
 	a.content.SetAIEnabled(a.settings.AIEnabled)
+	a.content.RefreshQuickPrompts()
 }
 
 // onRestart relaunches a fresh instance and quits this one. If the source
@@ -146,6 +151,60 @@ func sourceDir() string {
 		return ""
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// settingsHooks bundles the callbacks the Settings dialog needs.
+func (a *App) settingsHooks() ui.SettingsHooks {
+	return ui.SettingsHooks{
+		OnChange:    a.onSettingsChanged,
+		ApplyUpdate: a.onRestart,
+		CheckUpdate: a.checkUpdate,
+		Version:     a.version,
+		Location:    a.location(),
+	}
+}
+
+// location is the source checkout (where updates are pulled), falling back to
+// the running binary's path.
+func (a *App) location() string {
+	if src := sourceDir(); src != "" {
+		return src
+	}
+	if exe, err := os.Executable(); err == nil {
+		return exe
+	}
+	return ""
+}
+
+// checkUpdate fetches origin and reports whether the given channel has commits
+// the local checkout does not. It changes nothing on disk, so the Settings
+// "Update" action can skip the rebuild/restart when already up to date.
+func (a *App) checkUpdate(channel string) (available bool, info string, err error) {
+	src := sourceDir()
+	if src == "" {
+		return false, "", fmt.Errorf("source location unknown — install with `make install`")
+	}
+	git := func(args ...string) (string, error) {
+		out, err := exec.Command("git", append([]string{"-C", src}, args...)...).Output()
+		return strings.TrimSpace(string(out)), err
+	}
+	if _, err := git("rev-parse", "--git-dir"); err != nil {
+		return false, "", fmt.Errorf("source is not a git checkout")
+	}
+	if _, err := git("fetch", "--quiet", "origin", channel); err != nil {
+		return false, "", fmt.Errorf("couldn't reach GitHub")
+	}
+	local, _ := git("rev-parse", "--short", "HEAD")
+	remote, _ := git("rev-parse", "--short", "origin/"+channel)
+	name := "Release"
+	if channel == "beta" {
+		name = "Beta"
+	}
+	// Up to date when origin/<channel> is already contained in HEAD.
+	if exec.Command("git", "-C", src, "merge-base", "--is-ancestor", "origin/"+channel, "HEAD").Run() == nil {
+		return false, fmt.Sprintf("Up to date on %s (%s)", name, local), nil
+	}
+	return true, fmt.Sprintf("%s update available: %s → %s", name, local, remote), nil
 }
 
 // loadCSS installs the embedded stylesheet for the default display.

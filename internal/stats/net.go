@@ -2,9 +2,11 @@ package stats
 
 import (
 	"bufio"
+	"bytes"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -33,7 +35,11 @@ func (c *Collector) discoverNets() {
 	}
 	// Stable order: loopback last, otherwise alphabetical.
 	sortNets(nets)
-	c.write(func(s *Stats) { s.Nets = nets })
+	active := defaultRouteIface()
+	c.write(func(s *Stats) {
+		s.Nets = nets
+		s.ActiveNet = active
+	})
 }
 
 // collectNets updates per-interface throughput and refreshes addresses.
@@ -46,6 +52,12 @@ func (c *Collector) collectNets() {
 	c.netLast = now
 
 	counters := readNetDev()
+	active := defaultRouteIface()
+
+	// IP addresses change rarely but each refresh is a netlink round-trip per
+	// interface, so only refresh them every 5th tick (and on the first).
+	c.netTick++
+	refreshAddrs := c.netTick%5 == 1
 
 	c.write(func(s *Stats) {
 		for _, n := range s.Nets {
@@ -65,9 +77,50 @@ func (c *Collector) collectNets() {
 			if n.UpHist != nil {
 				n.UpHist.Push(n.TxRate)
 			}
-			n.IPv4, n.IPv6 = interfaceAddrs(n.Name)
+			if refreshAddrs {
+				n.IPv4, n.IPv6 = interfaceAddrs(n.Name)
+			}
 		}
+		s.ActiveNet = active
 	})
+}
+
+// defaultRouteIface returns the interface carrying the default route. Called by
+// the net collector goroutine so the UI never parses /proc/net/route itself.
+func defaultRouteIface() string {
+	data, err := os.ReadFile("/proc/net/route")
+	if err != nil {
+		return ""
+	}
+	return parseDefaultRoute(data)
+}
+
+// parseDefaultRoute returns the interface with destination 0.0.0.0 and the
+// lowest metric in /proc/net/route content, or "". Split out for testing.
+func parseDefaultRoute(data []byte) string {
+	best := ""
+	bestMetric := int(^uint(0) >> 1)
+	first := true
+	for len(data) > 0 {
+		var line []byte
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			line, data = data[:i], data[i+1:]
+		} else {
+			line, data = data, nil
+		}
+		if first { // skip the header row
+			first = false
+			continue
+		}
+		fields := bytes.Fields(line)
+		if len(fields) < 8 || string(fields[1]) != "00000000" { // dest 0.0.0.0 = default route
+			continue
+		}
+		if metric, _ := strconv.Atoi(string(fields[6])); metric < bestMetric {
+			bestMetric, best = metric, string(fields[0])
+		}
+	}
+	return best
 }
 
 // readNetDev returns interface -> [rxBytes, txBytes].

@@ -60,8 +60,9 @@ bindings and can take a few minutes; rebuilds are cached and fast.
   Start/Stop/Restart/Enable/Disable actions (polkit-authenticated).
 - **Assistant** — an optional local AI (via [Ollama](https://ollama.com)) that
   answers questions about your machine — specs, the top CPU/memory processes,
-  failed services — from a live system snapshot. Toggle it off any time in
-  **Settings** (the gear icon).
+  failed services — from a live system snapshot. A dropdown beside the message
+  box offers editable **quick prompts** (Detailed Overview, Top Processes, Quick
+  Check). Toggle it off any time in **Settings** (the gear icon).
 
 ## Performance
 

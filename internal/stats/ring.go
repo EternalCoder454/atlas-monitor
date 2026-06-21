@@ -42,16 +42,6 @@ func (r *RingBuffer) ReadInto(dst []float64) int {
 	return n
 }
 
-// Last returns the most recent sample, or 0 if empty.
-func (r *RingBuffer) Last() float64 {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if r.n == 0 {
-		return 0
-	}
-	return r.data[(r.head-1+HistLen)%HistLen]
-}
-
 // Max returns the largest valid sample, or 0 if empty. Used to auto-scale
 // byte-rate graphs.
 func (r *RingBuffer) Max() float64 {

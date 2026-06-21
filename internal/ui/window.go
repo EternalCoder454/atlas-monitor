@@ -21,6 +21,7 @@ type Window struct {
 	settings     *config.Settings
 	stack        *gtk.Stack
 	views        map[string]View
+	asst         *assistantView
 	assistantRow *adw.ActionRow
 	active       string
 	visible      bool
@@ -58,10 +59,12 @@ func (w *Window) Build() gtk.Widgetter {
 	var disks []*stats.DiskStats
 	var nets []*stats.NetStats
 	var gpuAvail bool
+	var activeNet string
 	w.col.Read(func(s *stats.Stats) {
 		disks = append(disks, s.Disks...)
 		nets = append(nets, s.Nets...)
 		gpuAvail = s.GPU.Available
+		activeNet = s.ActiveNet
 	})
 	for _, d := range disks {
 		w.addView("disk:"+d.Name, newDiskView(w.col, d))
@@ -73,7 +76,8 @@ func (w *Window) Build() gtk.Widgetter {
 		w.addView("gpu", newGPUView(w.col))
 	}
 
-	w.addView("assistant", newAssistantView(w.col, w.proc, w.ai, w.settings))
+	w.asst = newAssistantView(w.col, w.proc, w.ai, w.settings)
+	w.addView("assistant", w.asst)
 	w.addView("apps", newAppsView(w.proc))
 	w.addView("services", newServicesView())
 
@@ -81,7 +85,7 @@ func (w *Window) Build() gtk.Widgetter {
 	for i, n := range nets {
 		w.netStable[i] = n.Name
 	}
-	orderedNets := orderByActive(nets, activeNetName())
+	orderedNets := orderByActive(nets, activeNet)
 
 	sb := buildSidebar(disks, orderedNets, gpuAvail, w.selectView)
 	w.assistantRow = sb.assistantRow
@@ -91,7 +95,7 @@ func (w *Window) Build() gtk.Widgetter {
 	for i, n := range orderedNets {
 		w.netCurrent[i] = n.Name
 	}
-	w.updateNetIcon(activeNetName())
+	w.updateNetIcon(activeNet)
 	w.SetAIEnabled(w.settings.AIEnabled)
 
 	hbox := gtk.NewBox(gtk.OrientationHorizontal, 0)
@@ -120,6 +124,14 @@ func (w *Window) SetAIEnabled(enabled bool) {
 	}
 	if !enabled && w.active == "assistant" {
 		w.selectView("cpu")
+	}
+}
+
+// RefreshQuickPrompts rebuilds the assistant's quick-prompt dropdown after the
+// prompts are edited in Settings.
+func (w *Window) RefreshQuickPrompts() {
+	if w.asst != nil {
+		w.asst.RefreshQuickPrompts()
 	}
 }
 
@@ -182,7 +194,8 @@ func (w *Window) reorderNets() {
 	if w.netExp == nil || len(w.netRows) == 0 {
 		return
 	}
-	active := activeNetName()
+	var active string
+	w.col.Read(func(s *stats.Stats) { active = s.ActiveNet })
 	desired := orderNames(w.netStable, active)
 	if equalStrings(desired, w.netCurrent) {
 		return

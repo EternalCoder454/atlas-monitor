@@ -57,10 +57,15 @@ func (s Stats) TokensPerSec() float64 {
 }
 
 type chatReq struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
+	Model    string         `json:"model"`
+	Messages []Message      `json:"messages"`
+	Stream   bool           `json:"stream"`
+	Options  map[string]any `json:"options,omitempty"`
 }
+
+// chatTemperature is kept low: Atlas extracts and reports live figures, so
+// determinism and grounding matter far more than creativity.
+const chatTemperature = 0.3
 
 type chatChunk struct {
 	Message            Message `json:"message"`
@@ -78,7 +83,12 @@ type chatChunk struct {
 // the generation stats reported by Ollama.
 func (c *Client) Chat(ctx context.Context, msgs []Message, onToken func(string)) (string, Stats, error) {
 	var stats Stats
-	body, _ := json.Marshal(chatReq{Model: c.model, Messages: msgs, Stream: true})
+	body, _ := json.Marshal(chatReq{
+		Model:    c.model,
+		Messages: msgs,
+		Stream:   true,
+		Options:  map[string]any{"temperature": chatTemperature},
+	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url+"/api/chat", bytes.NewReader(body))
 	if err != nil {
 		return "", stats, err

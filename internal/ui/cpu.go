@@ -21,6 +21,7 @@ type cpuView struct {
 	usage   *graph.Graph
 	cores   *coreGrid
 	nCores  int
+	coreBuf []float64 // reused each Update; avoids a per-tick alloc on the GTK thread
 
 	vBase, vCur, vSockets, vCores, vLogical *gtk.Label
 	vL1d, vL1i, vL2, vL3, vTemp             *gtk.Label
@@ -47,6 +48,7 @@ func newCPUView(col *stats.Collector) *cpuView {
 	// Per-core usage bars, drawn in a single Cairo pass.
 	box.Append(sectionTitle("CORES"))
 	v.nCores = logical
+	v.coreBuf = make([]float64, logical)
 	v.cores = newCoreGrid(logical)
 	box.Append(v.cores)
 
@@ -84,7 +86,7 @@ func (v *cpuView) Root() gtk.Widgetter { return v.root }
 
 func (v *cpuView) Update() {
 	var usage, cur, temp float64
-	cores := make([]float64, v.nCores)
+	cores := v.coreBuf
 	v.col.Read(func(s *stats.Stats) {
 		usage = s.CPU.Usage
 		cur = s.CPU.CurFreq

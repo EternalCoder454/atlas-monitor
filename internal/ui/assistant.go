@@ -30,12 +30,14 @@ type assistantView struct {
 
 	titleLabel *gtk.Label
 	caption    *gtk.Label
-	transcript *gtk.TextView
+	logo       *logoOrb
+	answer     *gtk.Label // the single, Markdown-rendered reply
 	scroller   *gtk.ScrolledWindow
 	entry      *gtk.Entry
 	send       *gtk.Button
-	endMark    *gtk.TextMark // right gravity: scroll target at the very end
-	respStart  *gtk.TextMark // left gravity: start of the in-flight response
+	quickBtn   *gtk.MenuButton  // dropdown of saved quick prompts
+	quickPop   *gtk.Popover     // its content, rebuilt from settings on change
+	respText   strings.Builder  // accumulates the streaming reply
 
 	// Setup card: shown when Ollama is unreachable or the model isn't installed,
 	// so a fresh user is told exactly what to run instead of hitting a cryptic
@@ -73,37 +75,55 @@ func newAssistantView(col *stats.Collector, proc *process.Collector, client *ai.
 	v.root.SetMarginStart(14)
 	v.root.SetMarginEnd(14)
 
-	header := gtk.NewBox(gtk.OrientationVertical, 2)
+	// Fixed, centred header: the Atlas mark with the assistant's name and live
+	// model status beneath it.
+	header := gtk.NewBox(gtk.OrientationVertical, 6)
+	header.SetHAlign(gtk.AlignCenter)
+	header.SetMarginTop(18)
+	v.logo = newLogoOrb()
+	header.Append(v.logo)
 	v.titleLabel = newTitle(settings.AssistantTitle)
+	v.titleLabel.SetHAlign(gtk.AlignCenter)
+	v.titleLabel.SetXAlign(0.5)
 	header.Append(v.titleLabel)
 	v.caption = gtk.NewLabel("")
 	v.caption.AddCSSClass("am-subtle")
-	v.caption.SetXAlign(0)
+	v.caption.SetHAlign(gtk.AlignCenter)
+	v.caption.SetXAlign(0.5)
 	header.Append(v.caption)
 	v.root.Append(header)
 
 	v.root.Append(v.buildSetupCard())
 
-	v.transcript = gtk.NewTextView()
-	v.transcript.SetEditable(false)
-	v.transcript.SetCursorVisible(false)
-	v.transcript.SetWrapMode(gtk.WrapWordChar)
-	v.transcript.SetLeftMargin(8)
-	v.transcript.SetRightMargin(8)
-	v.transcript.SetTopMargin(8)
-	v.transcript.SetBottomMargin(8)
-	buf := v.transcript.Buffer()
-	v.endMark = buf.CreateMark("end", buf.EndIter(), false)
-	v.respStart = buf.CreateMark("resp", buf.EndIter(), true)
+	// A single Markdown answer, centred in a readable column under the logo.
+	v.answer = gtk.NewLabel("")
+	v.answer.SetWrap(true)
+	v.answer.SetXAlign(0)
+	v.answer.SetYAlign(0)
+	v.answer.SetHAlign(gtk.AlignCenter)
+	v.answer.SetVAlign(gtk.AlignStart)
+	v.answer.SetSelectable(true)
+	v.answer.SetMaxWidthChars(72)
+	v.answer.AddCSSClass("am-answer")
+	v.setIdleAnswer()
+
+	answerBox := gtk.NewBox(gtk.OrientationVertical, 0)
+	answerBox.SetMarginTop(28)
+	answerBox.Append(v.answer)
 
 	v.scroller = gtk.NewScrolledWindow()
-	v.scroller.SetChild(v.transcript)
+	v.scroller.SetChild(answerBox)
 	v.scroller.SetPolicy(gtk.PolicyNever, gtk.PolicyAutomatic)
 	v.scroller.SetVExpand(true)
-	v.scroller.AddCSSClass("am-chat")
 	v.root.Append(v.scroller)
 
 	inputRow := gtk.NewBox(gtk.OrientationHorizontal, 8)
+	v.quickBtn = gtk.NewMenuButton()
+	v.quickBtn.SetIconName("view-list-symbolic")
+	v.quickBtn.SetTooltipText("Quick prompts")
+	v.quickPop = gtk.NewPopover()
+	v.quickBtn.SetPopover(v.quickPop)
+	v.RefreshQuickPrompts()
 	v.entry = gtk.NewEntry()
 	v.entry.SetHExpand(true)
 	v.entry.SetPlaceholderText("Ask about your CPU, memory, processes, services…")
@@ -111,12 +131,11 @@ func newAssistantView(col *stats.Collector, proc *process.Collector, client *ai.
 	v.send = gtk.NewButtonWithLabel("Send")
 	v.send.AddCSSClass("suggested-action")
 	v.send.ConnectClicked(v.onSend)
+	inputRow.Append(v.quickBtn)
 	inputRow.Append(v.entry)
 	inputRow.Append(v.send)
 	v.root.Append(inputRow)
 
-	v.appendPlain("Ask me about this computer — e.g. \"what's using the most memory?\", " +
-		"\"any failed services?\", or \"what are my specs?\"\n\n")
 	return v
 }
 
@@ -128,6 +147,7 @@ func (v *assistantView) Update() {
 		v.caption.SetText("AI disabled — enable it in Settings")
 		v.entry.SetSensitive(false)
 		v.send.SetSensitive(false)
+		v.quickBtn.SetSensitive(false)
 		return
 	}
 	v.titleLabel.SetText(v.settings.AssistantTitle)
@@ -139,6 +159,8 @@ func (v *assistantView) Update() {
 	}
 	v.entry.SetSensitive(!v.busy && v.ready)
 	v.send.SetSensitive(!v.busy && v.ready)
+	v.quickBtn.SetSensitive(!v.busy && v.ready)
+	v.logo.setActive(v.busy)
 }
 
 func (v *assistantView) refreshCaption() {
@@ -265,6 +287,7 @@ func (v *assistantView) onProbe(model string, models []string, err error) {
 	if v.settings.AIEnabled && !v.busy {
 		v.entry.SetSensitive(v.ready)
 		v.send.SetSensitive(v.ready)
+		v.quickBtn.SetSensitive(v.ready)
 		if v.ready {
 			v.refreshCaption()
 		} else {
@@ -273,21 +296,45 @@ func (v *assistantView) onProbe(model string, models []string, err error) {
 	}
 }
 
-func (v *assistantView) onSend() {
-	if v.busy || !v.settings.AIEnabled || !v.ready {
-		return
+// RefreshQuickPrompts rebuilds the dropdown's buttons from the current settings.
+// Called on construction and whenever the quick prompts are edited in Settings.
+func (v *assistantView) RefreshQuickPrompts() {
+	box := gtk.NewBox(gtk.OrientationVertical, 2)
+	box.SetMarginTop(4)
+	box.SetMarginBottom(4)
+	box.SetMarginStart(4)
+	box.SetMarginEnd(4)
+	for _, qp := range v.settings.QuickPrompts {
+		qp := qp // capture per iteration
+		btn := gtk.NewButton()
+		lbl := gtk.NewLabel(qp.Name)
+		lbl.SetXAlign(0)
+		btn.SetChild(lbl)
+		btn.AddCSSClass("flat")
+		btn.SetTooltipText(qp.Prompt)
+		btn.ConnectClicked(func() {
+			v.quickPop.Popdown()
+			v.sendText(qp.Prompt)
+		})
+		box.Append(btn)
 	}
-	q := strings.TrimSpace(v.entry.Text())
-	if q == "" {
+	v.quickPop.SetChild(box)
+}
+
+func (v *assistantView) onSend() { v.sendText(strings.TrimSpace(v.entry.Text())) }
+
+// sendText runs one chat turn for q (typed in the entry or chosen from the
+// quick-prompts dropdown).
+func (v *assistantView) sendText(q string) {
+	if v.busy || !v.settings.AIEnabled || !v.ready || q == "" {
 		return
 	}
 	v.entry.SetText("")
-	v.appendMarkup("<b>You:</b> ")
-	v.appendPlain(q + "\n\n")
-	v.appendMarkup("<b>" + pangoEscape(v.settings.AssistantTitle) + ":</b> ")
-
-	buf := v.transcript.Buffer()
-	buf.MoveMark(v.respStart, buf.EndIter()) // response (raw stream) begins here
+	v.respText.Reset()
+	v.answer.SetText("") // tokens stream in below; the prompt itself is not echoed
+	if adj := v.scroller.VAdjustment(); adj != nil {
+		adj.SetValue(0)
+	}
 
 	v.history = append(v.history, ai.Message{Role: "user", Content: q})
 	v.busy = true
@@ -295,6 +342,8 @@ func (v *assistantView) onSend() {
 	v.streamTokens = 0
 	v.entry.SetSensitive(false)
 	v.send.SetSensitive(false)
+	v.quickBtn.SetSensitive(false)
+	v.logo.setActive(true)
 	v.refreshCaption()
 
 	go func() {
@@ -305,7 +354,8 @@ func (v *assistantView) onSend() {
 		full, stats, err := v.ai.Chat(ctx, msgs, func(tok string) {
 			glib.IdleAdd(func() {
 				v.streamTokens++
-				v.appendPlain(tok)
+				v.respText.WriteString(tok)
+				v.answer.SetText(v.respText.String())
 				v.refreshCaption()
 			})
 		})
@@ -315,14 +365,9 @@ func (v *assistantView) onSend() {
 
 func (v *assistantView) finish(full string, stats ai.Stats, err error) {
 	if err != nil {
-		v.appendPlain("\n[error: " + err.Error() + "]\n\n")
+		v.answer.SetText("⚠  " + err.Error())
 	} else {
-		// Replace the raw streamed text with its Markdown-rendered version.
-		buf := v.transcript.Buffer()
-		start := buf.IterAtMark(v.respStart)
-		buf.Delete(start, buf.EndIter())
-		buf.InsertMarkup(buf.EndIter(), markdownToPango(full))
-		v.appendPlain("\n\n")
+		v.answer.SetMarkup(markdownToPango(full))
 		v.history = append(v.history, ai.Message{Role: "assistant", Content: full})
 		v.lastStats = stats
 	}
@@ -330,85 +375,179 @@ func (v *assistantView) finish(full string, stats ai.Stats, err error) {
 		v.history = v.history[len(v.history)-8:]
 	}
 	v.busy = false
+	v.logo.setActive(false)
 	v.refreshCaption()
 	v.entry.SetSensitive(true)
 	v.send.SetSensitive(true)
+	v.quickBtn.SetSensitive(true)
 	v.entry.GrabFocus()
 }
 
-func (v *assistantView) appendPlain(s string) {
-	buf := v.transcript.Buffer()
-	buf.Insert(buf.EndIter(), s)
-	v.scrollToEnd()
-}
-
-func (v *assistantView) appendMarkup(m string) {
-	buf := v.transcript.Buffer()
-	buf.InsertMarkup(buf.EndIter(), m)
-	v.scrollToEnd()
-}
-
-func (v *assistantView) scrollToEnd() {
-	v.transcript.ScrollToMark(v.endMark, 0, false, 0, 0)
+// setIdleAnswer shows a faint hint in the answer area before any question.
+func (v *assistantView) setIdleAnswer() {
+	v.answer.SetMarkup(`<span alpha='55%'>Ask about this machine, or pick a quick prompt from the list button below.</span>`)
 }
 
 // buildContext assembles the live system snapshot sent as the system prompt.
 // Runs off the main thread (called from the send goroutine).
 func (v *assistantView) buildContext() string {
-	var b strings.Builder
+	var b, hw strings.Builder
 	b.WriteString(v.settings.SystemPrompt)
-	b.WriteString("\n\n[MACHINE]\n")
-	b.WriteString(systemFacts())
 
-	b.WriteString("\n[HARDWARE]\n")
+	// One locked read: copy out the scalars the SUMMARY/alerts need and write the
+	// detailed [HARDWARE] block. Pointer fields (disks, nets) are only touched
+	// inside the closure, so there is no race.
+	var (
+		cpuUsage, cpuFreq, cpuTemp  float64
+		memUsed, memTotal, memAvail uint64
+		swapUsed, swapTotal         uint64
+		gpuAvail                    bool
+		gpuUsage, gpuTemp           float64
+		netLabel                    string
+		netRx, netTx                float64
+	)
+	type diskAlert struct{ label, free string }
+	var fullDisks []diskAlert
+
 	v.col.Read(func(s *stats.Stats) {
 		c := s.CPU
-		fmt.Fprintf(&b, "CPU: %s, %d cores / %d threads, base %s, now %.0f%% @ %s",
+		cpuUsage, cpuFreq, cpuTemp = c.Usage, c.CurFreq, c.Temp
+		fmt.Fprintf(&hw, "CPU: %s, %d cores / %d threads, base %s, now %.0f%% @ %s",
 			c.Model, c.PhysCores, c.Logical, format.MHz(c.BaseFreq), c.Usage, format.MHz(c.CurFreq))
 		if c.Temp >= 0 {
-			fmt.Fprintf(&b, ", %.0f°C", c.Temp)
+			fmt.Fprintf(&hw, ", %.0f°C", c.Temp)
 		}
-		b.WriteByte('\n')
+		hw.WriteByte('\n')
 		if c.L2 != "" || c.L3 != "" {
-			fmt.Fprintf(&b, "CPU cache: L2 %s, L3 %s\n", orDash(c.L2), orDash(c.L3))
+			fmt.Fprintf(&hw, "CPU cache: L2 %s, L3 %s\n", orDash(c.L2), orDash(c.L3))
 		}
 		m := s.Mem
-		fmt.Fprintf(&b, "Memory: %s used of %s (%s), %s cached, %s available; swap %s of %s\n",
+		memUsed, memTotal, memAvail = m.Used, m.Total, m.Available
+		swapUsed, swapTotal = m.SwapUsed, m.SwapTotal
+		fmt.Fprintf(&hw, "Memory: %s used of %s (%s), %s cached, %s available; swap %s of %s\n",
 			format.GiB(m.Used), format.GiB(m.Total), pctStr(m.Used, m.Total),
 			format.GiB(m.Cached), format.GiB(m.Available), format.GiB(m.SwapUsed), format.GiB(m.SwapTotal))
 		if s.GPU.Available {
 			g := s.GPU
-			fmt.Fprintf(&b, "GPU: %s, %.0f%% used, VRAM %s of %s, %.0f°C, %.0fW\n",
+			gpuAvail, gpuUsage, gpuTemp = true, g.Usage, g.Temp
+			fmt.Fprintf(&hw, "GPU: %s, %.0f%% used, VRAM %s of %s, %.0f°C, %.0fW\n",
 				g.Name, g.Usage, format.GiB(g.VramUsed), format.GiB(g.VramTotal), g.Temp, g.PowerW)
 		}
 		for _, d := range s.Disks {
 			if d.IsSwap {
-				fmt.Fprintf(&b, "Disk %s (%s): %s, compressed-RAM swap\n", d.Label(), d.Name, format.Bytes(d.SizeBytes))
-			} else {
-				fmt.Fprintf(&b, "Disk %s (%s): %s total, %s used, %s free\n",
-					d.Label(), d.Name, format.Bytes(d.SizeBytes), format.Bytes(d.Used), format.Bytes(d.Free))
+				fmt.Fprintf(&hw, "Disk %s (%s): %s, compressed-RAM swap\n", d.Label(), d.Name, format.Bytes(d.SizeBytes))
+				continue
+			}
+			fmt.Fprintf(&hw, "Disk %s (%s): %s total, %s used, %s free\n",
+				d.Label(), d.Name, format.Bytes(d.SizeBytes), format.Bytes(d.Used), format.Bytes(d.Free))
+			if d.SizeBytes > 0 && float64(d.Free)/float64(d.SizeBytes) < 0.05 {
+				fullDisks = append(fullDisks, diskAlert{d.Label(), format.Bytes(d.Free)})
 			}
 		}
 		for _, n := range s.Nets {
 			if n.IPv4 == "" && n.RxRate == 0 && n.TxRate == 0 {
 				continue // skip unconfigured/idle virtual interfaces
 			}
-			fmt.Fprintf(&b, "Network %s (%s): ", n.Label(), n.Name)
-			if n.IPv4 != "" {
-				fmt.Fprintf(&b, "%s, ", n.IPv4)
+			if n.Name == s.ActiveNet {
+				netLabel, netRx, netTx = n.Label(), n.RxRate, n.TxRate
 			}
-			fmt.Fprintf(&b, "down %s, up %s\n", format.Rate(n.RxRate), format.Rate(n.TxRate))
+			fmt.Fprintf(&hw, "Network %s (%s): ", n.Label(), n.Name)
+			if n.IPv4 != "" {
+				fmt.Fprintf(&hw, "%s, ", n.IPv4)
+			}
+			fmt.Fprintf(&hw, "down %s, up %s\n", format.Rate(n.RxRate), format.Rate(n.TxRate))
 		}
 	})
+
+	// Services — collected once, used by both the SUMMARY alerts and [SERVICES].
+	var failed []string
+	svcTotal, svcRunning, haveSvc := 0, 0, false
+	if v.svc != nil {
+		if list, err := v.svc.List(true); err == nil {
+			haveSvc, svcTotal = true, len(list)
+			for _, s := range list {
+				switch s.Status {
+				case services.Running:
+					svcRunning++
+				case services.Failed:
+					failed = append(failed, s.Name)
+				}
+			}
+		}
+	}
+
+	// Alerts: computed in Go because a small model can't reliably compare figures
+	// to thresholds across the data blob.
+	const giB = 1 << 30
+	var alerts []string
+	if cpuTemp > 85 {
+		alerts = append(alerts, fmt.Sprintf("CPU %.0f°C", cpuTemp))
+	}
+	if gpuAvail && gpuTemp > 85 {
+		alerts = append(alerts, fmt.Sprintf("GPU %.0f°C", gpuTemp))
+	}
+	if memTotal > 0 && (memAvail < 2*giB || float64(memUsed)/float64(memTotal) > 0.90) {
+		alerts = append(alerts, fmt.Sprintf("low memory (%s available, %s used)", format.GiB(memAvail), pctStr(memUsed, memTotal)))
+	}
+	if swapTotal > 0 && float64(swapUsed)/float64(swapTotal) > 0.25 {
+		alerts = append(alerts, fmt.Sprintf("swap %s used", pctStr(swapUsed, swapTotal)))
+	}
+	for _, d := range fullDisks {
+		alerts = append(alerts, fmt.Sprintf("disk %s nearly full (%s free)", d.label, d.free))
+	}
+	if len(failed) > 0 {
+		alerts = append(alerts, "service failed: "+strings.Join(failed, ", "))
+	}
+
+	// [SUMMARY]: pre-extracted overall figures + alerts, so the model reads rather
+	// than parses.
+	b.WriteString("\n\n[SUMMARY]\n")
+	fmt.Fprintf(&b, "CPU: %.0f%% overall, %s", cpuUsage, format.MHz(cpuFreq))
+	if cpuTemp >= 0 {
+		fmt.Fprintf(&b, ", %.0f°C", cpuTemp)
+	}
+	b.WriteByte('\n')
+	fmt.Fprintf(&b, "RAM: %s used of %s (%s); %s available\n",
+		format.GiB(memUsed), format.GiB(memTotal), pctStr(memUsed, memTotal), format.GiB(memAvail))
+	if gpuAvail {
+		fmt.Fprintf(&b, "GPU: %.0f%% used", gpuUsage)
+		if gpuTemp > 0 {
+			fmt.Fprintf(&b, ", %.0f°C", gpuTemp)
+		}
+		b.WriteByte('\n')
+	}
+	if swapTotal > 0 {
+		fmt.Fprintf(&b, "Swap: %s of %s\n", format.GiB(swapUsed), format.GiB(swapTotal))
+	}
+	if netLabel != "" {
+		fmt.Fprintf(&b, "Network %s: down %s, up %s\n", netLabel, format.Rate(netRx), format.Rate(netTx))
+	}
+	if up := uptimeStr(); up != "" {
+		fmt.Fprintf(&b, "Uptime: %s", up)
+		if l := loadAvg1(); l != "" {
+			fmt.Fprintf(&b, "; load %s (1-min)", l)
+		}
+		b.WriteByte('\n')
+	}
+	if len(alerts) == 0 {
+		b.WriteString("Alerts: none — all monitored readings are normal\n")
+	} else {
+		b.WriteString("Alerts: " + strings.Join(alerts, "; ") + "\n")
+	}
+
+	b.WriteString("\n[MACHINE]\n")
+	b.WriteString(systemFacts())
+	b.WriteString("\n[HARDWARE]\n")
+	b.WriteString(hw.String())
 
 	if snap := v.proc.Snapshot(); len(snap) > 0 {
 		fmt.Fprintf(&b, "\n[PROCESSES] %d running\n", len(snap))
 		b.WriteString("Top by CPU:\n")
-		for _, p := range topProcs(snap, func(a, b process.Proc) bool { return a.CPU > b.CPU }, 6) {
+		for _, p := range topProcs(snap, func(a, b process.Proc) bool { return a.CPU > b.CPU }, 10) {
 			fmt.Fprintf(&b, "- %s (pid %d): %.0f%% CPU, %s\n", p.Name, p.PID, p.CPU, format.Bytes(p.RSS))
 		}
 		b.WriteString("Top by memory:\n")
-		for _, p := range topProcs(snap, func(a, b process.Proc) bool { return a.RSS > b.RSS }, 6) {
+		for _, p := range topProcs(snap, func(a, b process.Proc) bool { return a.RSS > b.RSS }, 10) {
 			fmt.Fprintf(&b, "- %s (pid %d): %s, %.0f%% CPU\n", p.Name, p.PID, format.Bytes(p.RSS), p.CPU)
 		}
 		// GPU: Proc.GPU is -1 for processes that hold no GPU handle and >= 0 for
@@ -432,22 +571,10 @@ func (v *assistantView) buildContext() string {
 		b.WriteString("\n(Process list is still warming up.)\n")
 	}
 
-	if v.svc != nil {
-		if list, err := v.svc.List(true); err == nil {
-			running := 0
-			var failed []string
-			for _, s := range list {
-				switch s.Status {
-				case services.Running:
-					running++
-				case services.Failed:
-					failed = append(failed, s.Name)
-				}
-			}
-			fmt.Fprintf(&b, "\n[SERVICES] %d total, %d running, %d failed\n", len(list), running, len(failed))
-			if len(failed) > 0 {
-				b.WriteString("Failed: " + strings.Join(failed, ", ") + "\n")
-			}
+	if haveSvc {
+		fmt.Fprintf(&b, "\n[SERVICES] %d total, %d running, %d failed\n", svcTotal, svcRunning, len(failed))
+		if len(failed) > 0 {
+			b.WriteString("Failed: " + strings.Join(failed, ", ") + "\n")
 		}
 	}
 	return b.String()
@@ -479,6 +606,18 @@ func pctStr(used, total uint64) string {
 		return "0%"
 	}
 	return fmt.Sprintf("%.0f%%", float64(used)/float64(total)*100)
+}
+
+// loadAvg1 returns the 1-minute load average from /proc/loadavg, or "".
+func loadAvg1() string {
+	data, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return ""
+	}
+	if f := strings.Fields(string(data)); len(f) > 0 {
+		return f[0]
+	}
+	return ""
 }
 
 // modelInstalled reports whether want is among the Ollama tags. An untagged
