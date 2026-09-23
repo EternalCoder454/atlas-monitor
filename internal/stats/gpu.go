@@ -29,6 +29,7 @@ func (c *Collector) collectGPU() {
 		s.GPU.GttUsed = sample.GttUsed
 		s.GPU.Temp = sample.TempC
 		s.GPU.FanRPM = sample.FanRPM
+		s.GPU.FanPercent = sample.FanPercent
 		s.GPU.PowerW = sample.PowerW
 		s.GPU.GpuClockMHz = sample.SclkMHz
 		s.GPU.MemClockMHz = sample.MclkMHz

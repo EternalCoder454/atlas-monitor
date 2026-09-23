@@ -1,5 +1,7 @@
 # Atlas Monitor
 
+[![CI](https://github.com/EternalCoder454/atlas-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/EternalCoder454/atlas-monitor/actions/workflows/ci.yml)
+
 A native Linux system monitor for GNOME / Fedora, written in Go with GTK4 and
 libadwaita. It is a lighter-weight alternative to Mission Center with a fixed
 two-pane layout (the sidebar never overlaps the content) and first-class AMD GPU
@@ -51,11 +53,18 @@ bindings and can take a few minutes; rebuilds are cached and fast.
   device is shown as **Swap** with a one-line explanation of what it is.
 - **Network** (per interface) — download/upload graphs, addresses, MAC, and link
   speed.
-- **GPU** — AMD (RDNA) utilisation and VRAM graphs, clocks, temperature, fan,
-  power, and GTT, all from sysfs (no ROCm, no nvtop).
+- **GPU** — utilisation and VRAM graphs, clocks, temperature, fan and power for
+  AMD, NVIDIA and Intel. AMD comes straight from sysfs, NVIDIA through NVML
+  loaded at runtime (the driver is never a build dependency), and anything else
+  through the generic DRM interfaces. No ROCm, no nvtop, no vendor SDK.
+- **Battery** — charge and power-draw graphs, time remaining, pack health
+  against its design capacity, charge cycles and adapter state. The page only
+  appears on machines that have a battery.
 - **Apps** — a virtualised process table (`GtkColumnView`) with click-to-sort
   columns, live search, a right-click menu (End Task / Kill / Stop / Continue /
-  Open file location), and an optional *Group by app* toggle.
+  Open file location), and *Group by app*. A **Power** column rates each process
+  Very low → High the way Task Manager does, and kernel worker threads — about
+  three quarters of `/proc` — are hidden behind a toggle.
 - **Services** — systemd units over D-Bus with status dots and
   Start/Stop/Restart/Enable/Disable actions (polkit-authenticated).
 - **Assistant** — an optional local AI (via [Ollama](https://ollama.com)) that
@@ -69,19 +78,20 @@ bindings and can take a few minutes; rebuilds are cached and fast.
 Atlas is meant to be the cheapest thing running on your desktop. Resident memory,
 measured on a Fedora 44 / KDE Wayland box with ~700 processes:
 
-| | 0.5.0 | now |
+| | 0.5.0 | 0.6.0 |
 |---|---|---|
 | CPU view, just opened | 128 MiB | **87 MiB** |
-| Apps process table open | 153 MiB | 111 MiB |
-| after visiting every page | 155 MiB | 115 MiB |
+| Apps process table open | 152 MiB | **103 MiB** |
+| after visiting every page | 156 MiB | **107 MiB** |
 | after 150 Services refreshes | 601 MiB | no growth |
 
 (that last row was a leak — see below. The binary also went from 17.7 MB to
-14.2 MB, and the thread count from ~38 to ~25.)
+14.3 MB, and the thread count from ~34 to ~16.)
 
-Those are RSS, the figure a task manager shows. Proportional set size — Atlas's
-actual share of physical RAM once pages shared with other apps are divided up —
-went from 71 MiB to 57 MiB on the CPU view.
+Those are RSS, the figure a task manager shows, each pair measured back to back
+on the same machine. Proportional set size — Atlas's actual share of physical
+RAM once pages shared with other apps are divided up — went from 104 MiB to
+80 MiB after touring every page.
 
 Where the rest comes from:
 
@@ -105,6 +115,10 @@ Where the rest comes from:
 - **No `net/http`.** The Ollama client speaks HTTP/1.1 on a socket it opens
   itself, which keeps `crypto/tls`, `crypto/x509` and the FIPS module (a 32 MiB
   static buffer among them) out of the binary entirely.
+- **The process table shows processes.** Kernel worker threads are roughly three
+  quarters of `/proc` and there is nothing you can do with them, so they start
+  hidden — which also cuts the widgets GTK realises for the table by about the
+  same proportion, worth ~8 MiB.
 - **Tables are merged, not replaced.** Both the process list and the systemd
   unit list keep a stable row object per entry and update it in place. Replacing
   a GTK list model wholesale makes it tear down and rebuild every realised row,
@@ -113,7 +127,27 @@ Where the rest comes from:
 - Collection **pauses entirely while the window is hidden/minimised** (0% CPU),
   and the expensive per-process scan only runs while Apps or the Assistant is
   open.
-- Graphs use fixed 60-sample ring buffers, pre-allocated at startup.
+- Graphs use fixed 60-sample ring buffers, pre-allocated at startup. The
+  **refresh interval** is configurable (1–10 seconds); a slower rate costs less
+  CPU and stretches the same 60 samples over a longer window.
+
+## Install without building
+
+Each release carries a prebuilt tarball. It needs the GTK4 runtime libraries
+(not the `-devel` packages) and no Go toolchain:
+
+```sh
+sudo dnf install gtk4 libadwaita        # Debian: libgtk-4-1 libadwaita-1-0
+tar xf atlas-monitor-*-linux-x86_64-fedora*.tar.gz
+cd atlas-monitor-* && ./install.sh      # --system for /usr/local, --uninstall to remove
+```
+
+The binary is dynamically linked, so the tarball is built per Fedora release —
+pick the one matching yours, or build from source below. `install.sh` checks
+what the dynamic linker cannot resolve and says so before installing anything.
+
+An RPM spec lives in [`packaging/`](packaging/atlas-monitor.spec) for COPR or a
+local `rpmbuild`.
 
 ## Build dependencies
 
@@ -198,9 +232,19 @@ local changes, so a tree you are editing is never overwritten.
 
 ## Notes
 
-- **AMD GPU**: stats are read from `/sys/class/drm/card*/` and the `amdgpu`
-  hwmon node. The card is auto-detected by PCI vendor ID `0x1002`, so it does not
-  matter whether it is `card0`, `card1`, etc. No ROCm is required for monitoring.
+- **GPU**: the most capable card is picked automatically. AMD is read from
+  `/sys/class/drm/card*/` and the `amdgpu` hwmon node; NVIDIA through NVML,
+  which is `dlopen`ed at runtime so a machine without the proprietary driver
+  simply falls through; everything else — Intel, nouveau — through hwmon for
+  temperature, fan and power plus the kernel's per-client `drm-engine-*`
+  counters for utilisation. The card is named from the system PCI database when
+  `hwdata` is installed. No ROCm or vendor SDK is required.
+- **Battery**: read from `/sys/class/power_supply`, normalising the two shapes
+  firmware uses (watt-hours with a wattage, or amp-hours with a current and a
+  voltage) to the same figures. Multiple packs are summed. The **Power** column
+  in Apps is a weighted blend of CPU, GPU and I/O activity, not a measurement:
+  Linux exposes package energy through RAPL but nothing per process, so — as on
+  Windows — it is a rating rather than a reading.
 - **Per-process network** is an estimate — exact per-process byte counts are not
   exposed by the kernel without elevated privileges, so interface throughput is
   attributed across processes by their open-socket count. These columns are
@@ -228,12 +272,16 @@ local changes, so a tree you are editing is never overwritten.
 
 ## Development
 
-- `make vet` runs `go vet ./...`; `make test` runs the test suite.
+- `make vet`, `make test` and `make test-race` mirror what CI runs.
 - The non-GUI layers have integration tests that read this machine's live
   `/proc`, `/sys`, and D-Bus:
   `go test ./internal/stats/ ./internal/process/ ./internal/services/ -v`.
 - `ATLAS_VIEW=<name>` opens a specific view at startup (e.g. `apps`,
-  `services`, `gpu`, `memory`, `disk:nvme0n1`, `net:wlp7s0`) — handy for testing.
+  `services`, `gpu`, `power`, `memory`, `disk:nvme0n1`, `net:wlp7s0`) — handy
+  for testing, and it overrides the remembered page.
+- CI runs build, `vet`, `gofmt`, the tests and the race detector on a Fedora
+  container for both the default and `noai` builds
+  ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 
 ## Versioning
 
@@ -260,7 +308,8 @@ internal/app/          AdwApplication, window, two-pane wiring
 internal/ui/           sidebar, content stack, the individual views
 internal/stats/        /proc + /sys collectors, ring buffers, pause/resume
 internal/process/      per-process /proc/[pid] collection
-internal/gpu/          AMD GPU sysfs reader (auto-detect)
+internal/gpu/          GPU readers: amdgpu sysfs, NVIDIA NVML, generic DRM
+internal/power/        battery and AC adapter from /sys/class/power_supply
 internal/services/     systemd D-Bus client
 internal/ai/           streaming Ollama client (minimal HTTP/1.1, no net/http)
 internal/gfx/          renderer selection; keeps the GPU driver stack out

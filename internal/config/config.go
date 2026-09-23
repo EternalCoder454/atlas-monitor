@@ -31,6 +31,32 @@ var obsoletePromptLines = []string{
 	"Per-process GPU usage is unavailable, so only discuss overall GPU load.",
 }
 
+// Window geometry. The minimums match the window's own size request, so a
+// corrupt or hand-edited settings file cannot produce an unusable window.
+const (
+	DefaultWindowWidth  = 1100
+	DefaultWindowHeight = 720
+	MinWindowWidth      = 900
+	MinWindowHeight     = 600
+)
+
+// DefaultRefreshSeconds is the sampling interval when nothing is configured.
+const DefaultRefreshSeconds = 1
+
+// RefreshChoices are the intervals offered in Settings, in seconds.
+var RefreshChoices = []int{1, 2, 3, 5, 10}
+
+// NormalizeRefresh snaps an interval onto the nearest offered choice, so an
+// out-of-range or hand-edited value can never stop the collectors.
+func NormalizeRefresh(seconds int) int {
+	for _, c := range RefreshChoices {
+		if seconds == c {
+			return seconds
+		}
+	}
+	return DefaultRefreshSeconds
+}
+
 // QuickPrompt is one entry in the assistant's quick-prompts dropdown: a display
 // name and the message sent when it is chosen. Both are user-editable.
 type QuickPrompt struct {
@@ -66,6 +92,17 @@ type Settings struct {
 	UpdateChannel  string `json:"update_channel"` // "main" (Release) or "beta" (newest features/fixes)
 	RenderMode     string `json:"render_mode"`    // see gfx: "software" (default), "gpu", "system"
 
+	// RefreshSeconds is how often every collector samples and the visible page
+	// redraws. It also stretches the graphs: they keep 60 samples either way, so
+	// 1s shows the last minute and 5s the last five.
+	RefreshSeconds int `json:"refresh_seconds"`
+
+	// Window state, so Atlas reopens where it was left.
+	WindowWidth     int    `json:"window_width"`
+	WindowHeight    int    `json:"window_height"`
+	WindowMaximized bool   `json:"window_maximized"`
+	LastView        string `json:"last_view"`
+
 	QuickPrompts []QuickPrompt `json:"quick_prompts"` // exactly 3, shown in the assistant dropdown
 }
 
@@ -79,6 +116,9 @@ func Defaults() Settings {
 		SystemPrompt:   DefaultSystemPrompt,
 		UpdateChannel:  "main",
 		RenderMode:     gfx.ModeSoftware,
+		RefreshSeconds: DefaultRefreshSeconds,
+		WindowWidth:    DefaultWindowWidth,
+		WindowHeight:   DefaultWindowHeight,
 		QuickPrompts:   DefaultQuickPrompts(),
 	}
 }
@@ -121,6 +161,13 @@ func Load() Settings {
 		s.UpdateChannel = "main" // default/repair: Release channel
 	}
 	s.RenderMode = gfx.Normalize(s.RenderMode)
+	s.RefreshSeconds = NormalizeRefresh(s.RefreshSeconds)
+	if s.WindowWidth < MinWindowWidth {
+		s.WindowWidth = DefaultWindowWidth
+	}
+	if s.WindowHeight < MinWindowHeight {
+		s.WindowHeight = DefaultWindowHeight
+	}
 	// Quick prompts: keep exactly three, filling any missing slot from defaults.
 	if def := DefaultQuickPrompts(); len(s.QuickPrompts) != len(def) {
 		s.QuickPrompts = def

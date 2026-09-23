@@ -18,7 +18,13 @@ const (
 	Percent Mode = iota
 	// Bytes auto-scales the Y-axis and formats values as byte rates.
 	Bytes
+	// Watts auto-scales the Y-axis and formats values as a power draw.
+	Watts
 )
+
+// autoScaled reports whether the mode picks its Y-axis from the data rather
+// than pinning it to 0..100.
+func (m Mode) autoScaled() bool { return m == Bytes || m == Watts }
 
 // Graph is a single live chart bound to a ring buffer.
 type Graph struct {
@@ -67,7 +73,7 @@ func (g *Graph) draw(area *gtk.DrawingArea, cr *cairo.Context, w, h int) {
 
 	// Determine vertical scale.
 	scale := 100.0
-	if g.mode == Bytes {
+	if g.mode.autoScaled() {
 		scale = g.rb.Max() * 1.25
 		if scale < 1 {
 			scale = 1
@@ -143,9 +149,12 @@ func (g *Graph) draw(area *gtk.DrawingArea, cr *cairo.Context, w, h int) {
 // reusing the previous string whenever the reading is unchanged (the common
 // case for an idle interface or a pinned percentage).
 func (g *Graph) formatValue(v float64) string {
-	if g.mode == Bytes {
+	switch g.mode {
+	case Bytes:
 		g.valBuf = format.AppendRate(g.valBuf[:0], v)
-	} else {
+	case Watts:
+		g.valBuf = format.AppendWatts(g.valBuf[:0], v)
+	default:
 		g.valBuf = format.AppendPercent(g.valBuf[:0], v)
 	}
 	if g.valText != string(g.valBuf) { // compares without allocating

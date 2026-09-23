@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [main, beta]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: build · vet · test
+    runs-on: ubuntu-latest
+    # Fedora rather than the bare Ubuntu runner: Atlas needs libadwaita >= 1.6
+    # for AdwButtonRow, which Ubuntu 24.04 does not ship, and Fedora is what the
+    # project targets.
+    container: fedora:latest
+    steps:
+      - name: Install build dependencies
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            golang gtk4-devel libadwaita-devel glib2-devel \
+            gcc pkgconf-pkg-config git make tar zstd
+
+      - uses: actions/checkout@v5
+
+      # `go build` stamps the binary with the commit, which runs git inside the
+      # container as root over a checkout owned by another uid — git refuses
+      # that as "dubious ownership" and the build fails. Marking the workspace
+      # safe keeps the stamping rather than turning it off with -buildvcs=false.
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Record toolchain versions
+        run: |
+          go version
+          echo "gtk4        $(pkg-config --modversion gtk4)"
+          echo "libadwaita  $(pkg-config --modversion libadwaita-1)"
+
+      # The gotk4 cgo bindings are large and slow to compile from cold; caching
+      # the module and build caches turns a ~4 minute build into seconds.
+      - name: Cache Go modules and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: fedora-go-${{ hashFiles('go.sum') }}
+          restore-keys: fedora-go-
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l $(git ls-files '*.go'))"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt'd:"
+            echo "$unformatted"
+            gofmt -d $(echo "$unformatted")
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Build (default)
+        run: make build
+
+      - name: Build (lean, -tags noai)
+        run: make build-lean
+
+      # -count=1 because several suites read this machine's live /proc, /sys and
+      # D-Bus; a cached "ok" would hide a real regression.
+      - name: Test
+        run: go test -count=1 ./...
+
+      - name: Test (lean, -tags noai)
+        run: go test -count=1 -tags noai ./...
+
+  race:
+    name: race detector
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Install build dependencies
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            golang gtk4-devel libadwaita-devel glib2-devel \
+            gcc pkgconf-pkg-config git make tar zstd
+
+      - uses: actions/checkout@v5
+
+      # `go build` stamps the binary with the commit, which runs git inside the
+      # container as root over a checkout owned by another uid — git refuses
+      # that as "dubious ownership" and the build fails. Marking the workspace
+      # safe keeps the stamping rather than turning it off with -buildvcs=false.
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Cache Go modules and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: fedora-race-${{ hashFiles('go.sum') }}
+          restore-keys: fedora-race-
+
+      # The collectors hand samples to the GTK thread through a mutex and a
+      # double-buffered slice, so this is the suite that matters most here.
+      # See the Makefile for why the UI package is run separately.
+      - name: Test with -race
+        run: make test-race

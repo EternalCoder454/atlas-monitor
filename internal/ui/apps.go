@@ -99,6 +99,7 @@ type appsView struct {
 
 	search      string
 	grouped     bool
+	showKernel  bool
 	needRebuild bool
 	popHasPar   bool
 	targetPID   int
@@ -135,8 +136,20 @@ func newAppsView(proc *process.Collector) *appsView {
 		v.needRebuild = true
 		v.Update()
 	})
+	// Kernel threads are three quarters of /proc on a typical machine and there
+	// is nothing a user can do with them, so they start hidden — which also
+	// keeps the table (and the widgets GTK realises for it) a quarter the size.
+	kernelBtn := gtk.NewToggleButton()
+	kernelBtn.SetLabel("Kernel threads")
+	kernelBtn.SetTooltipText("Show kernel worker threads (kworker, ksoftirqd, …)")
+	kernelBtn.ConnectToggled(func() {
+		v.showKernel = kernelBtn.Active()
+		v.needRebuild = true
+		v.Update()
+	})
 	toolbar.Append(searchEntry)
 	toolbar.Append(groupBtn)
+	toolbar.Append(kernelBtn)
 	v.root.Append(toolbar)
 
 	// Model chain: base -> filter (search) -> sort (column headers) -> selection.
@@ -164,6 +177,11 @@ func newAppsView(proc *process.Collector) *appsView {
 		func(a, b *process.Proc) bool { return a.RSS < b.RSS }))
 	cv.AppendColumn(v.textColumn("GPU %", false, 1, appendGPU,
 		func(a, b *process.Proc) bool { return a.GPU < b.GPU }))
+	// Sorted by the underlying score, not the label, so the order runs
+	// Very low → High rather than alphabetically.
+	cv.AppendColumn(v.textColumn("Power", false, 0,
+		func(dst []byte, p *process.Proc) []byte { return append(dst, p.Impact().String()...) },
+		func(a, b *process.Proc) bool { return a.PowerScore() < b.PowerScore() }))
 	cv.AppendColumn(v.textColumn("Net ≈ In", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendRate(dst, p.NetIn) },
 		func(a, b *process.Proc) bool { return a.NetIn < b.NetIn }))
@@ -219,6 +237,9 @@ func (v *appsView) Update() {
 
 	v.snap = v.proc.SnapshotInto(v.snap)
 	snap := v.snap
+	if !v.showKernel {
+		snap = withoutKernelThreads(snap)
+	}
 	if v.grouped {
 		snap = v.groupByName(snap)
 	}
@@ -258,6 +279,19 @@ func (v *appsView) Update() {
 	for _, c := range v.cells {
 		c.refresh()
 	}
+}
+
+// withoutKernelThreads compacts the snapshot in place, dropping kernel threads.
+// The caller owns the backing array and refills it every tick, so this costs
+// nothing beyond the walk.
+func withoutKernelThreads(procs []process.Proc) []process.Proc {
+	kept := procs[:0]
+	for _, p := range procs {
+		if !p.Kernel {
+			kept = append(kept, p)
+		}
+	}
+	return kept
 }
 
 // lookup finds the stable row for p under the current grouping mode.

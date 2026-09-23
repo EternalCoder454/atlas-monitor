@@ -17,7 +17,7 @@ type sidebar struct {
 
 // buildSidebar constructs the fixed 200px navigation panel. onSelect is called
 // with a view name ("cpu", "disk:nvme0n1", ...) whenever a row is activated.
-func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, withAI bool, onSelect func(string)) *sidebar {
+func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, batteryAvail, withAI bool, onSelect func(string)) *sidebar {
 	outer := gtk.NewBox(gtk.OrientationVertical, 0)
 	outer.AddCSSClass("am-sidebar")
 
@@ -45,6 +45,9 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, wi
 
 	if gpuAvail {
 		appendRow(hw, "GPU", "video-display-symbolic", "gpu", onSelect)
+	}
+	if batteryAvail {
+		appendRow(hw, "Battery", "battery-symbolic", "power", onSelect)
 	}
 	outer.Append(hw)
 

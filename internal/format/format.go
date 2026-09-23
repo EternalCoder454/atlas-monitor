@@ -8,7 +8,10 @@
 // actually changed (see ui.liveLabel).
 package format
 
-import "strconv"
+import (
+	"strconv"
+	"time"
+)
 
 const (
 	kib = 1024.0
@@ -84,12 +87,37 @@ func AppendPercent1(dst []byte, p float64) []byte {
 	return appendFixed(dst, p, 1, "%")
 }
 
+// AppendWatts appends a power figure, e.g. "12.4 W". Below 10 W a decimal is
+// worth having; above it the integer reads better.
+func AppendWatts(dst []byte, w float64) []byte {
+	if w < 10 {
+		return appendFixed(dst, w, 1, " W")
+	}
+	return appendFixed(dst, w, 0, " W")
+}
+
 // AppendTemp appends a temperature in Celsius, or the dash if unavailable (<0).
 func AppendTemp(dst []byte, c float64) []byte {
 	if c < 0 {
 		return append(dst, dash...)
 	}
 	return appendFixed(dst, c, 0, " °C")
+}
+
+// AppendDuration appends a coarse duration, e.g. "2h 14m" or "48m". Zero means
+// "not known" and renders as a dash — a battery estimate is often unavailable.
+func AppendDuration(dst []byte, d time.Duration) []byte {
+	if d <= 0 {
+		return append(dst, dash...)
+	}
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	if h > 0 {
+		dst = strconv.AppendInt(dst, int64(h), 10)
+		dst = append(dst, "h "...)
+	}
+	dst = strconv.AppendInt(dst, int64(m), 10)
+	return append(dst, 'm')
 }
 
 // AppendInt appends a plain integer.
@@ -106,3 +134,6 @@ func Rate(bps float64) string { return string(AppendRate(nil, bps)) }
 
 // MHz formats a clock speed in MHz, switching to GHz above 1000.
 func MHz(mhz float64) string { return string(AppendMHz(nil, mhz)) }
+
+// Watts formats a power figure, e.g. "12.4 W".
+func Watts(w float64) string { return string(AppendWatts(nil, w)) }
