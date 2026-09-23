@@ -80,7 +80,7 @@ func (c *Collector) collectDisks() {
 	}
 	c.diskLast = now
 
-	stats := readDiskstats()
+	stats := c.readDiskstats()
 
 	c.write(func(s *Stats) {
 		for _, d := range s.Disks {
@@ -115,22 +115,28 @@ func rateOf(cur, prev uint64, dt float64) float64 {
 	return float64(cur-prev) / dt
 }
 
-// readDiskstats returns name -> [sectorsRead, sectorsWritten].
-func readDiskstats() map[string][2]uint64 {
-	out := make(map[string][2]uint64)
-	f, err := os.Open("/proc/diskstats")
+// readDiskstats returns name -> [sectorsRead, sectorsWritten], reusing the
+// collector's buffer and map so a tick allocates nothing.
+func (c *Collector) readDiskstats() map[string][2]uint64 {
+	out := c.diskStats
+	clear(out)
+	data, keep, err := readInto("/proc/diskstats", c.diskBuf)
+	c.diskBuf = keep
 	if err != nil {
 		return out
 	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) < 10 {
+	for len(data) > 0 {
+		var line []byte
+		line, data = nextLine(data)
+		name := field(line, 2)
+		rd, wr := field(line, 5), field(line, 9)
+		if name == nil || rd == nil || wr == nil {
 			continue
 		}
-		name := fields[2]
-		out[name] = [2]uint64{atou(fields[5]), atou(fields[9])}
+		// The device name is the only allocation, and only for a device we have
+		// not seen before — the map key is reused on every later tick.
+		key := string(name)
+		out[key] = [2]uint64{parseUintBytes(rd), parseUintBytes(wr)}
 	}
 	return out
 }

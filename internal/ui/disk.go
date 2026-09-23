@@ -12,14 +12,14 @@ type diskView struct {
 	root       *gtk.ScrolledWindow
 	col        *stats.Collector
 	disk       *stats.DiskStats
-	title      *gtk.Label
-	caption    *gtk.Label
+	title      *liveLabel
+	caption    *liveLabel
 	readGraph  *graph.Graph
 	writeGraph *graph.Graph
 
-	vSize, vUsed, vFree             *gtk.Label
-	vReadTotal, vWriteTotal         *gtk.Label
-	vReadRate, vWriteRate           *gtk.Label
+	vSize, vUsed, vFree     *liveLabel
+	vReadTotal, vWriteTotal *liveLabel
+	vReadRate, vWriteRate   *liveLabel
 }
 
 func newDiskView(col *stats.Collector, disk *stats.DiskStats) *diskView {
@@ -41,11 +41,11 @@ func newDiskView(col *stats.Collector, disk *stats.DiskStats) *diskView {
 
 	var headBox *gtk.Box
 	v.title, v.caption, headBox = newHeader()
-	v.title.SetText(label)
+	v.title.text(label)
 	if isSwap {
-		v.caption.SetText(format.Bytes(size) + " · compressed-RAM swap (" + node + ")")
+		v.caption.text(format.Bytes(size) + " · compressed-RAM swap (" + node + ")")
 	} else {
-		v.caption.SetText(format.Bytes(size) + " · " + node)
+		v.caption.text(format.Bytes(size) + " · " + node)
 	}
 	box.Append(headBox)
 
@@ -78,7 +78,7 @@ func newDiskView(col *stats.Collector, disk *stats.DiskStats) *diskView {
 	v.vWriteTotal = g.add("Written total")
 	box.Append(g)
 
-	v.vSize.SetText(format.Bytes(size))
+	v.vSize.bytesVal(size)
 	return v
 }
 
@@ -92,12 +92,12 @@ func (v *diskView) Update() {
 		rTotal, wTotal = v.disk.ReadTotal, v.disk.WriteTotal
 		rRate, wRate = v.disk.ReadRate, v.disk.WriteRate
 	})
-	v.vUsed.SetText(format.Bytes(used))
-	v.vFree.SetText(format.Bytes(free))
-	v.vReadRate.SetText(format.Rate(rRate))
-	v.vWriteRate.SetText(format.Rate(wRate))
-	v.vReadTotal.SetText(format.Bytes(rTotal))
-	v.vWriteTotal.SetText(format.Bytes(wTotal))
+	v.vUsed.bytesVal(used)
+	v.vFree.bytesVal(free)
+	v.vReadRate.rate(rRate)
+	v.vWriteRate.rate(wRate)
+	v.vReadTotal.bytesVal(rTotal)
+	v.vWriteTotal.bytesVal(wTotal)
 	v.readGraph.Refresh()
 	v.writeGraph.Refresh()
 }

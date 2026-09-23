@@ -11,7 +11,30 @@ import (
 	"atlas-monitor/internal/config"
 	"atlas-monitor/internal/process"
 	"atlas-monitor/internal/stats"
+	"atlas-monitor/internal/sysmem"
 )
+
+// lazyView is a page that is only built the first time it is opened. A machine
+// with several disks and interfaces has a dozen pages, each a scroller full of
+// widgets and two Cairo charts; building them all up front costs megabytes of
+// GTK objects for pages the user may never look at. The sidebar row is cheap,
+// so navigation is unaffected.
+//
+// The reverse — tearing a page down again when the user leaves it — does not
+// work and is deliberately not attempted. Destroying a GTK page reclaims
+// nothing: gotk4 keeps each signal handler's Go closure alive for the widget's
+// lifetime and those closures reference the page, so the two hold each other
+// up. Rebuilding one simply costs its memory a second time. Not building it
+// until it is asked for is the saving that actually lands.
+type lazyView struct {
+	build func() View
+	view  View
+}
+
+// trimInterval is how often idle memory is handed back to the OS while the
+// window is visible. GTK and the GLib allocator hold on to freed blocks; a
+// periodic trim keeps the resident set flat over a long session.
+const trimInterval = 60 // seconds
 
 // Window owns the content stack, the per-view map, and the refresh tick.
 type Window struct {
@@ -20,11 +43,12 @@ type Window struct {
 	ai           *ai.Client
 	settings     *config.Settings
 	stack        *gtk.Stack
-	views        map[string]View
-	asst         *assistantView
+	views        map[string]*lazyView
+	asst         assistant
 	assistantRow *adw.ActionRow
 	active       string
 	visible      bool
+	ticks        int
 
 	// Network rows are reordered live so the active interface stays first.
 	netExp     *adw.ExpanderRow
@@ -40,7 +64,7 @@ func NewWindow(col *stats.Collector, client *ai.Client, settings *config.Setting
 		proc:     process.New(),
 		ai:       client,
 		settings: settings,
-		views:    map[string]View{},
+		views:    map[string]*lazyView{},
 		visible:  true,
 	}
 }
@@ -53,8 +77,9 @@ func (w *Window) Build() gtk.Widgetter {
 	w.stack.SetTransitionType(gtk.StackTransitionTypeCrossfade)
 	w.stack.SetTransitionDuration(120)
 
-	w.addView("cpu", newCPUView(w.col))
-	w.addView("memory", newMemView(w.col))
+	col := w.col
+	w.addView("cpu", func() View { return newCPUView(col) })
+	w.addView("memory", func() View { return newMemView(col) })
 
 	var disks []*stats.DiskStats
 	var nets []*stats.NetStats
@@ -67,19 +92,24 @@ func (w *Window) Build() gtk.Widgetter {
 		activeNet = s.ActiveNet
 	})
 	for _, d := range disks {
-		w.addView("disk:"+d.Name, newDiskView(w.col, d))
+		w.addView("disk:"+d.Name, func() View { return newDiskView(col, d) })
 	}
 	for _, n := range nets {
-		w.addView("net:"+n.Name, newNetView(w.col, n))
+		w.addView("net:"+n.Name, func() View { return newNetView(col, n) })
 	}
 	if gpuAvail {
-		w.addView("gpu", newGPUView(w.col))
+		w.addView("gpu", func() View { return newGPUView(col) })
 	}
 
-	w.asst = newAssistantView(w.col, w.proc, w.ai, w.settings)
-	w.addView("assistant", w.asst)
-	w.addView("apps", newAppsView(w.proc))
-	w.addView("services", newServicesView())
+	if aiCompiledIn {
+		w.addView("assistant", func() View {
+			a := newAssistant(col, w.proc, w.ai, w.settings)
+			w.asst = a
+			return a
+		})
+	}
+	w.addView("apps", func() View { return newAppsView(w.proc) })
+	w.addView("services", func() View { return newServicesView() })
 
 	w.netStable = make([]string, len(nets))
 	for i, n := range nets {
@@ -87,7 +117,7 @@ func (w *Window) Build() gtk.Widgetter {
 	}
 	orderedNets := orderByActive(nets, activeNet)
 
-	sb := buildSidebar(disks, orderedNets, gpuAvail, w.selectView)
+	sb := buildSidebar(disks, orderedNets, gpuAvail, aiCompiledIn, w.selectView)
 	w.assistantRow = sb.assistantRow
 	w.netExp = sb.netExp
 	w.netRows = sb.netRows
@@ -117,7 +147,10 @@ func (w *Window) Build() gtk.Widgetter {
 	return hbox
 }
 
-// SetAIEnabled shows/hides the Assistant entry and leaves it if it was active.
+// SetAIEnabled shows or hides the Assistant entry. With AI off the page is
+// never built at all — no widgets, no Ollama probe, no systemd bus connection —
+// which is what makes turning the assistant off a real saving rather than a
+// hidden row.
 func (w *Window) SetAIEnabled(enabled bool) {
 	if w.assistantRow != nil {
 		w.assistantRow.SetVisible(enabled)
@@ -138,9 +171,14 @@ func (w *Window) RefreshQuickPrompts() {
 // StartRefresh installs the 1-second UI tick that updates the active view.
 func (w *Window) StartRefresh() {
 	glib.TimeoutAdd(1000, func() bool {
-		if w.visible {
-			w.reorderNets()
-			w.tickActive()
+		if !w.visible {
+			return true
+		}
+		w.reorderNets()
+		w.tickActive()
+		w.ticks++
+		if w.ticks%trimInterval == 0 {
+			go sysmem.Trim() // off the main loop; malloc_trim walks the heap
 		}
 		return true
 	})
@@ -151,30 +189,37 @@ func (w *Window) SetVisible(visible bool) {
 	w.visible = visible
 	if visible {
 		w.col.Resume()
-		if w.active == "apps" || w.active == "assistant" {
+		if needsProcs(w.active) {
 			w.proc.Start()
 		}
 		w.tickActive()
-	} else {
-		w.col.Pause()
-		w.proc.Stop()
+		return
 	}
+	w.col.Pause()
+	w.proc.Stop()
+	// Hidden in the tray or another workspace: hand back everything the last
+	// visible second allocated, so a backgrounded Atlas costs almost nothing.
+	go sysmem.Release()
 }
 
-func (w *Window) addView(name string, v View) {
-	w.views[name] = v
-	w.stack.AddNamed(v.Root(), name)
+func (w *Window) addView(name string, build func() View) {
+	w.views[name] = &lazyView{build: build}
 }
 
 func (w *Window) selectView(name string) {
-	if _, ok := w.views[name]; !ok {
+	lv := w.views[name]
+	if lv == nil {
 		return
+	}
+	if lv.view == nil {
+		lv.view = lv.build()
+		w.stack.AddNamed(lv.view.Root(), name)
 	}
 	w.active = name
 	w.stack.SetVisibleChildName(name)
 	// The per-process collector is expensive, so only run it where it is used:
 	// the Apps table and the Assistant (which reports top processes).
-	if name == "apps" || name == "assistant" {
+	if needsProcs(name) {
 		w.proc.Start()
 	} else {
 		w.proc.Stop()
@@ -182,9 +227,14 @@ func (w *Window) selectView(name string) {
 	w.tickActive()
 }
 
+// needsProcs reports whether a view consumes the per-process collector.
+func needsProcs(name string) bool {
+	return name == "apps" || name == "assistant"
+}
+
 func (w *Window) tickActive() {
-	if v, ok := w.views[w.active]; ok {
-		v.Update()
+	if lv := w.views[w.active]; lv != nil && lv.view != nil {
+		lv.view.Update()
 	}
 }
 

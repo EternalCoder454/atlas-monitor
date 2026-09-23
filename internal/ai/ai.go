@@ -3,12 +3,10 @@ package ai
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 	"time"
 )
@@ -19,16 +17,22 @@ type Message struct {
 	Content string `json:"content"`
 }
 
-// Client talks to an Ollama HTTP endpoint.
+// Client talks to an Ollama HTTP endpoint. Requests go over a small HTTP/1.1
+// implementation (see http.go) rather than net/http.
 type Client struct {
 	url   string
 	model string
-	hc    *http.Client
 }
+
+// chatTimeout bounds a whole generation; probeTimeout bounds a liveness check.
+const (
+	chatTimeout  = 3 * time.Minute
+	probeTimeout = 10 * time.Second
+)
 
 // New returns a client for the given endpoint and model.
 func New(url, model string) *Client {
-	return &Client{url: url, model: model, hc: &http.Client{Timeout: 3 * time.Minute}}
+	return &Client{url: url, model: model}
 }
 
 // SetConfig updates the endpoint and model (e.g. after a settings change).
@@ -89,23 +93,19 @@ func (c *Client) Chat(ctx context.Context, msgs []Message, onToken func(string))
 		Stream:   true,
 		Options:  map[string]any{"temperature": chatTemperature},
 	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url+"/api/chat", bytes.NewReader(body))
+	ctx, cancel := timeoutContext(ctx, chatTimeout)
+	defer cancel()
+
+	resp, err := c.do(ctx, "POST", "/api/chat", body)
 	if err != nil {
 		return "", stats, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.hc.Do(req)
-	if err != nil {
-		return "", stats, fmt.Errorf("cannot reach Ollama at %s: %w", c.url, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return "", stats, fmt.Errorf("ollama returned %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	defer resp.Close()
+	if resp.status != 200 {
+		return "", stats, statusError(resp)
 	}
 
-	sc := bufio.NewScanner(resp.Body)
+	sc := bufio.NewScanner(resp.body)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	var full strings.Builder
 	for sc.Scan() {
@@ -145,16 +145,21 @@ func (c *Client) Chat(ctx context.Context, msgs []Message, onToken func(string))
 
 // Available reports whether the Ollama API responds.
 func (c *Client) Available(ctx context.Context) bool {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url+"/api/tags", nil)
+	ctx, cancel := timeoutContext(ctx, probeTimeout)
+	defer cancel()
+	resp, err := c.do(ctx, "GET", "/api/tags", nil)
 	if err != nil {
 		return false
 	}
-	resp, err := c.hc.Do(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
+	defer resp.Close()
+	return resp.status == 200
+}
+
+// statusError turns a non-200 response into an error carrying the server's
+// explanation, which Ollama returns as a short JSON or text body.
+func statusError(resp *response) error {
+	b, _ := io.ReadAll(io.LimitReader(resp.body, 2048))
+	return fmt.Errorf("ollama returned %d: %s", resp.status, strings.TrimSpace(string(b)))
 }
 
 type tagsResp struct {
@@ -168,20 +173,18 @@ type tagsResp struct {
 // error means the server is reachable; the slice may still be empty if no models
 // are pulled. Used by the UI to tell "Ollama down" from "model not installed".
 func (c *Client) Tags(ctx context.Context) ([]string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url+"/api/tags", nil)
+	ctx, cancel := timeoutContext(ctx, probeTimeout)
+	defer cancel()
+	resp, err := c.do(ctx, "GET", "/api/tags", nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.hc.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("cannot reach Ollama at %s: %w", c.url, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ollama returned %d", resp.StatusCode)
+	defer resp.Close()
+	if resp.status != 200 {
+		return nil, fmt.Errorf("ollama returned %d", resp.status)
 	}
 	var tr tagsResp
-	if err := json.NewDecoder(resp.Body).Decode(&tr); err != nil {
+	if err := json.NewDecoder(resp.body).Decode(&tr); err != nil {
 		return nil, err
 	}
 	names := make([]string, 0, len(tr.Models))

@@ -1,11 +1,8 @@
 package ui
 
 import (
-	"fmt"
-
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
-	"atlas-monitor/internal/format"
 	"atlas-monitor/internal/graph"
 	"atlas-monitor/internal/stats"
 )
@@ -16,15 +13,15 @@ const cpuColumns = 8
 type cpuView struct {
 	root    *gtk.ScrolledWindow
 	col     *stats.Collector
-	number  *gtk.Label
-	caption *gtk.Label
+	number  *liveLabel
+	caption *liveLabel
 	usage   *graph.Graph
 	cores   *coreGrid
 	nCores  int
 	coreBuf []float64 // reused each Update; avoids a per-tick alloc on the GTK thread
 
-	vBase, vCur, vSockets, vCores, vLogical *gtk.Label
-	vL1d, vL1i, vL2, vL3, vTemp             *gtk.Label
+	vBase, vCur, vSockets, vCores, vLogical *liveLabel
+	vL1d, vL1i, vL2, vL3, vTemp             *liveLabel
 }
 
 func newCPUView(col *stats.Collector) *cpuView {
@@ -69,15 +66,15 @@ func newCPUView(col *stats.Collector) *cpuView {
 
 	// Static fields, set once.
 	col.Read(func(s *stats.Stats) {
-		v.caption.SetText(s.CPU.Model)
-		v.vBase.SetText(format.MHz(s.CPU.BaseFreq))
-		v.vSockets.SetText(fmt.Sprintf("%d", s.CPU.Sockets))
-		v.vCores.SetText(fmt.Sprintf("%d", s.CPU.PhysCores))
-		v.vLogical.SetText(fmt.Sprintf("%d", s.CPU.Logical))
-		v.vL1d.SetText(orDash(s.CPU.L1d))
-		v.vL1i.SetText(orDash(s.CPU.L1i))
-		v.vL2.SetText(orDash(s.CPU.L2))
-		v.vL3.SetText(orDash(s.CPU.L3))
+		v.caption.text(s.CPU.Model)
+		v.vBase.mhz(s.CPU.BaseFreq)
+		v.vSockets.intVal(s.CPU.Sockets)
+		v.vCores.intVal(s.CPU.PhysCores)
+		v.vLogical.intVal(s.CPU.Logical)
+		v.vL1d.text(orDash(s.CPU.L1d))
+		v.vL1i.text(orDash(s.CPU.L1i))
+		v.vL2.text(orDash(s.CPU.L2))
+		v.vL3.text(orDash(s.CPU.L3))
 	})
 	return v
 }
@@ -95,16 +92,9 @@ func (v *cpuView) Update() {
 			cores[i] = s.CPU.Cores[i].Usage
 		}
 	})
-	v.number.SetText(format.Percent(usage))
-	v.vCur.SetText(format.MHz(cur))
-	v.vTemp.SetText(format.Temp(temp))
+	v.number.percent(usage)
+	v.vCur.mhz(cur)
+	v.vTemp.temp(temp)
 	v.cores.set(cores)
 	v.usage.Refresh()
-}
-
-func orDash(s string) string {
-	if s == "" {
-		return "—"
-	}
-	return s
 }

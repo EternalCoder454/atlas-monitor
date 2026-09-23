@@ -1,10 +1,6 @@
 package stats
 
-import (
-	"bufio"
-	"os"
-	"strings"
-)
+import "bytes"
 
 // initMem allocates the memory ring buffers.
 func (c *Collector) initMem() {
@@ -15,34 +11,52 @@ func (c *Collector) initMem() {
 }
 
 // collectMem parses /proc/meminfo. All values are converted to bytes.
+// The file is read into a reused buffer and scanned as bytes: at one sample a
+// second, a map and fifty per-line field slices are not worth allocating.
 func (c *Collector) collectMem() {
-	f, err := os.Open("/proc/meminfo")
+	data, keep, err := readInto("/proc/meminfo", c.memBuf)
+	c.memBuf = keep
 	if err != nil {
 		return
 	}
-	m := make(map[string]uint64, 8)
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) < 2 {
+
+	var total, avail, free, cached, sreclaim, buffers, swapTotal, swapFree uint64
+	for len(data) > 0 {
+		var line []byte
+		line, data = nextLine(data)
+		key, kb, ok := meminfoLine(line)
+		if !ok {
 			continue
 		}
-		key := strings.TrimSuffix(fields[0], ":")
 		// Values in /proc/meminfo are in kB.
-		m[key] = atou(fields[1]) * 1024
+		switch string(key) { // no allocation: the compiler compares in place
+		case "MemTotal":
+			total = kb
+		case "MemAvailable":
+			avail = kb
+		case "MemFree":
+			free = kb
+		case "Cached":
+			cached = kb
+		case "SReclaimable":
+			sreclaim = kb
+		case "Buffers":
+			buffers = kb
+		case "SwapTotal":
+			swapTotal = kb
+		case "SwapFree":
+			swapFree = kb
+		}
 	}
-	f.Close()
+	const kB = 1024
+	total, avail, free = total*kB, avail*kB, free*kB
+	cachedTotal := (cached + sreclaim + buffers) * kB
+	swapTotal, swapFree = swapTotal*kB, swapFree*kB
 
-	total := m["MemTotal"]
-	avail := m["MemAvailable"]
-	free := m["MemFree"]
-	cached := m["Cached"] + m["SReclaimable"] + m["Buffers"]
 	used := uint64(0)
 	if total > avail {
 		used = total - avail
 	}
-	swapTotal := m["SwapTotal"]
-	swapFree := m["SwapFree"]
 	swapUsed := uint64(0)
 	if swapTotal > swapFree {
 		swapUsed = swapTotal - swapFree
@@ -60,7 +74,7 @@ func (c *Collector) collectMem() {
 	c.write(func(s *Stats) {
 		s.Mem.Total = total
 		s.Mem.Used = used
-		s.Mem.Cached = cached
+		s.Mem.Cached = cachedTotal
 		s.Mem.Available = avail
 		s.Mem.Free = free
 		s.Mem.SwapTotal = swapTotal
@@ -72,4 +86,17 @@ func (c *Collector) collectMem() {
 			s.Mem.SwapHist.Push(swapPct)
 		}
 	})
+}
+
+// meminfoLine splits one "Key:   1234 kB" line into its key and value.
+func meminfoLine(line []byte) (key []byte, value uint64, ok bool) {
+	i := bytes.IndexByte(line, ':')
+	if i < 0 {
+		return nil, 0, false
+	}
+	v := field(line[i+1:], 0)
+	if v == nil {
+		return nil, 0, false
+	}
+	return line[:i], parseUintBytes(v), true
 }

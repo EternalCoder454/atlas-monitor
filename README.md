@@ -66,12 +66,54 @@ bindings and can take a few minutes; rebuilds are cached and fast.
 
 ## Performance
 
-- Idle RSS target under 70 MB; one collector goroutine per subsystem on a 1s
-  ticker, all reads off the GTK main thread.
-- Graphs use fixed 60-sample ring buffers, pre-allocated at startup.
+Atlas is meant to be the cheapest thing running on your desktop. Resident memory,
+measured on a Fedora 44 / KDE Wayland box with ~700 processes:
+
+| | 0.5.0 | now |
+|---|---|---|
+| CPU view, just opened | 128 MiB | **87 MiB** |
+| Apps process table open | 153 MiB | 111 MiB |
+| after visiting every page | 155 MiB | 115 MiB |
+| after 150 Services refreshes | 601 MiB | no growth |
+
+(that last row was a leak — see below. The binary also went from 17.7 MB to
+14.2 MB, and the thread count from ~38 to ~25.)
+
+Those are RSS, the figure a task manager shows. Proportional set size — Atlas's
+actual share of physical RAM once pages shared with other apps are divided up —
+went from 71 MiB to 57 MiB on the CPU view.
+
+Where the rest comes from:
+
+- **The window is drawn on the CPU by default.** GTK's GPU renderers load the
+  whole Mesa stack — on an AMD box that is `libgallium` plus a 150 MB
+  `libLLVM`, and the Vulkan loader additionally opens *every* installed driver,
+  including lavapipe and the Direct3D translation layer. That is ~60 MiB of
+  resident memory to draw a few line charts once a second. **Settings → App →
+  Rendering** switches to GPU (Vulkan, restricted to your card's driver) if you
+  prefer smoother resizing on a high-refresh display.
+- **Pages are built the first time you open them.** A machine with three disks
+  and three interfaces has a dozen pages; Atlas builds the one you are looking
+  at. With the assistant switched off it is never built at all.
+- **Nothing is redrawn that has not changed.** Every live value remembers the
+  text it last pushed, so a steady reading costs no formatting, no Go→C string
+  copy and no Pango relayout. Per-tick allocation in the collectors and the
+  process table is essentially zero.
+- **The C heap is kept honest.** glibc is configured for a small long-running
+  GUI process (capped arenas, prompt trimming) and idle memory is handed back
+  once a minute — and immediately when the window is hidden.
+- **No `net/http`.** The Ollama client speaks HTTP/1.1 on a socket it opens
+  itself, which keeps `crypto/tls`, `crypto/x509` and the FIPS module (a 32 MiB
+  static buffer among them) out of the binary entirely.
+- **Tables are merged, not replaced.** Both the process list and the systemd
+  unit list keep a stable row object per entry and update it in place. Replacing
+  a GTK list model wholesale makes it tear down and rebuild every realised row,
+  and that memory is never given back — refreshing the Services list once a
+  second used to take the process past 600 MiB in two and a half minutes.
 - Collection **pauses entirely while the window is hidden/minimised** (0% CPU),
-  resuming when it is shown again.
-- The expensive per-process scan only runs while the Apps view is open.
+  and the expensive per-process scan only runs while Apps or the Assistant is
+  open.
+- Graphs use fixed 60-sample ring buffers, pre-allocated at startup.
 
 ## Build dependencies
 
@@ -91,10 +133,27 @@ make            # build ./bin/atlas-monitor
 make run        # build and run
 make install    # install to ~/.local/bin and the stylesheet to
                 # ~/.local/share/atlas-monitor/
+make test       # go test ./...
 make clean
 ```
 
 `make install` honours `PREFIX` (default `~/.local`).
+
+### A monitor and nothing else
+
+```sh
+make build-lean     # or: make install-lean
+```
+
+Builds with `-tags noai`, which drops the Assistant page, the Ollama client and
+the Markdown renderer from the binary. The Settings dialog loses its assistant
+sections and the sidebar loses the Assistant row; everything else is identical.
+An in-app update remembers which flavour you installed and rebuilds the same
+one.
+
+Turning the assistant off in **Settings** gets you most of the same benefit
+without a rebuild — the page, its Ollama probe and its systemd bus connection
+are then never created.
 
 ## Setting up the assistant
 
@@ -150,6 +209,10 @@ local changes, so a tree you are editing is never overwritten.
   (`/proc/<pid>/fdinfo`, the `drm-engine-*` nanosecond counters), so each
   process's GPU engine load is shown — no root or debugfs required. Known GPU
   clients are sampled every tick with a periodic full rescan to find new ones.
+- **Rendering**: the GSK renderer is chosen from **Settings → App →
+  Rendering** and applied at startup. Setting `GSK_RENDERER` or `GDK_DISABLE`
+  in the environment yourself always wins — Atlas never overrides a variable
+  you have set.
 - **Services**: Start/Stop/Restart/Enable/Disable are performed through systemd
   over the system bus, which triggers your desktop's polkit agent for
   authentication. Without authorisation the action returns an error shown in the
@@ -165,7 +228,7 @@ local changes, so a tree you are editing is never overwritten.
 
 ## Development
 
-- `make vet` runs `go vet ./...`.
+- `make vet` runs `go vet ./...`; `make test` runs the test suite.
 - The non-GUI layers have integration tests that read this machine's live
   `/proc`, `/sys`, and D-Bus:
   `go test ./internal/stats/ ./internal/process/ ./internal/services/ -v`.
@@ -199,7 +262,9 @@ internal/stats/        /proc + /sys collectors, ring buffers, pause/resume
 internal/process/      per-process /proc/[pid] collection
 internal/gpu/          AMD GPU sysfs reader (auto-detect)
 internal/services/     systemd D-Bus client
-internal/ai/           streaming Ollama client
+internal/ai/           streaming Ollama client (minimal HTTP/1.1, no net/http)
+internal/gfx/          renderer selection; keeps the GPU driver stack out
+internal/sysmem/       C allocator tuning and returning idle memory to the OS
 internal/config/       persisted user settings (~/.config/atlas-monitor)
 internal/graph/        reusable Cairo graph widget
 internal/format/       byte/rate/clock formatting helpers

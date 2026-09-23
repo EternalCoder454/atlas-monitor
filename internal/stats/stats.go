@@ -71,12 +71,12 @@ func (d *DiskStats) Label() string {
 
 // NetStats is one interface's addresses + throughput.
 type NetStats struct {
-	Name, Display         string // Display is a friendly label, e.g. "Wi-Fi"
-	MAC, IPv4, IPv6       string
-	SpeedMbit             int // -1 if unknown
-	RxTotal, TxTotal      uint64
-	RxRate, TxRate        float64 // bytes/sec
-	DownHist, UpHist      *RingBuffer
+	Name, Display    string // Display is a friendly label, e.g. "Wi-Fi"
+	MAC, IPv4, IPv6  string
+	SpeedMbit        int // -1 if unknown
+	RxTotal, TxTotal uint64
+	RxRate, TxRate   float64 // bytes/sec
+	DownHist, UpHist *RingBuffer
 
 	prevRx, prevTx uint64
 	havePrev       bool
@@ -149,20 +149,30 @@ type Collector struct {
 
 	netTick int // collectNets tick counter; throttles the per-interface address refresh
 
-	// collectCPU scratch — only the CPU goroutine touches these, so no locking.
+	// Per-collector scratch. Each of these belongs to exactly one goroutine, so
+	// none of it needs locking; reusing the buffers keeps the once-a-second
+	// sampling free of allocation.
 	cpuFreqPaths []string    // precomputed /sys cpufreq paths, one per logical core
 	cpuStatBuf   []byte      // reused /proc/stat scan buffer (avoids per-tick line allocs)
 	cpuSamples   []cpuSample // reused /proc/stat parse results
+	memBuf       []byte      // reused /proc/meminfo read buffer
+	diskBuf      []byte      // reused /proc/diskstats read buffer
+	diskStats    map[string][2]uint64
+	netBuf       []byte // reused /proc/net/dev read buffer
+	netCounters  map[string][2]uint64
+	routeBuf     []byte // reused /proc/net/route read buffer
 }
 
 // New creates a Collector. gpuReader may report Available()==false.
 func New(gpuReader *gpu.Reader) *Collector {
 	return &Collector{
-		stats:   &Stats{},
-		gpu:     gpuReader,
-		gate:    newGate(),
-		stopCh:  make(chan struct{}),
-		cpuPrev: make(map[string]cpuTimes),
+		stats:       &Stats{},
+		gpu:         gpuReader,
+		gate:        newGate(),
+		stopCh:      make(chan struct{}),
+		cpuPrev:     make(map[string]cpuTimes),
+		diskStats:   make(map[string][2]uint64),
+		netCounters: make(map[string][2]uint64),
 	}
 }
 

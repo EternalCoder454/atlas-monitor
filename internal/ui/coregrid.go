@@ -39,10 +39,19 @@ func newCoreGrid(n int) *coreGrid {
 	return g
 }
 
-// set updates the usages and requests a redraw. Call on the GTK main thread.
+// set updates the usages and requests a redraw, skipping the redraw when every
+// core reads the same as last tick (an idle machine, mostly).
 func (g *coreGrid) set(usages []float64) {
-	copy(g.usages, usages)
-	g.QueueDraw()
+	changed := false
+	for i := range g.usages {
+		if i < len(usages) && g.usages[i] != usages[i] {
+			g.usages[i] = usages[i]
+			changed = true
+		}
+	}
+	if changed {
+		g.QueueDraw()
+	}
 }
 
 func (g *coreGrid) draw(area *gtk.DrawingArea, cr *cairo.Context, w, h int) {
@@ -50,11 +59,7 @@ func (g *coreGrid) draw(area *gtk.DrawingArea, cr *cairo.Context, w, h int) {
 	if n == 0 || w <= 0 {
 		return
 	}
-	fr, fg, fb := 0.5, 0.5, 0.5
-	if sc := area.StyleContext(); sc != nil {
-		c := sc.Color()
-		fr, fg, fb = float64(c.Red()), float64(c.Green()), float64(c.Blue())
-	}
+	fr, fg, fb := graph.Foreground(area)
 
 	cellW := float64(w) / float64(g.cols)
 	cr.SelectFontFace("sans-serif", cairo.FontSlantNormal, cairo.FontWeightNormal)
