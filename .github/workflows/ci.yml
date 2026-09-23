@@ -30,6 +30,13 @@ jobs:
 
       - uses: actions/checkout@v5
 
+      # `go build` stamps the binary with the commit, which runs git inside the
+      # container as root over a checkout owned by another uid — git refuses
+      # that as "dubious ownership" and the build fails. Marking the workspace
+      # safe keeps the stamping rather than turning it off with -buildvcs=false.
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Record toolchain versions
         run: |
           go version
@@ -86,6 +93,13 @@ jobs:
             gcc pkgconf-pkg-config git make tar zstd
 
       - uses: actions/checkout@v5
+
+      # `go build` stamps the binary with the commit, which runs git inside the
+      # container as root over a checkout owned by another uid — git refuses
+      # that as "dubious ownership" and the build fails. Marking the workspace
+      # safe keeps the stamping rather than turning it off with -buildvcs=false.
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Cache Go modules and build output
         uses: actions/cache@v4

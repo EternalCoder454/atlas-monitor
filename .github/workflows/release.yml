@@ -31,6 +31,11 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
+      # See ci.yml: git refuses a checkout owned by another uid, which breaks
+      # the VCS stamping `go build` does.
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Build
         id: build
         run: |
