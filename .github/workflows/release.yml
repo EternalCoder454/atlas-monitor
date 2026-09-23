@@ -25,7 +25,8 @@ jobs:
         run: |
           dnf install -y --setopt=install_weak_deps=False \
             golang gtk4-devel libadwaita-devel glib2-devel \
-            gcc pkgconf-pkg-config git tar gzip
+            gcc pkgconf-pkg-config git tar gzip \
+            gh # the runner host has it, the container does not
 
       - uses: actions/checkout@v5
         with:
@@ -90,6 +91,10 @@ jobs:
             v*) ;;
             *) echo "Not a version tag ($tag); nothing to attach to."; exit 0 ;;
           esac
+          # Anything other than "the release is not there yet" is a real
+          # failure and should stop the job, not be reported as an absent
+          # release — which is how a missing gh looked the first time.
+          command -v gh >/dev/null || { echo "gh is not installed in this image"; exit 1; }
           if gh release view "$tag" >/dev/null; then
             gh release upload "$tag" dist/*.tar.gz dist/*.tar.gz.sha256 --clobber
             echo "Attached the tarball to release $tag."
