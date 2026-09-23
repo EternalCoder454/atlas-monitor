@@ -80,6 +80,9 @@ jobs:
       - name: Attach to the release, if there is one
         env:
           GH_TOKEN: ${{ github.token }}
+          # gh works out the repository from the git remote, which it cannot do
+          # reliably inside the container, so name it outright.
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           tag="$TAG"
@@ -87,7 +90,7 @@ jobs:
             v*) ;;
             *) echo "Not a version tag ($tag); nothing to attach to."; exit 0 ;;
           esac
-          if gh release view "$tag" >/dev/null 2>&1; then
+          if gh release view "$tag" >/dev/null; then
             gh release upload "$tag" dist/*.tar.gz dist/*.tar.gz.sha256 --clobber
             echo "Attached the tarball to release $tag."
           else
