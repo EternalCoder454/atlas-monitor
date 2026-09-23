@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -28,6 +29,7 @@ const netScanThreshold = 8192
 type Proc struct {
 	PID       int
 	Name      string
+	Kernel    bool    // a kernel thread (kworker, ksoftirqd, …) rather than a program
 	CPU       float64 // percent of one core (may exceed 100 for threaded procs)
 	RSS       uint64  // resident bytes
 	GPU       float64 // percent of GPU engine time; -1 if the process holds no GPU handle
@@ -77,6 +79,9 @@ type Collector struct {
 	buf  []byte
 	link []byte
 
+	// interval is the sampling period in nanoseconds, read atomically.
+	interval atomic.Int64
+
 	runMu   sync.Mutex
 	running bool
 	stopCh  chan struct{}
@@ -85,7 +90,7 @@ type Collector struct {
 
 // New returns an idle collector.
 func New() *Collector {
-	return &Collector{
+	c := &Collector{
 		prev:         make(map[int]procPrev),
 		prevSpare:    make(map[int]procPrev),
 		lastNet:      make(map[int][2]float64),
@@ -97,7 +102,20 @@ func New() *Collector {
 		buf:          make([]byte, 8192),
 		link:         make([]byte, 256),
 	}
+	c.interval.Store(int64(time.Second))
+	return c
 }
+
+// SetInterval changes how often the process list is sampled. It takes effect
+// within one tick of the current period.
+func (c *Collector) SetInterval(d time.Duration) {
+	if d < time.Second {
+		d = time.Second
+	}
+	c.interval.Store(int64(d))
+}
+
+func (c *Collector) period() time.Duration { return time.Duration(c.interval.Load()) }
 
 // Start launches the sampling goroutine if not already running.
 func (c *Collector) Start() {
@@ -111,7 +129,7 @@ func (c *Collector) Start() {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
-		t := time.NewTicker(time.Second)
+		t := time.NewTicker(c.period())
 		defer t.Stop()
 		c.collect()
 		for {
@@ -120,6 +138,7 @@ func (c *Collector) Start() {
 				return
 			case <-t.C:
 				c.collect()
+				t.Reset(c.period())
 			}
 		}
 	}()
@@ -218,11 +237,11 @@ func (c *Collector) collect() {
 			continue
 		}
 
-		name, cpuJiffies, ok := c.readStat(pid)
+		name, cpuJiffies, kernel, ok := c.readStat(pid)
 		if !ok {
 			continue
 		}
-		p := Proc{PID: pid, Name: name, GPU: -1}
+		p := Proc{PID: pid, Name: name, Kernel: kernel, GPU: -1}
 		p.RSS = c.readRSS(pid)
 
 		rb, wb := c.readIO(pid)
@@ -314,24 +333,34 @@ func (c *Collector) slurp(path string) []byte {
 	return c.buf[:n]
 }
 
-// readStat parses /proc/[pid]/stat for the process name and utime+stime jiffies.
-func (c *Collector) readStat(pid int) (name string, cpuJiffies uint64, ok bool) {
+// pfKthread is PF_KTHREAD in the kernel's task flags: the process is a kernel
+// thread, not a program. Roughly three quarters of the entries in /proc are
+// these (kworker, ksoftirqd, irq handlers), and they are hidden by default.
+const pfKthread = 0x00200000
+
+// readStat parses /proc/[pid]/stat for the process name, its utime+stime
+// jiffies, and whether it is a kernel thread. The flags word is in the same
+// line we already read, so the kernel-thread test costs nothing extra — reading
+// /proc/[pid]/cmdline to tell them apart would be another open per process per
+// tick.
+func (c *Collector) readStat(pid int) (name string, cpuJiffies uint64, kernel, ok bool) {
 	b := c.slurp("/proc/" + strconv.Itoa(pid) + "/stat")
 	if b == nil {
-		return "", 0, false
+		return "", 0, false, false
 	}
 	// comm is parenthesised and may contain spaces; split after the last ')'.
 	lp := bytes.IndexByte(b, '(')
 	rp := bytes.LastIndexByte(b, ')')
 	if lp < 0 || rp < 0 || rp < lp {
-		return "", 0, false
+		return "", 0, false, false
 	}
 	name = string(b[lp+1 : rp]) // small copy out of the shared buffer
 	rest := b[rp+2:]
-	// rest field 0 is field 3 (state); utime=field 14, stime=field 15.
+	// rest field 0 is field 3 (state); flags=field 9, utime=field 14, stime=15.
+	flags := fieldUint(rest, 6)
 	utime := fieldUint(rest, 11)
 	stime := fieldUint(rest, 12)
-	return name, utime + stime, true
+	return name, utime + stime, flags&pfKthread != 0, true
 }
 
 // readRSS returns resident set size in bytes from /proc/[pid]/statm.

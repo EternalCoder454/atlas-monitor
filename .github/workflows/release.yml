@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.6.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  tarball:
+    name: binary tarball
+    runs-on: ubuntu-latest
+    container: fedora:42
+    steps:
+      - name: Install build dependencies
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            golang gtk4-devel libadwaita-devel glib2-devel \
+            gcc pkgconf-pkg-config git tar gzip
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Build
+        id: build
+        run: |
+          version="$(cat VERSION)"
+          fedora="$(rpm -E %fedora)"
+          name="atlas-monitor-${version}-linux-x86_64-fedora${fedora}"
+          echo "version=$version"   >> "$GITHUB_OUTPUT"
+          echo "name=$name"         >> "$GITHUB_OUTPUT"
+
+          make build
+          # Stage exactly what packaging/install.sh expects to find beside it.
+          mkdir -p "dist/$name/assets"
+          cp bin/atlas-monitor "dist/$name/"
+          cp -r assets/style.css assets/icon.svg assets/icons assets/com.atlas.Monitor.desktop "dist/$name/assets/"
+          cp packaging/install.sh README.md LICENSE "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          ( cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256" )
+
+      - name: Record what it links against
+        run: |
+          echo "Built on Fedora $(rpm -E %fedora)"
+          echo "gtk4 $(pkg-config --modversion gtk4), libadwaita $(pkg-config --modversion libadwaita-1)"
+          ldd bin/atlas-monitor | grep -E 'gtk|adwaita' || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build.outputs.name }}
+          path: dist/*.tar.gz*
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" \
+            dist/*.tar.gz dist/*.tar.gz.sha256 --clobber

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"os"
+	"time"
 
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
@@ -33,8 +34,10 @@ type lazyView struct {
 
 // trimInterval is how often idle memory is handed back to the OS while the
 // window is visible. GTK and the GLib allocator hold on to freed blocks; a
-// periodic trim keeps the resident set flat over a long session.
-const trimInterval = 60 // seconds
+// periodic trim keeps the resident set flat over a long session. It is wall
+// time rather than a tick count so it does not stretch with the refresh
+// interval.
+const trimInterval = time.Minute
 
 // Window owns the content stack, the per-view map, and the refresh tick.
 type Window struct {
@@ -48,7 +51,8 @@ type Window struct {
 	assistantRow *adw.ActionRow
 	active       string
 	visible      bool
-	ticks        int
+	tick         glib.SourceHandle
+	lastTrim     time.Time
 
 	// Network rows are reordered live so the active interface stays first.
 	netExp     *adw.ExpanderRow
@@ -85,6 +89,7 @@ func (w *Window) Build() gtk.Widgetter {
 	var nets []*stats.NetStats
 	var gpuAvail bool
 	var activeNet string
+	batteryAvail := w.col.PowerAvailable()
 	w.col.Read(func(s *stats.Stats) {
 		disks = append(disks, s.Disks...)
 		nets = append(nets, s.Nets...)
@@ -99,6 +104,9 @@ func (w *Window) Build() gtk.Widgetter {
 	}
 	if gpuAvail {
 		w.addView("gpu", func() View { return newGPUView(col) })
+	}
+	if batteryAvail {
+		w.addView("power", func() View { return newPowerView(col) })
 	}
 
 	if aiCompiledIn {
@@ -117,7 +125,7 @@ func (w *Window) Build() gtk.Widgetter {
 	}
 	orderedNets := orderByActive(nets, activeNet)
 
-	sb := buildSidebar(disks, orderedNets, gpuAvail, aiCompiledIn, w.selectView)
+	sb := buildSidebar(disks, orderedNets, gpuAvail, batteryAvail, aiCompiledIn, w.selectView)
 	w.assistantRow = sb.assistantRow
 	w.netExp = sb.netExp
 	w.netRows = sb.netRows
@@ -127,14 +135,21 @@ func (w *Window) Build() gtk.Widgetter {
 	}
 	w.updateNetIcon(activeNet)
 	w.SetAIEnabled(w.settings.AIEnabled)
+	w.col.SetInterval(w.refreshInterval())
+	w.proc.SetInterval(w.refreshInterval())
 
 	hbox := gtk.NewBox(gtk.OrientationHorizontal, 0)
 	hbox.Append(sb.root)
 	hbox.Append(gtk.NewSeparator(gtk.OrientationVertical))
 	hbox.Append(w.stack)
 
-	// Default to CPU; ATLAS_VIEW=<name> can open another view at startup.
+	// Reopen on the page the user left, unless ATLAS_VIEW overrides it for
+	// development. A page that no longer exists — a disk that was unplugged —
+	// falls back to CPU.
 	initial := "cpu"
+	if _, ok := w.views[w.settings.LastView]; ok {
+		initial = w.settings.LastView
+	}
 	if name := os.Getenv("ATLAS_VIEW"); name != "" {
 		if _, ok := w.views[name]; ok {
 			initial = name
@@ -168,21 +183,51 @@ func (w *Window) RefreshQuickPrompts() {
 	}
 }
 
-// StartRefresh installs the 1-second UI tick that updates the active view.
+// StartRefresh installs the UI tick that updates the active view, at whatever
+// interval the settings ask for.
 func (w *Window) StartRefresh() {
-	glib.TimeoutAdd(1000, func() bool {
+	w.lastTrim = time.Now()
+	w.installTick()
+}
+
+// SetRefreshInterval re-times the UI tick and both collectors after the
+// interval is changed in Settings.
+func (w *Window) SetRefreshInterval(d time.Duration) {
+	w.col.SetInterval(d)
+	w.proc.SetInterval(d)
+	if w.tick != 0 {
+		w.installTick()
+	}
+}
+
+// installTick replaces the GLib timeout driving the refresh.
+func (w *Window) installTick() {
+	if w.tick != 0 {
+		glib.SourceRemove(w.tick)
+		w.tick = 0
+	}
+	every := w.refreshInterval()
+	w.tick = glib.TimeoutAdd(uint(every/time.Millisecond), func() bool {
 		if !w.visible {
 			return true
 		}
 		w.reorderNets()
 		w.tickActive()
-		w.ticks++
-		if w.ticks%trimInterval == 0 {
+		if time.Since(w.lastTrim) >= trimInterval {
+			w.lastTrim = time.Now()
 			go sysmem.Trim() // off the main loop; malloc_trim walks the heap
 		}
 		return true
 	})
 }
+
+// refreshInterval is the configured sampling period.
+func (w *Window) refreshInterval() time.Duration {
+	return time.Duration(config.NormalizeRefresh(w.settings.RefreshSeconds)) * time.Second
+}
+
+// ActiveView is the page currently on screen, saved so Atlas reopens on it.
+func (w *Window) ActiveView() string { return w.active }
 
 // SetVisible pauses/resumes collection and refresh based on window visibility.
 func (w *Window) SetVisible(visible bool) {

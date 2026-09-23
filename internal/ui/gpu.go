@@ -64,19 +64,20 @@ func (v *gpuView) Root() gtk.Widgetter { return v.root }
 func (v *gpuView) Update() {
 	var usage, temp, power, gclk, mclk float64
 	var fan int
+	var fanPct float64
 	var vramUsed, vramTotal, gtt uint64
 	v.col.Read(func(s *stats.Stats) {
 		usage = s.GPU.Usage
 		temp, power = s.GPU.Temp, s.GPU.PowerW
 		gclk, mclk = s.GPU.GpuClockMHz, s.GPU.MemClockMHz
-		fan = s.GPU.FanRPM
+		fan, fanPct = s.GPU.FanRPM, s.GPU.FanPercent
 		vramUsed, vramTotal, gtt = s.GPU.VramUsed, s.GPU.VramTotal, s.GPU.GttUsed
 	})
 	v.number.percent(usage)
 	v.vGpuClock.mhz(gclk)
 	v.vMemClock.mhz(mclk)
 	v.vTemp.temp(temp)
-	v.vFan.commit(appendRPM(v.vFan.scratch(), fan))
+	v.vFan.commit(appendFan(v.vFan.scratch(), fan, fanPct))
 	v.vPower.commit(appendWatts(v.vPower.scratch(), power))
 	v.vVram.gibOf(vramUsed, vramTotal)
 	v.vGtt.gib(gtt)
@@ -84,11 +85,17 @@ func (v *gpuView) Update() {
 	v.vramGraph.Refresh()
 }
 
-func appendRPM(dst []byte, r int) []byte {
-	if r <= 0 {
-		return append(dst, "0 RPM"...)
+// appendFan renders whichever figure the driver gives us: amdgpu reports tacho
+// RPM, NVML reports a percentage of maximum.
+func appendFan(dst []byte, rpm int, pct float64) []byte {
+	switch {
+	case rpm > 0:
+		return append(strconv.AppendInt(dst, int64(rpm), 10), " RPM"...)
+	case pct > 0:
+		return append(strconv.AppendFloat(dst, pct, 'f', 0, 64), "%"...)
+	default:
+		return append(dst, "—"...)
 	}
-	return append(strconv.AppendInt(dst, int64(r), 10), " RPM"...)
 }
 
 func appendWatts(dst []byte, w float64) []byte {

@@ -374,6 +374,34 @@ func perfGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 	})
 	g.Add(render)
 
+	// Sampling interval. Slower is cheaper, and stretches the graphs: they hold
+	// 60 samples whatever the rate.
+	intervals := make([]string, len(config.RefreshChoices))
+	chosen := 0
+	current := config.NormalizeRefresh(s.RefreshSeconds)
+	for i, sec := range config.RefreshChoices {
+		intervals[i] = refreshLabel(sec)
+		if sec == current {
+			chosen = i
+		}
+	}
+	refresh := adw.NewComboRow()
+	refresh.SetTitle("Refresh interval")
+	refresh.SetSubtitle(refreshDetail(current))
+	refresh.SetModel(gtk.NewStringList(intervals))
+	refresh.SetSelected(uint(chosen))
+	refresh.NotifyProperty("selected", func() {
+		idx := int(refresh.Selected())
+		if idx < 0 || idx >= len(config.RefreshChoices) {
+			return
+		}
+		s.RefreshSeconds = config.RefreshChoices[idx]
+		refresh.SetSubtitle(refreshDetail(s.RefreshSeconds))
+		_ = config.Save(*s)
+		fire(h.OnChange)
+	})
+	g.Add(refresh)
+
 	usage := adw.NewActionRow()
 	usage.SetTitle("Memory used by Atlas")
 	usage.SetSubtitle(selfMemory())
@@ -389,6 +417,23 @@ func perfGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 	})
 	g.Add(release)
 	return g
+}
+
+// refreshLabel names an interval in the dropdown.
+func refreshLabel(seconds int) string {
+	if seconds == 1 {
+		return "Every second"
+	}
+	return "Every " + strconv.Itoa(seconds) + " seconds"
+}
+
+// refreshDetail explains what the choice costs and buys.
+func refreshDetail(seconds int) string {
+	if seconds == 1 {
+		return "Graphs cover the last minute"
+	}
+	return "Lighter on the CPU · graphs cover the last " +
+		strconv.Itoa(seconds) + " minutes"
 }
 
 // selfMemory reports this process's resident set, read straight from

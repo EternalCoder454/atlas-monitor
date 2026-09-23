@@ -10,7 +10,7 @@ ICONACT := $(PREFIX)/share/icons/hicolor/scalable/actions
 # TAGS is passed to the Go build. `noai` drops the Assistant page, the Ollama
 # client and the Markdown renderer — see `make build-lean`.
 TAGS    ?=
-.PHONY: build build-lean run install install-lean uninstall clean vet test setup-ai
+.PHONY: build build-lean run install install-lean uninstall clean vet test test-race setup-ai
 
 build:
 	go build -tags "$(TAGS)" -trimpath -ldflags="-s -w" -o $(BINDIR)/$(BINARY) .
@@ -30,6 +30,14 @@ vet:
 
 test:
 	go test ./...
+
+# The race detector, split in two: internal/ui builds real GObjects, and -race
+# also enables checkptr, which trips over the unsafe pointer arithmetic in
+# gotk4's weak-reference dependency rather than on anything here. The race
+# detector is kept for it; only that pointer check is switched off.
+test-race:
+	go test -race -count=1 ./internal/stats/ ./internal/process/ ./internal/ai/ ./internal/gpu/ ./internal/power/
+	go test -race -count=1 -gcflags=all=-d=checkptr=0 ./internal/ui/
 
 setup-ai:
 	bash scripts/setup-ai.sh

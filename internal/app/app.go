@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
 	"github.com/diamondburned/gotk4/pkg/gdk/v4"
@@ -55,6 +56,15 @@ func New(css, version string) *App {
 	}
 	a.app.ConnectActivate(a.activate)
 	a.app.ConnectShutdown(func() {
+		// Backstop for quits that never reach the window's close-request —
+		// "Update and restart", or the session ending. The geometry recorded
+		// there is reused; only the open page can still be read here.
+		if a.content != nil {
+			if v := a.content.ActiveView(); v != "" && v != a.settings.LastView {
+				a.settings.LastView = v
+				_ = config.Save(a.settings)
+			}
+		}
 		if a.col != nil {
 			a.col.Stop()
 		}
@@ -80,8 +90,11 @@ func (a *App) activate() {
 
 	win := adw.NewApplicationWindow(&a.app.Application)
 	win.SetTitle("Atlas Monitor")
-	win.SetDefaultSize(1100, 720)
-	win.SetSizeRequest(900, 600)
+	win.SetDefaultSize(a.settings.WindowWidth, a.settings.WindowHeight)
+	win.SetSizeRequest(config.MinWindowWidth, config.MinWindowHeight)
+	if a.settings.WindowMaximized {
+		win.Maximize()
+	}
 
 	header := adw.NewHeaderBar()
 	subtitle := ""
@@ -106,6 +119,13 @@ func (a *App) activate() {
 	win.ConnectMap(func() { a.content.SetVisible(true) })
 	win.ConnectUnmap(func() { a.content.SetVisible(false) })
 
+	// Remember where the window was and what it was showing. close-request is
+	// the last point at which the window can still be measured.
+	win.ConnectCloseRequest(func() bool {
+		a.saveWindowState(win)
+		return false // let the close proceed
+	})
+
 	a.content.StartRefresh()
 	win.Present()
 
@@ -123,6 +143,24 @@ func (a *App) onSettingsChanged() {
 	a.aiClient.SetConfig(a.settings.OllamaURL, a.settings.Model)
 	a.content.SetAIEnabled(a.settings.AIEnabled)
 	a.content.RefreshQuickPrompts()
+	a.content.SetRefreshInterval(
+		time.Duration(config.NormalizeRefresh(a.settings.RefreshSeconds)) * time.Second)
+}
+
+// saveWindowState records the geometry and the open page so the next launch
+// picks up where this one left off. A maximized window keeps the size it had
+// before being maximized, which is what the user gets back on un-maximize.
+func (a *App) saveWindowState(win *adw.ApplicationWindow) {
+	a.settings.WindowMaximized = win.IsMaximized()
+	if !a.settings.WindowMaximized {
+		if w, h := win.DefaultSize(); w >= config.MinWindowWidth && h >= config.MinWindowHeight {
+			a.settings.WindowWidth, a.settings.WindowHeight = w, h
+		}
+	}
+	if v := a.content.ActiveView(); v != "" {
+		a.settings.LastView = v
+	}
+	_ = config.Save(a.settings)
 }
 
 // onRestart relaunches a fresh instance and quits this one. If the source

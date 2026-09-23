@@ -5,9 +5,11 @@ package stats
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"atlas-monitor/internal/gpu"
+	"atlas-monitor/internal/power"
 )
 
 // CoreStat holds one logical CPU core's usage.
@@ -100,9 +102,21 @@ type GPUStats struct {
 	GttUsed                  uint64
 	VramHist                 *RingBuffer // VRAM used %
 	Temp                     float64
-	FanRPM                   int
+	FanRPM                   int     // 0 when the card reports a percentage
+	FanPercent               float64 // 0 when the card reports RPM
 	PowerW                   float64
 	GpuClockMHz, MemClockMHz float64
+}
+
+// PowerStats is the battery and adapter state. Available is false on a desktop,
+// and the UI then never offers the page.
+type PowerStats struct {
+	Available  bool
+	Battery    power.Battery
+	HasAC      bool
+	OnAC       bool
+	ChargeHist *RingBuffer // charge %
+	DrawHist   *RingBuffer // watts in or out
 }
 
 // Stats is the shared snapshot. The embedded RWMutex guards all scalar fields.
@@ -114,6 +128,7 @@ type Stats struct {
 	Disks     []*DiskStats
 	Nets      []*NetStats
 	GPU       GPUStats
+	Power     PowerStats
 	ActiveNet string // kernel name of the default-route interface (computed off the UI thread)
 }
 
@@ -133,11 +148,16 @@ func newGate() *gate {
 
 // Collector owns the Stats struct and the sampling goroutines.
 type Collector struct {
-	stats  *Stats
-	gpu    *gpu.Reader
-	gate   *gate
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	stats *Stats
+	gpu   *gpu.Reader
+	pwr   *power.Reader
+	gate  *gate
+
+	// interval is the sampling period in nanoseconds, read atomically so
+	// Settings can change it while the collectors are running.
+	interval atomic.Int64
+	stopCh   chan struct{}
+	wg       sync.WaitGroup
 
 	started bool
 
@@ -165,16 +185,31 @@ type Collector struct {
 
 // New creates a Collector. gpuReader may report Available()==false.
 func New(gpuReader *gpu.Reader) *Collector {
-	return &Collector{
+	c := &Collector{
 		stats:       &Stats{},
 		gpu:         gpuReader,
+		pwr:         power.New(),
 		gate:        newGate(),
 		stopCh:      make(chan struct{}),
 		cpuPrev:     make(map[string]cpuTimes),
 		diskStats:   make(map[string][2]uint64),
 		netCounters: make(map[string][2]uint64),
 	}
+	c.interval.Store(int64(time.Second))
+	return c
 }
+
+// SetInterval changes how often the collectors sample. It takes effect within
+// one tick of the current period and is safe to call from the UI thread.
+func (c *Collector) SetInterval(d time.Duration) {
+	if d < time.Second {
+		d = time.Second
+	}
+	c.interval.Store(int64(d))
+}
+
+// period is the current sampling interval.
+func (c *Collector) period() time.Duration { return time.Duration(c.interval.Load()) }
 
 // Read runs f while holding the read lock. f must not block.
 func (c *Collector) Read(f func(*Stats)) {
@@ -202,6 +237,7 @@ func (c *Collector) Start() {
 	c.discoverNets()
 	c.initMem()
 	c.initGPU()
+	c.initPower()
 
 	c.launch(c.collectCPU)
 	c.launch(c.collectMem)
@@ -209,6 +245,9 @@ func (c *Collector) Start() {
 	c.launch(c.collectNets)
 	if c.stats.GPU.Available {
 		c.launch(c.collectGPU)
+	}
+	if c.stats.Power.Available {
+		c.launch(c.collectPower)
 	}
 }
 
@@ -223,6 +262,9 @@ func (c *Collector) Stop() {
 	c.gate.cond.Broadcast()
 	c.gate.mu.Unlock()
 	c.wg.Wait()
+	if c.gpu != nil {
+		c.gpu.Close()
+	}
 }
 
 // Pause stops sampling. Goroutines block until Resume.
@@ -246,7 +288,7 @@ func (c *Collector) launch(collect func()) {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
-		t := time.NewTicker(time.Second)
+		t := time.NewTicker(c.period())
 		defer t.Stop()
 		if !c.waitResumed() {
 			return
@@ -261,6 +303,9 @@ func (c *Collector) launch(collect func()) {
 				return
 			case <-t.C:
 				collect()
+				// Pick up an interval change made in Settings. Reset is cheap,
+				// so there is no point watching for the change separately.
+				t.Reset(c.period())
 			}
 		}
 	}()
