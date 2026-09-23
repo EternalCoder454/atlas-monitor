@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -46,8 +47,9 @@ type Collector struct {
 	mu    sync.RWMutex
 	procs []Proc
 
-	prev     map[int]procPrev
-	lastTime time.Time
+	prev      map[int]procPrev
+	prevSpare map[int]procPrev // double-buffered with prev; avoids a per-tick map alloc
+	lastTime  time.Time
 
 	prevNetRx, prevNetTx uint64
 	lastNetTime          time.Time
@@ -60,11 +62,20 @@ type Collector struct {
 	// Per-process GPU load via DRM fdinfo. Known GPU-client pids are scanned
 	// every tick; the full process set is rescanned periodically to find new ones.
 	gpuPrev        map[int]uint64
+	gpuPrevSpare   map[int]uint64
 	gpuPids        map[int]bool
+	gpuPidsSpare   map[int]bool
 	gpuScanCounter int
 
-	// buf is reused for every /proc file read to avoid per-read allocation.
-	buf []byte
+	// Scratch reused by collect: the process list under construction and the
+	// per-pid socket counts. Only the sampling goroutine touches them.
+	scratch []Proc
+	sockets map[int]int
+
+	// buf is reused for every /proc file read to avoid per-read allocation;
+	// link is reused for readlink(2) on /proc/[pid]/fd entries.
+	buf  []byte
+	link []byte
 
 	runMu   sync.Mutex
 	running bool
@@ -75,11 +86,16 @@ type Collector struct {
 // New returns an idle collector.
 func New() *Collector {
 	return &Collector{
-		prev:    make(map[int]procPrev),
-		lastNet: make(map[int][2]float64),
-		gpuPrev: make(map[int]uint64),
-		gpuPids: make(map[int]bool),
-		buf:     make([]byte, 8192),
+		prev:         make(map[int]procPrev),
+		prevSpare:    make(map[int]procPrev),
+		lastNet:      make(map[int][2]float64),
+		gpuPrev:      make(map[int]uint64),
+		gpuPrevSpare: make(map[int]uint64),
+		gpuPids:      make(map[int]bool),
+		gpuPidsSpare: make(map[int]bool),
+		sockets:      make(map[int]int),
+		buf:          make([]byte, 8192),
+		link:         make([]byte, 256),
 	}
 }
 
@@ -122,12 +138,20 @@ func (c *Collector) Stop() {
 }
 
 // Snapshot returns a copy of the latest process list.
-func (c *Collector) Snapshot() []Proc {
+func (c *Collector) Snapshot() []Proc { return c.SnapshotInto(nil) }
+
+// SnapshotInto copies the latest process list into dst, growing it only when
+// the process count rises. The UI holds one buffer and reuses it every second,
+// so a 700-process machine stops churning ~55 KiB of garbage per tick.
+func (c *Collector) SnapshotInto(dst []Proc) []Proc {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	out := make([]Proc, len(c.procs))
-	copy(out, c.procs)
-	return out
+	if cap(dst) < len(c.procs) {
+		dst = make([]Proc, len(c.procs))
+	}
+	dst = dst[:len(c.procs)]
+	copy(dst, c.procs)
+	return dst
 }
 
 func (c *Collector) collect() {
@@ -139,7 +163,14 @@ func (c *Collector) collect() {
 	}
 	c.lastTime = now
 
-	entries, err := os.ReadDir("/proc")
+	// Readdirnames rather than ReadDir: /proc has ~700 entries and we only need
+	// the names, so this skips building a DirEntry per process and sorting them.
+	procDir, err := os.Open("/proc")
+	if err != nil {
+		return
+	}
+	entries, err := procDir.Readdirnames(-1)
+	procDir.Close()
 	if err != nil {
 		return
 	}
@@ -168,19 +199,21 @@ func (c *Collector) collect() {
 	// tick to discover new ones (keeps the per-tick fd walk small).
 	gpuFullScan := c.gpuScanCounter%5 == 0
 	c.gpuScanCounter++
-	newGPUEngine := make(map[int]uint64)
-	newGPUPids := make(map[int]bool)
-
-	procs := make([]Proc, 0, len(entries))
-	newPrev := make(map[int]procPrev, len(entries))
-	sockets := make(map[int]int) // pid -> active socket count
+	// Every per-tick container is a reused one: emptying a map keeps its buckets,
+	// so a steady process count settles into zero allocation per scan.
+	newGPUEngine, newGPUPids := c.gpuPrevSpare, c.gpuPidsSpare
+	newPrev, sockets := c.prevSpare, c.sockets // sockets: pid -> active socket count
+	clear(newGPUEngine)
+	clear(newGPUPids)
+	clear(newPrev)
+	clear(sockets)
+	procs := c.scratch[:0]
 	totalSockets := 0
 
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		pid, err := strconv.Atoi(e.Name())
+	for _, name := range entries {
+		// Only /proc/<pid> parses as a number, so this is also the "is it a
+		// process directory" test.
+		pid, err := strconv.Atoi(name)
 		if err != nil {
 			continue
 		}
@@ -205,7 +238,7 @@ func (c *Collector) collect() {
 		newPrev[pid] = procPrev{cpuJiffies: cpuJiffies, readBytes: rb, writeBytes: wb}
 
 		if doScan {
-			if n := countSockets(pid); n > 0 {
+			if n := c.countSockets(pid); n > 0 {
 				sockets[pid] = n
 				totalSockets += n
 			}
@@ -253,12 +286,12 @@ func (c *Collector) collect() {
 		}
 	}
 
-	c.prev = newPrev
-	c.gpuPrev = newGPUEngine
-	c.gpuPids = newGPUPids
+	c.prev, c.prevSpare = newPrev, c.prev
+	c.gpuPrev, c.gpuPrevSpare = newGPUEngine, c.gpuPrev
+	c.gpuPids, c.gpuPidsSpare = newGPUPids, c.gpuPids
 
 	c.mu.Lock()
-	c.procs = procs
+	c.scratch, c.procs = c.procs, procs // swap: the UI keeps reading the old one
 	c.mu.Unlock()
 }
 
@@ -366,23 +399,47 @@ func bytesToUint(b []byte) uint64 {
 }
 
 // countSockets counts socket file descriptors of a process (own procs only).
-func countSockets(pid int) int {
+func (c *Collector) countSockets(pid int) int {
 	dir := "/proc/" + strconv.Itoa(pid) + "/fd"
-	entries, err := os.ReadDir(dir)
+	fds, err := readdirnames(dir)
 	if err != nil {
 		return 0
 	}
 	count := 0
-	for _, e := range entries {
-		target, err := os.Readlink(dir + "/" + e.Name())
-		if err != nil {
-			continue
-		}
-		if strings.HasPrefix(target, "socket:[") {
+	for _, fd := range fds {
+		target, ok := c.readlink(dir + "/" + fd)
+		if ok && bytes.HasPrefix(target, socketPrefix) {
 			count++
 		}
 	}
 	return count
+}
+
+var (
+	socketPrefix = []byte("socket:[")
+	driPrefix    = []byte("/dev/dri/")
+)
+
+// readlink resolves a symlink into the reusable buffer. The result aliases that
+// buffer and is only valid until the next call. A target longer than the buffer
+// is truncated, which is harmless here — callers only test its prefix.
+func (c *Collector) readlink(path string) ([]byte, bool) {
+	n, err := syscall.Readlink(path, c.link)
+	if err != nil || n <= 0 {
+		return nil, false
+	}
+	return c.link[:n], true
+}
+
+// readdirnames lists a directory's entry names.
+func readdirnames(dir string) ([]string, error) {
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	names, err := f.Readdirnames(-1)
+	f.Close()
+	return names, err
 }
 
 // readGPUEngineNs sums the DRM engine nanoseconds across a process's GPU
@@ -390,18 +447,18 @@ func countSockets(pid int) int {
 // several fds). hasDRM reports whether the process holds any /dev/dri handle.
 func (c *Collector) readGPUEngineNs(pid int) (total uint64, hasDRM bool) {
 	dir := "/proc/" + strconv.Itoa(pid) + "/fd"
-	entries, err := os.ReadDir(dir)
+	fds, err := readdirnames(dir)
 	if err != nil {
 		return 0, false
 	}
 	var seen map[uint64]bool
-	for _, e := range entries {
-		target, err := os.Readlink(dir + "/" + e.Name())
-		if err != nil || !strings.HasPrefix(target, "/dev/dri/") {
+	for _, fd := range fds {
+		target, ok := c.readlink(dir + "/" + fd)
+		if !ok || !bytes.HasPrefix(target, driPrefix) {
 			continue
 		}
 		hasDRM = true
-		clientID, ns, ok := c.readFdinfoGPU(pid, e.Name())
+		clientID, ns, ok := c.readFdinfoGPU(pid, fd)
 		if !ok {
 			continue
 		}

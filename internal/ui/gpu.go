@@ -1,11 +1,10 @@
 package ui
 
 import (
-	"fmt"
+	"strconv"
 
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
-	"atlas-monitor/internal/format"
 	"atlas-monitor/internal/graph"
 	"atlas-monitor/internal/stats"
 )
@@ -13,13 +12,13 @@ import (
 type gpuView struct {
 	root       *gtk.ScrolledWindow
 	col        *stats.Collector
-	number     *gtk.Label
-	caption    *gtk.Label
+	number     *liveLabel
+	caption    *liveLabel
 	usageGraph *graph.Graph
 	vramGraph  *graph.Graph
 
-	vGpuClock, vMemClock, vTemp, vFan, vPower *gtk.Label
-	vVram, vGtt                               *gtk.Label
+	vGpuClock, vMemClock, vTemp, vFan, vPower *liveLabel
+	vVram, vGtt                               *liveLabel
 }
 
 func newGPUView(col *stats.Collector) *gpuView {
@@ -37,7 +36,7 @@ func newGPUView(col *stats.Collector) *gpuView {
 		name = s.GPU.Name
 		usageHist, vramHist = s.GPU.UsageHist, s.GPU.VramHist
 	})
-	v.caption.SetText(name)
+	v.caption.text(name)
 
 	box.Append(sectionTitle("GPU UTILISATION"))
 	v.usageGraph = graph.New("GPU", graph.ColorGPU, usageHist, graph.Percent, 150)
@@ -73,28 +72,28 @@ func (v *gpuView) Update() {
 		fan = s.GPU.FanRPM
 		vramUsed, vramTotal, gtt = s.GPU.VramUsed, s.GPU.VramTotal, s.GPU.GttUsed
 	})
-	v.number.SetText(format.Percent(usage))
-	v.vGpuClock.SetText(format.MHz(gclk))
-	v.vMemClock.SetText(format.MHz(mclk))
-	v.vTemp.SetText(format.Temp(temp))
-	v.vFan.SetText(rpm(fan))
-	v.vPower.SetText(watts(power))
-	v.vVram.SetText(format.GiB(vramUsed) + " / " + format.GiB(vramTotal))
-	v.vGtt.SetText(format.GiB(gtt))
+	v.number.percent(usage)
+	v.vGpuClock.mhz(gclk)
+	v.vMemClock.mhz(mclk)
+	v.vTemp.temp(temp)
+	v.vFan.commit(appendRPM(v.vFan.scratch(), fan))
+	v.vPower.commit(appendWatts(v.vPower.scratch(), power))
+	v.vVram.gibOf(vramUsed, vramTotal)
+	v.vGtt.gib(gtt)
 	v.usageGraph.Refresh()
 	v.vramGraph.Refresh()
 }
 
-func rpm(r int) string {
+func appendRPM(dst []byte, r int) []byte {
 	if r <= 0 {
-		return "0 RPM"
+		return append(dst, "0 RPM"...)
 	}
-	return fmt.Sprintf("%d RPM", r)
+	return append(strconv.AppendInt(dst, int64(r), 10), " RPM"...)
 }
 
-func watts(w float64) string {
+func appendWatts(dst []byte, w float64) []byte {
 	if w <= 0 {
-		return "—"
+		return append(dst, "—"...)
 	}
-	return fmt.Sprintf("%.0f W", w)
+	return append(strconv.AppendFloat(dst, w, 'f', 0, 64), " W"...)
 }

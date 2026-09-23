@@ -11,13 +11,82 @@ import (
 	"atlas-monitor/internal/services"
 )
 
+// svcRow is a stable row object, kept for the lifetime of a unit and mutated in
+// place. Replacing the model wholesale on every refresh — which is what this
+// view used to do — makes GTK tear down and rebuild every realised list item,
+// and that costs several megabytes each time that are never given back. Units
+// almost never come and go between refreshes, so merging the new list into the
+// old one usually changes nothing at all.
+type svcRow struct {
+	svc services.Service
+}
+
+// svcCell is one realised cell. GTK recycles cells as the table scrolls, so
+// bind/unbind track which row each is currently showing.
+type svcCell interface{ refresh() }
+
+type svcTextCell struct {
+	label  *gtk.Label
+	render func(services.Service) string
+	row    *svcRow
+	cur    string
+	set    bool
+}
+
+func (c *svcTextCell) refresh() {
+	if c.row == nil {
+		return
+	}
+	text := c.render(c.row.svc)
+	if c.set && text == c.cur {
+		return
+	}
+	c.cur, c.set = text, true
+	c.label.SetText(text)
+}
+
+// svcDotCell is the coloured status dot.
+type svcDotCell struct {
+	dot *gtk.Box
+	row *svcRow
+	cur services.Status
+	set bool
+}
+
+var statusClass = map[services.Status]string{
+	services.Running: "running",
+	services.Failed:  "failed",
+	services.Stopped: "stopped",
+}
+
+func (c *svcDotCell) refresh() {
+	if c.row == nil {
+		return
+	}
+	s := c.row.svc
+	if c.set && s.Status == c.cur {
+		return
+	}
+	if c.set {
+		c.dot.RemoveCSSClass(statusClass[c.cur])
+	}
+	c.cur, c.set = s.Status, true
+	c.dot.AddCSSClass(statusClass[s.Status])
+	c.dot.SetTooltipText(s.Active + " / " + s.Sub)
+}
+
 type servicesView struct {
 	root      *gtk.Box
 	client    *services.Client
-	model     *gioutil.ListModel[services.Service]
+	model     *gioutil.ListModel[*svcRow]
 	filter    *gtk.CustomFilter
 	selection *gtk.SingleSelection
 	banner    *gtk.Label
+
+	// order mirrors the model, sorted by unit name; cells holds every realised
+	// cell, keyed by its native GtkColumnViewCell pointer.
+	order []*svcRow
+	cells map[uintptr]svcCell
 
 	search       string
 	servicesOnly bool
@@ -25,7 +94,7 @@ type servicesView struct {
 }
 
 func newServicesView() *servicesView {
-	v := &servicesView{servicesOnly: true}
+	v := &servicesView{servicesOnly: true, cells: make(map[uintptr]svcCell)}
 	v.client, _ = services.NewClient()
 
 	v.root = gtk.NewBox(gtk.OrientationVertical, 8)
@@ -43,17 +112,17 @@ func newServicesView() *servicesView {
 	v.root.Append(v.banner)
 
 	// Model chain: base -> filter (search) -> single selection.
-	v.model = gioutil.NewListModel[services.Service]()
+	v.model = gioutil.NewListModel[*svcRow]()
 	v.filter = gtk.NewCustomFilter(v.matches)
 	filterModel := gtk.NewFilterListModel(v.model, &v.filter.Filter)
 	v.selection = gtk.NewSingleSelection(filterModel)
 
 	cv := gtk.NewColumnView(v.selection)
 	cv.SetShowRowSeparators(true)
-	cv.AppendColumn(svcStatusColumn())
-	cv.AppendColumn(svcTextColumn("Service", true, func(s services.Service) string { return s.Name }))
-	cv.AppendColumn(svcTextColumn("Description", true, func(s services.Service) string { return s.Description }))
-	cv.AppendColumn(svcTextColumn("Startup", false, func(s services.Service) string { return s.Enabled }))
+	cv.AppendColumn(v.statusColumn())
+	cv.AppendColumn(v.textColumn("Service", true, func(s services.Service) string { return s.Name }))
+	cv.AppendColumn(v.textColumn("Description", true, func(s services.Service) string { return s.Description }))
+	cv.AppendColumn(v.textColumn("Startup", false, func(s services.Service) string { return s.Enabled }))
 
 	scroller := gtk.NewScrolledWindow()
 	scroller.SetChild(cv)
@@ -131,9 +200,44 @@ func (v *servicesView) refresh() {
 				return
 			}
 			v.setBanner("")
-			v.model.Splice(0, v.model.Len(), svcs...)
+			v.apply(svcs)
 		})
 	}()
+}
+
+// apply merges a freshly listed set of units into the model. Both sides are
+// sorted by name, so this is a linear merge: unchanged units keep their row
+// object (updated in place), and only genuine arrivals and departures splice
+// the model.
+func (v *servicesView) apply(list []services.Service) {
+	i := 0
+	for _, s := range list {
+		for i < len(v.order) && v.order[i].svc.Name < s.Name {
+			v.removeAt(i)
+		}
+		if i < len(v.order) && v.order[i].svc.Name == s.Name {
+			v.order[i].svc = s // same unit, new state
+			i++
+			continue
+		}
+		row := &svcRow{svc: s}
+		v.order = append(v.order, nil)
+		copy(v.order[i+1:], v.order[i:])
+		v.order[i] = row
+		v.model.Splice(i, 0, row)
+		i++
+	}
+	for i < len(v.order) {
+		v.removeAt(i)
+	}
+	for _, c := range v.cells {
+		c.refresh()
+	}
+}
+
+func (v *servicesView) removeAt(i int) {
+	v.model.Remove(i)
+	v.order = append(v.order[:i], v.order[i+1:]...)
 }
 
 func (v *servicesView) doAction(fn func(string) error) {
@@ -146,12 +250,12 @@ func (v *servicesView) doAction(fn func(string) error) {
 		v.setBanner("Select a service first.")
 		return
 	}
-	s := gioutil.ObjectValue[services.Service](item)
+	name := gioutil.ObjectValue[*svcRow](item).svc.Name
 	go func() {
-		err := fn(s.Name)
+		err := fn(name)
 		glib.IdleAdd(func() {
 			if err != nil {
-				v.setBanner(s.Name + ": " + err.Error())
+				v.setBanner(name + ": " + err.Error())
 			} else {
 				v.setBanner("")
 				v.refresh()
@@ -164,9 +268,8 @@ func (v *servicesView) matches(item *coreglib.Object) bool {
 	if v.search == "" {
 		return true
 	}
-	s := gioutil.ObjectValue[services.Service](item)
-	return strings.Contains(strings.ToLower(s.Name), v.search) ||
-		strings.Contains(strings.ToLower(s.Description), v.search)
+	s := gioutil.ObjectValue[*svcRow](item).svc
+	return containsFold(s.Name, v.search) || containsFold(s.Description, v.search)
 }
 
 func (v *servicesView) setBanner(text string) {
@@ -174,59 +277,81 @@ func (v *servicesView) setBanner(text string) {
 	v.banner.SetVisible(text != "")
 }
 
-func svcTextColumn(title string, expand bool, extract func(services.Service) string) *gtk.ColumnViewColumn {
+func (v *servicesView) textColumn(title string, expand bool, render func(services.Service) string) *gtk.ColumnViewColumn {
 	factory := gtk.NewSignalListItemFactory()
 	factory.ConnectSetup(func(obj *coreglib.Object) {
-		li := obj.Cast().(*gtk.ColumnViewCell)
+		cell := obj.Cast().(*gtk.ColumnViewCell)
 		label := gtk.NewLabel("")
 		label.SetXAlign(0)
 		label.SetEllipsize(3) // PANGO_ELLIPSIZE_END
-		li.SetChild(label)
+		cell.SetChild(label)
+		v.cells[cell.Native()] = &svcTextCell{label: label, render: render}
 	})
 	factory.ConnectBind(func(obj *coreglib.Object) {
-		li := obj.Cast().(*gtk.ColumnViewCell)
-		if label, ok := li.Child().(*gtk.Label); ok {
-			label.SetText(extract(gioutil.ObjectValue[services.Service](li.Item())))
+		cell := obj.Cast().(*gtk.ColumnViewCell)
+		c, _ := v.cells[cell.Native()].(*svcTextCell)
+		if c == nil {
+			return
+		}
+		c.row = rowOfService(cell)
+		c.refresh()
+	})
+	factory.ConnectUnbind(func(obj *coreglib.Object) {
+		cell := obj.Cast().(*gtk.ColumnViewCell)
+		if c, ok := v.cells[cell.Native()].(*svcTextCell); ok {
+			c.row = nil
 		}
 	})
+	factory.ConnectTeardown(func(obj *coreglib.Object) {
+		delete(v.cells, obj.Cast().(*gtk.ColumnViewCell).Native())
+	})
+
 	col := gtk.NewColumnViewColumn(title, &factory.ListItemFactory)
 	col.SetExpand(expand)
 	col.SetResizable(true)
 	return col
 }
 
-func svcStatusColumn() *gtk.ColumnViewColumn {
+func (v *servicesView) statusColumn() *gtk.ColumnViewColumn {
 	factory := gtk.NewSignalListItemFactory()
 	factory.ConnectSetup(func(obj *coreglib.Object) {
-		li := obj.Cast().(*gtk.ColumnViewCell)
+		cell := obj.Cast().(*gtk.ColumnViewCell)
 		dot := gtk.NewBox(gtk.OrientationHorizontal, 0)
 		dot.AddCSSClass("am-dot")
 		dot.SetVAlign(gtk.AlignCenter)
 		dot.SetHAlign(gtk.AlignCenter)
 		dot.SetSizeRequest(12, 12)
-		li.SetChild(dot)
+		cell.SetChild(dot)
+		v.cells[cell.Native()] = &svcDotCell{dot: dot}
 	})
 	factory.ConnectBind(func(obj *coreglib.Object) {
-		li := obj.Cast().(*gtk.ColumnViewCell)
-		dot, ok := li.Child().(*gtk.Box)
-		if !ok {
+		cell := obj.Cast().(*gtk.ColumnViewCell)
+		c, _ := v.cells[cell.Native()].(*svcDotCell)
+		if c == nil {
 			return
 		}
-		s := gioutil.ObjectValue[services.Service](li.Item())
-		dot.RemoveCSSClass("running")
-		dot.RemoveCSSClass("stopped")
-		dot.RemoveCSSClass("failed")
-		switch s.Status {
-		case services.Running:
-			dot.AddCSSClass("running")
-		case services.Failed:
-			dot.AddCSSClass("failed")
-		default:
-			dot.AddCSSClass("stopped")
-		}
-		dot.SetTooltipText(s.Active + " / " + s.Sub)
+		c.row = rowOfService(cell)
+		c.refresh()
 	})
+	factory.ConnectUnbind(func(obj *coreglib.Object) {
+		cell := obj.Cast().(*gtk.ColumnViewCell)
+		if c, ok := v.cells[cell.Native()].(*svcDotCell); ok {
+			c.row = nil
+		}
+	})
+	factory.ConnectTeardown(func(obj *coreglib.Object) {
+		delete(v.cells, obj.Cast().(*gtk.ColumnViewCell).Native())
+	})
+
 	col := gtk.NewColumnViewColumn("", &factory.ListItemFactory)
 	col.SetFixedWidth(36)
 	return col
+}
+
+func rowOfService(cell *gtk.ColumnViewCell) *svcRow {
+	item := cell.Item()
+	if item == nil {
+		return nil
+	}
+	return gioutil.ObjectValue[*svcRow](item)
 }

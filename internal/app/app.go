@@ -17,6 +17,7 @@ import (
 
 	"atlas-monitor/internal/ai"
 	"atlas-monitor/internal/config"
+	"atlas-monitor/internal/gfx"
 	"atlas-monitor/internal/gpu"
 	"atlas-monitor/internal/stats"
 	"atlas-monitor/internal/ui"
@@ -39,10 +40,18 @@ type App struct {
 // New creates the application. css is the embedded stylesheet contents and
 // version is the embedded VERSION string.
 func New(css, version string) *App {
+	settings := config.Load()
+	// The GSK renderer and the graphics libraries GDK loads have to be settled
+	// before GTK opens the display, so this happens here rather than in
+	// activate. It is by far the biggest single influence on how much memory
+	// the process ends up using.
+	gfx.Apply(settings.RenderMode)
+
 	a := &App{
-		app:     adw.NewApplication(AppID, gio.ApplicationFlagsNone),
-		css:     css,
-		version: version,
+		app:      adw.NewApplication(AppID, gio.ApplicationFlagsNone),
+		css:      css,
+		version:  version,
+		settings: settings,
 	}
 	a.app.ConnectActivate(a.activate)
 	a.app.ConnectShutdown(func() {
@@ -61,7 +70,6 @@ func (a *App) Run(args []string) int {
 func (a *App) activate() {
 	a.loadCSS()
 
-	a.settings = config.Load()
 	a.aiClient = ai.New(a.settings.OllamaURL, a.settings.Model)
 
 	a.col = stats.New(gpu.NewReader())

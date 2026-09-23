@@ -16,7 +16,12 @@ log=/tmp/atlas-monitor-update.log
 exec >"$log" 2>&1
 echo "Atlas Monitor update — channel '$branch' — $(date)"
 
-reinstall() { make install; }
+# Rebuild with the same flavour the user installed (see `make build-lean`).
+tagfile="${XDG_DATA_HOME:-$HOME/.local/share}/atlas-monitor/buildtags"
+tags=""
+[ -f "$tagfile" ] && tags="$(cat "$tagfile")"
+
+reinstall() { make install TAGS="$tags"; }
 
 # Not a git checkout (tarball/zip): nothing to pull, just rebuild.
 if ! git rev-parse --git-dir >/dev/null 2>&1; then

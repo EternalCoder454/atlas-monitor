@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"atlas-monitor/internal/gfx"
 )
 
 // DefaultSystemPrompt is the instruction text sent to the model before the live
@@ -62,6 +64,7 @@ type Settings struct {
 	AssistantTitle string `json:"assistant_title"` // page header / chat label; sidebar stays "Assistant"
 	SystemPrompt   string `json:"system_prompt"`
 	UpdateChannel  string `json:"update_channel"` // "main" (Release) or "beta" (newest features/fixes)
+	RenderMode     string `json:"render_mode"`    // see gfx: "software" (default), "gpu", "system"
 
 	QuickPrompts []QuickPrompt `json:"quick_prompts"` // exactly 3, shown in the assistant dropdown
 }
@@ -75,6 +78,7 @@ func Defaults() Settings {
 		AssistantTitle: "Assistant",
 		SystemPrompt:   DefaultSystemPrompt,
 		UpdateChannel:  "main",
+		RenderMode:     gfx.ModeSoftware,
 		QuickPrompts:   DefaultQuickPrompts(),
 	}
 }
@@ -116,6 +120,7 @@ func Load() Settings {
 	if s.UpdateChannel != "main" && s.UpdateChannel != "beta" {
 		s.UpdateChannel = "main" // default/repair: Release channel
 	}
+	s.RenderMode = gfx.Normalize(s.RenderMode)
 	// Quick prompts: keep exactly three, filling any missing slot from defaults.
 	if def := DefaultQuickPrompts(); len(s.QuickPrompts) != len(def) {
 		s.QuickPrompts = def

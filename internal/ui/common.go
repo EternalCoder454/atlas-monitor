@@ -31,17 +31,17 @@ func newPage() (*gtk.ScrolledWindow, *gtk.Box) {
 }
 
 // newHeadline builds the large current-value number plus a muted caption below.
-func newHeadline() (number, caption *gtk.Label, box *gtk.Box) {
+func newHeadline() (number, caption *liveLabel, box *gtk.Box) {
 	box = gtk.NewBox(gtk.OrientationVertical, 0)
-	number = gtk.NewLabel("—")
-	number.AddCSSClass("am-headline")
-	number.SetXAlign(0)
-	caption = gtk.NewLabel("")
-	caption.AddCSSClass("am-subtle")
-	caption.SetXAlign(0)
-	box.Append(number)
-	box.Append(caption)
-	return number, caption, box
+	n := gtk.NewLabel("—")
+	n.AddCSSClass("am-headline")
+	n.SetXAlign(0)
+	c := gtk.NewLabel("")
+	c.AddCSSClass("am-subtle")
+	c.SetXAlign(0)
+	box.Append(n)
+	box.Append(c)
+	return newLiveLabel(n), newLiveLabel(c), box
 }
 
 // newTitle is a medium bold heading (used by disk/network/gpu views).
@@ -53,15 +53,15 @@ func newTitle(text string) *gtk.Label {
 }
 
 // newHeader builds a title plus a muted caption beneath it.
-func newHeader() (title, caption *gtk.Label, box *gtk.Box) {
+func newHeader() (title, caption *liveLabel, box *gtk.Box) {
 	box = gtk.NewBox(gtk.OrientationVertical, 2)
-	title = newTitle("—")
-	caption = gtk.NewLabel("")
-	caption.AddCSSClass("am-subtle")
-	caption.SetXAlign(0)
-	box.Append(title)
-	box.Append(caption)
-	return title, caption, box
+	t := newTitle("—")
+	c := gtk.NewLabel("")
+	c.AddCSSClass("am-subtle")
+	c.SetXAlign(0)
+	box.Append(t)
+	box.Append(c)
+	return newLiveLabel(t), newLiveLabel(c), box
 }
 
 // sectionTitle is a small bold heading used between blocks within a view.
@@ -90,7 +90,7 @@ func newStatGrid() *statGrid {
 }
 
 // add appends a label/value pair and returns the value label for later updates.
-func (g *statGrid) add(label string) *gtk.Label {
+func (g *statGrid) add(label string) *liveLabel {
 	col := (g.n % 2) * 2 // 0 (left pair) or 2 (right pair)
 	row := g.n / 2
 	g.n++
@@ -105,5 +105,13 @@ func (g *statGrid) add(label string) *gtk.Label {
 	v.SetSelectable(true)
 	g.Grid.Attach(l, col, row, 1, 1)
 	g.Grid.Attach(v, col+1, row, 1, 1)
-	return v
+	return newLiveLabel(v)
+}
+
+// orDash returns s, or an em dash when s is empty.
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
 }
