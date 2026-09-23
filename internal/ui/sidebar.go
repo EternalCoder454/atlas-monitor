@@ -28,7 +28,7 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, ba
 
 	diskExp := adw.NewExpanderRow()
 	diskExp.SetTitle("Disk")
-	diskExp.SetIconName("drive-harddisk-solidstate-symbolic")
+	diskExp.SetIconName("atlas-disk-symbolic")
 	for _, d := range disks {
 		appendSubRow(diskExp, d.Label(), d.Name, "disk:"+d.Name, onSelect)
 	}
@@ -44,7 +44,7 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, ba
 	hw.Append(netExp)
 
 	if gpuAvail {
-		appendRow(hw, "GPU", "video-display-symbolic", "gpu", onSelect)
+		appendRow(hw, "GPU", "atlas-gpu-symbolic", "gpu", onSelect)
 	}
 	if batteryAvail {
 		appendRow(hw, "Battery", "battery-symbolic", "power", onSelect)

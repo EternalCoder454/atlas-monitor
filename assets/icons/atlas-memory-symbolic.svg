@@ -1,11 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg height="16px" viewBox="0 0 16 16" width="16px" xmlns="http://www.w3.org/2000/svg" fill="#2e3436">
-  <path fill-rule="evenodd" d="M1 3h14v8H1z m1.5 1.5v5h11v-5z"/>
-  <rect x="3.5" y="5.5" width="2" height="3"/>
-  <rect x="7" y="5.5" width="2" height="3"/>
-  <rect x="10.5" y="5.5" width="2" height="3"/>
-  <rect x="3" y="11.2" width="1.5" height="2"/>
-  <rect x="6" y="11.2" width="1.5" height="2"/>
-  <rect x="9" y="11.2" width="1.5" height="2"/>
-  <rect x="11.5" y="11.2" width="1.5" height="2"/>
+<!-- Symbolic icon for Atlas Monitor. Every shape is filled and a single
+     colour: GTK recolours a symbolic icon by forcing the fill on rect,
+     circle and path, so stroked artwork would not follow the theme. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="#000000">
+<!-- DIMM body -->
+<path fill-rule="evenodd" d="M0.545,4.365h22.91v15.27h-22.91z M2.455,6.275h19.09v11.45h-19.09z"/>
+<!-- memory chips -->
+<path fill-rule="evenodd" d="M5.315,8.185h7.64v5.73h-7.64z M7.225,10.095h3.82v1.91h-3.82z"/>
+<path fill-rule="evenodd" d="M11.045,8.185h7.64v5.73h-7.64z M12.955,10.095h3.82v1.91h-3.82z"/>
+<!-- contact pins -->
+<rect x="3.405" y="15.82" width="1.91" height="2.86"/>
+<rect x="7.225" y="15.82" width="1.91" height="2.86"/>
+<rect x="11.045" y="15.82" width="1.91" height="2.86"/>
+<rect x="14.865" y="15.82" width="1.91" height="2.86"/>
+<rect x="18.685" y="15.82" width="1.91" height="2.86"/>
 </svg>

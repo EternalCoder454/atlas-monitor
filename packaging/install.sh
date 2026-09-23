@@ -35,7 +35,7 @@ refresh_caches() {
 
 if [ "$action" = uninstall ]; then
     rm -f "$PREFIX/bin/$BINARY" "$APPDIR/$APPID.desktop" "$ICONDIR/$APPID.svg"
-    rm -f "$ICONACT"/atlas-{cpu,memory,assistant}-symbolic.svg
+    rm -f "$ICONACT"/atlas-{cpu,memory,disk,gpu,assistant}-symbolic.svg
     rm -rf "$DATADIR"
     refresh_caches
     echo "Removed Atlas Monitor from $PREFIX."
@@ -64,7 +64,7 @@ fi
 install -Dm755 "$here/$BINARY"            "$PREFIX/bin/$BINARY"
 install -Dm644 "$here/assets/style.css"   "$DATADIR/style.css"
 install -Dm644 "$here/assets/icon.svg"    "$ICONDIR/$APPID.svg"
-for icon in cpu memory assistant; do
+for icon in cpu memory disk gpu assistant; do
     install -Dm644 "$here/assets/icons/atlas-$icon-symbolic.svg" "$ICONACT/atlas-$icon-symbolic.svg"
 done
 install -d "$APPDIR"
