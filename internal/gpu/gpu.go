@@ -18,8 +18,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
+
+	"atlas-monitor/internal/sysfs"
 )
 
 // PCI vendor IDs of the cards we recognise by name.
@@ -143,49 +144,62 @@ func hwmonDir(devPath, want string) string {
 	return ""
 }
 
-// readHwmon fills the temperature, fan, power and clock fields that hwmon nodes
-// expose in the same shape across drivers.
-func readHwmon(dir string, s *Sample) {
+// hwmon holds a card's hwmon attributes open. They are sampled every second for
+// as long as the GPU page is visible, and reopening each of them was four
+// syscalls where re-reading the descriptor is one.
+type hwmon struct {
+	temp, fan, power, sclk, mclk *sysfs.File
+}
+
+// openHwmon holds open whichever of the standard attributes the driver exposes.
+func openHwmon(dir string) hwmon {
 	if dir == "" {
-		return
+		return hwmon{}
 	}
-	if v, ok := readU(filepath.Join(dir, "temp1_input")); ok {
+	return hwmon{
+		temp: sysfs.Open(filepath.Join(dir, "temp1_input")),
+		fan:  sysfs.Open(filepath.Join(dir, "fan1_input")),
+		// Some drivers report average power, others instantaneous.
+		power: sysfs.OpenFirst(
+			filepath.Join(dir, "power1_average"),
+			filepath.Join(dir, "power1_input")),
+		sclk: sysfs.Open(filepath.Join(dir, "freq1_input")),
+		mclk: sysfs.Open(filepath.Join(dir, "freq2_input")),
+	}
+}
+
+// read fills the temperature, fan, power and clock fields.
+func (h hwmon) read(s *Sample) {
+	if v, ok := h.temp.Uint(); ok {
 		s.TempC = float64(v) / 1000.0 // millidegrees
 	}
-	if v, ok := readU(filepath.Join(dir, "fan1_input")); ok {
+	if v, ok := h.fan.Uint(); ok {
 		s.FanRPM = int(v)
 	}
-	if v, ok := readU(filepath.Join(dir, "power1_average")); ok {
+	if v, ok := h.power.Uint(); ok {
 		s.PowerW = float64(v) / 1e6 // microwatts
-	} else if v, ok := readU(filepath.Join(dir, "power1_input")); ok {
-		s.PowerW = float64(v) / 1e6
 	}
-	if v, ok := readU(filepath.Join(dir, "freq1_input")); ok {
+	if v, ok := h.sclk.Uint(); ok {
 		s.SclkMHz = float64(v) / 1e6 // Hz
 	}
-	if v, ok := readU(filepath.Join(dir, "freq2_input")); ok {
+	if v, ok := h.mclk.Uint(); ok {
 		s.MclkMHz = float64(v) / 1e6
 	}
 }
 
-// readU reads a file holding a single unsigned integer.
-func readU(path string) (uint64, bool) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return 0, false
-	}
-	v, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
-	return v, err == nil
+func (h hwmon) close() {
+	h.temp.Close()
+	h.fan.Close()
+	h.power.Close()
+	h.sclk.Close()
+	h.mclk.Close()
 }
 
-// readStr reads a file and trims it, returning "" on any error.
-func readStr(path string) string {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(b))
-}
+// readU reads a one-shot unsigned integer, for detection and static values.
+func readU(path string) (uint64, bool) { return sysfs.ReadUint(path) }
+
+// readStr reads a one-shot string value, trimmed.
+func readStr(path string) string { return sysfs.ReadString(path) }
 
 // gpuName produces the friendliest label a card can give us: the marketing name
 // from the kernel when the driver exposes one, then the PCI database, then the

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"atlas-monitor/internal/sysfs"
 )
 
 // diskRank orders disks: root (primary) first, swap last, others in between.
@@ -28,6 +30,7 @@ const sectorSize = 512
 // discoverDisks enumerates whole block devices from /sys/block (skipping
 // loop/ram pseudo-devices) and maps each to its mounted partitions.
 func (c *Collector) discoverDisks() {
+	c.diskStat = sysfs.OpenSize("/proc/diskstats", 8192)
 	entries, _ := os.ReadDir("/sys/block")
 	mounts := readMounts()
 
@@ -42,12 +45,12 @@ func (c *Collector) discoverDisks() {
 			ReadHist:  NewRingBuffer(),
 			WriteHist: NewRingBuffer(),
 		}
-		if v, err := readUint(filepath.Join("/sys/block", name, "size")); err == nil {
+		if v, ok := sysfs.ReadUint(filepath.Join("/sys/block", name, "size")); ok {
 			d.SizeBytes = v * sectorSize
 		}
 		if strings.HasPrefix(name, "zram") {
 			d.IsSwap = true
-		} else if model, err := readString(filepath.Join("/sys/block", name, "device", "model")); err == nil {
+		} else if model := sysfs.ReadString(filepath.Join("/sys/block", name, "device", "model")); model != "" {
 			d.Model = strings.Join(strings.Fields(model), " ") // collapse padding whitespace
 		}
 		d.mounts = mountsForDisk(name, mounts)
@@ -68,10 +71,24 @@ func (c *Collector) discoverDisks() {
 		return disks[i].SizeBytes > disks[j].SizeBytes
 	})
 
+	// The collector goroutine keeps its own handle on the list so it can read
+	// each disk's mountpoints — fixed at discovery — without the lock.
+	c.disks = disks
+	c.diskSpace = make([][2]uint64, len(disks))
 	c.write(func(s *Stats) { s.Disks = disks })
 }
 
+// spaceEvery is how often free space is re-measured, in ticks. Throughput has
+// to be sampled every tick to be a rate at all, but capacity moves slowly and
+// each check is a statfs per mounted filesystem.
+const spaceEvery = 5
+
 // collectDisks updates throughput (from /proc/diskstats) and space (statfs).
+//
+// statfs deliberately runs before the lock is taken. It can block for as long
+// as the filesystem takes to answer — indefinitely, on a network mount whose
+// server has gone away — and holding the stats lock across that would freeze
+// every reader, which means the whole UI.
 func (c *Collector) collectDisks() {
 	now := time.Now()
 	dt := now.Sub(c.diskLast).Seconds()
@@ -82,8 +99,16 @@ func (c *Collector) collectDisks() {
 
 	stats := c.readDiskstats()
 
+	c.diskTick++
+	measureSpace := c.diskTick%spaceEvery == 1
+	if measureSpace {
+		for i, d := range c.disks {
+			c.diskSpace[i][0], c.diskSpace[i][1] = diskSpace(d.mounts)
+		}
+	}
+
 	c.write(func(s *Stats) {
-		for _, d := range s.Disks {
+		for i, d := range s.Disks {
 			ds, ok := stats[d.Name]
 			if ok {
 				rd := ds[0] * sectorSize
@@ -102,7 +127,9 @@ func (c *Collector) collectDisks() {
 			if d.WriteHist != nil {
 				d.WriteHist.Push(d.WriteRate)
 			}
-			d.Used, d.Free = diskSpace(d.mounts)
+			if measureSpace && i < len(c.diskSpace) {
+				d.Used, d.Free = c.diskSpace[i][0], c.diskSpace[i][1]
+			}
 		}
 	})
 }
@@ -120,9 +147,8 @@ func rateOf(cur, prev uint64, dt float64) float64 {
 func (c *Collector) readDiskstats() map[string][2]uint64 {
 	out := c.diskStats
 	clear(out)
-	data, keep, err := readInto("/proc/diskstats", c.diskBuf)
-	c.diskBuf = keep
-	if err != nil {
+	data, ok := c.diskStat.Bytes()
+	if !ok {
 		return out
 	}
 	for len(data) > 0 {

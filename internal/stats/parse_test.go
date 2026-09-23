@@ -1,10 +1,6 @@
 package stats
 
-import (
-	"os"
-	"path/filepath"
-	"testing"
-)
+import "testing"
 
 // meminfoSample is a trimmed but realistically shaped /proc/meminfo.
 var meminfoSample = []byte(
@@ -64,43 +60,6 @@ func TestNextLine(t *testing.T) {
 	}
 	if len(got) != 3 || got[0] != "one" || got[2] != "three" {
 		t.Errorf("nextLine walk = %q, want [one two three]", got)
-	}
-}
-
-// TestReadInto checks the reusable read buffer against files larger and smaller
-// than its current capacity, since /proc files are read into it every second.
-func TestReadInto(t *testing.T) {
-	dir := t.TempDir()
-	big := make([]byte, 40_000)
-	for i := range big {
-		big[i] = byte('a' + i%26)
-	}
-	small := []byte("hello\n")
-
-	write := func(name string, content []byte) string {
-		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, content, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return path
-	}
-	bigPath, smallPath := write("big", big), write("small", small)
-
-	var buf []byte
-	for i := 0; i < 3; i++ {
-		data, keep, err := readInto(smallPath, buf)
-		buf = keep
-		if err != nil || string(data) != string(small) {
-			t.Fatalf("small read %d: %q, %v", i, data, err)
-		}
-		data, keep, err = readInto(bigPath, buf)
-		buf = keep
-		if err != nil || len(data) != len(big) || string(data) != string(big) {
-			t.Fatalf("big read %d: len=%d err=%v", i, len(data), err)
-		}
-	}
-	if _, _, err := readInto(filepath.Join(dir, "missing"), buf); err == nil {
-		t.Error("readInto on a missing file should return an error")
 	}
 }
 

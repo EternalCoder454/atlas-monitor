@@ -7,11 +7,12 @@ import (
 	"bytes"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"atlas-monitor/internal/sysfs"
 )
 
 // clockTick is USER_HZ (jiffies per second); 100 on essentially all Linux/x86.
@@ -74,13 +75,26 @@ type Collector struct {
 	scratch []Proc
 	sockets map[int]int
 
-	// buf is reused for every /proc file read to avoid per-read allocation;
-	// link is reused for readlink(2) on /proc/[pid]/fd entries.
-	buf  []byte
-	link []byte
+	// procFD is a descriptor held on /proc so per-process files can be opened
+	// with openat and a relative path. buf is reused for every read, path for
+	// building those relative paths, and link for readlink(2) on fd entries.
+	procFD int
+	netDev *sysfs.File // /proc/net/dev, held open for the per-tick total
+	buf    []byte
+	path   []byte
+	link   []byte
 
 	// interval is the sampling period in nanoseconds, read atomically.
 	interval atomic.Int64
+
+	// includeKernel mirrors the Apps table's "Kernel threads" toggle. When it
+	// is off — the default — kernel threads are dropped as soon as the stat
+	// line identifies them, which is most of the scan.
+	includeKernel atomic.Bool
+
+	// stat is the scratch readStat parses into, reused across processes so a
+	// scan allocates only when a process name changes.
+	stat statLine
 
 	runMu   sync.Mutex
 	running bool
@@ -100,11 +114,17 @@ func New() *Collector {
 		gpuPidsSpare: make(map[int]bool),
 		sockets:      make(map[int]int),
 		buf:          make([]byte, 8192),
+		path:         make([]byte, 0, 32),
 		link:         make([]byte, 256),
+		procFD:       -1,
 	}
 	c.interval.Store(int64(time.Second))
 	return c
 }
+
+// SetIncludeKernel controls whether kernel threads are collected at all. It is
+// safe to call from the UI thread; the next tick picks it up.
+func (c *Collector) SetIncludeKernel(include bool) { c.includeKernel.Store(include) }
 
 // SetInterval changes how often the process list is sampled. It takes effect
 // within one tick of the current period.
@@ -154,6 +174,12 @@ func (c *Collector) Stop() {
 	c.running = false
 	close(c.stopCh)
 	c.wg.Wait()
+	if c.procFD >= 0 {
+		syscall.Close(c.procFD)
+		c.procFD = -1
+	}
+	c.netDev.Close()
+	c.netDev = nil
 }
 
 // Snapshot returns a copy of the latest process list.
@@ -194,7 +220,7 @@ func (c *Collector) collect() {
 		return
 	}
 
-	netRx, netTx := totalNet()
+	netRx, netTx := c.totalNet()
 	netDt := now.Sub(c.lastNetTime).Seconds()
 	if c.lastNetTime.IsZero() || netDt <= 0 {
 		netDt = 1
@@ -214,9 +240,13 @@ func (c *Collector) collect() {
 	hasTraffic := totalRxRate+totalTxRate > netScanThreshold
 	doScan := hasTraffic && c.scanCounter%3 == 0
 
-	// GPU scan: every tick for known GPU clients, with a full rescan every 5th
-	// tick to discover new ones (keeps the per-tick fd walk small).
-	gpuFullScan := c.gpuScanCounter%5 == 0
+	// GPU scan. Walking a process's open descriptors is the most expensive
+	// thing here after the stat reads, so it is done for as few processes as
+	// possible: the ones already known to hold a GPU handle, and any process
+	// that was not here last tick — a game shows its per-process GPU load on
+	// the very first tick after it launches. The full sweep is only a safety
+	// net for anything those two miss, so it can be rare.
+	gpuFullScan := c.gpuScanCounter%gpuRescanTicks == 0
 	c.gpuScanCounter++
 	// Every per-tick container is a reused one: emptying a map keeps its buckets,
 	// so a steady process count settles into zero allocation per scan.
@@ -230,41 +260,54 @@ func (c *Collector) collect() {
 	totalSockets := 0
 
 	for _, name := range entries {
-		// Only /proc/<pid> parses as a number, so this is also the "is it a
-		// process directory" test.
+		// Only /proc/<pid> is a process. Checking the first byte first keeps
+		// Atoi — and the error it would allocate — away from the two dozen
+		// named entries in /proc.
+		if len(name) == 0 || name[0] < '0' || name[0] > '9' {
+			continue
+		}
 		pid, err := strconv.Atoi(name)
 		if err != nil {
 			continue
 		}
 
-		name, cpuJiffies, kernel, ok := c.readStat(pid)
-		if !ok {
+		if !c.readStat(pid, &c.stat) {
 			continue
 		}
-		p := Proc{PID: pid, Name: name, Kernel: kernel, GPU: -1}
+		// Kernel threads are three quarters of /proc and are hidden by default.
+		// Skipping them here is what makes that a performance win and not just
+		// a shorter table: no /proc/[pid]/io open, no row, no work downstream.
+		if c.stat.kernel && !c.includeKernel.Load() {
+			continue
+		}
+		// string(...) copies the name out of the read buffer, which the next
+		// read is about to overwrite.
+		p := Proc{PID: pid, Name: string(c.stat.name), Kernel: c.stat.kernel, GPU: -1}
 		p.RSS = c.readRSS(pid)
 
 		rb, wb := c.readIO(pid)
 		prev, hadPrev := c.prev[pid]
 		if hadPrev && !first {
-			p.CPU = float64(cpuJiffies-prev.cpuJiffies) / clockTick / dt * 100
+			p.CPU = float64(c.stat.jiffies-prev.cpuJiffies) / clockTick / dt * 100
 			if p.CPU < 0 {
 				p.CPU = 0
 			}
 			p.DiskRead = deltaRate(rb, prev.readBytes, dt)
 			p.DiskWrite = deltaRate(wb, prev.writeBytes, dt)
 		}
-		newPrev[pid] = procPrev{cpuJiffies: cpuJiffies, readBytes: rb, writeBytes: wb}
+		newPrev[pid] = procPrev{cpuJiffies: c.stat.jiffies, readBytes: rb, writeBytes: wb}
 
-		if doScan {
-			if n := c.countSockets(pid); n > 0 {
+		// Both the socket count and the GPU counters come from the same place —
+		// the process's open descriptors — so they share one walk. Done
+		// separately, a tick where both were due read every link twice.
+		wantGPU := gpuFullScan || !hadPrev || c.gpuPids[pid]
+		if doScan || wantGPU {
+			n, ns, hasDRM := c.scanFDs(pid, doScan, wantGPU)
+			if doScan && n > 0 {
 				sockets[pid] = n
 				totalSockets += n
 			}
-		}
-
-		if gpuFullScan || c.gpuPids[pid] {
-			if ns, hasDRM := c.readGPUEngineNs(pid); hasDRM {
+			if hasDRM {
 				newGPUPids[pid] = true
 				newGPUEngine[pid] = ns
 				p.GPU = 0 // holds a GPU handle: report 0 until a delta is measurable
@@ -314,22 +357,62 @@ func (c *Collector) collect() {
 	c.mu.Unlock()
 }
 
-// slurp reads a small /proc file into the reusable buffer. The returned slice
-// aliases the buffer and is only valid until the next slurp call.
-func (c *Collector) slurp(path string) []byte {
-	f, err := os.Open(path)
+// openProc holds /proc open so every per-process file can be reached with
+// openat and a relative path, instead of the kernel resolving the mount point
+// afresh eight hundred times a second. It is opened on first use so a Collector
+// works whether or not Start has been called.
+func (c *Collector) openProc() bool {
+	if c.procFD >= 0 {
+		return true
+	}
+	fd, err := syscall.Open("/proc", syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return false
+	}
+	c.procFD = fd
+	return true
+}
+
+// slurpPID reads /proc/<pid>/<name> into the reusable buffer. The returned
+// slice aliases that buffer and is only valid until the next call.
+//
+// Three things make this cheaper than the obvious os.ReadFile, and the scan
+// does it eight hundred times a second:
+//
+//   - openat against a descriptor already held on /proc, so the kernel does not
+//     resolve the mount point again for every file;
+//   - the raw syscalls rather than os.Open, which allocates an *os.File and
+//     attaches a finaliser to it — those were a quarter of everything the app
+//     allocated;
+//   - one read. procfs builds each of these files in one go and returns all of
+//     it, so a read that does not fill the buffer is the end of the file;
+//     looping until a second read reported EOF doubled the read syscalls.
+func (c *Collector) slurpPID(pid int, name string) []byte {
+	if !c.openProc() {
+		return nil
+	}
+	c.path = strconv.AppendInt(c.path[:0], int64(pid), 10)
+	c.path = append(c.path, name...)
+
+	fd, err := syscall.Openat(c.procFD, string(c.path), syscall.O_RDONLY|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return nil
 	}
 	n := 0
 	for n < len(c.buf) {
-		m, err := f.Read(c.buf[n:])
-		n += m
-		if err != nil {
-			break
+		room := len(c.buf) - n
+		m, err := syscall.Read(fd, c.buf[n:])
+		if m > 0 {
+			n += m
+		}
+		if err != nil || m < room {
+			break // error, or a short read: procfs has given us everything
 		}
 	}
-	f.Close()
+	syscall.Close(fd)
+	if n == 0 {
+		return nil
+	}
 	return c.buf[:n]
 }
 
@@ -338,34 +421,54 @@ func (c *Collector) slurp(path string) []byte {
 // these (kworker, ksoftirqd, irq handlers), and they are hidden by default.
 const pfKthread = 0x00200000
 
-// readStat parses /proc/[pid]/stat for the process name, its utime+stime
-// jiffies, and whether it is a kernel thread. The flags word is in the same
-// line we already read, so the kernel-thread test costs nothing extra — reading
-// /proc/[pid]/cmdline to tell them apart would be another open per process per
-// tick.
-func (c *Collector) readStat(pid int) (name string, cpuJiffies uint64, kernel, ok bool) {
-	b := c.slurp("/proc/" + strconv.Itoa(pid) + "/stat")
+// statLine is what one /proc/[pid]/stat line tells us.
+//
+// name aliases the read buffer rather than being a string: three quarters of
+// the processes in /proc are kernel threads that are then discarded, and
+// building a string for each of those was the largest remaining allocation in
+// the scan. The caller copies it only for a process it is going to report, and
+// must do so before the next read reuses the buffer.
+type statLine struct {
+	name    []byte
+	jiffies uint64 // utime + stime
+	kernel  bool
+}
+
+// readStat parses /proc/[pid]/stat for the name, the CPU time and whether this
+// is a kernel thread. The flags word is in the line we already read, so the
+// kernel-thread test costs nothing — reading /proc/[pid]/cmdline to tell them
+// apart would be another open per process per tick.
+//
+// Resident memory deliberately comes from /proc/[pid]/statm instead of field 24
+// here, even though that is a second file: the two do not agree, and statm is
+// the one ps, top and htop report. See TestStatRSSDiffersFromStatm.
+//
+// Offsets are into rest, which starts at field 3, so index n is field n+3:
+// flags 9, utime 14, stime 15.
+func (c *Collector) readStat(pid int, out *statLine) bool {
+	b := c.slurpPID(pid, "/stat")
 	if b == nil {
-		return "", 0, false, false
+		return false
 	}
 	// comm is parenthesised and may contain spaces; split after the last ')'.
 	lp := bytes.IndexByte(b, '(')
 	rp := bytes.LastIndexByte(b, ')')
-	if lp < 0 || rp < 0 || rp < lp {
-		return "", 0, false, false
+	if lp < 0 || rp < 0 || rp < lp || rp+2 > len(b) {
+		return false
 	}
-	name = string(b[lp+1 : rp]) // small copy out of the shared buffer
 	rest := b[rp+2:]
-	// rest field 0 is field 3 (state); flags=field 9, utime=field 14, stime=15.
-	flags := fieldUint(rest, 6)
-	utime := fieldUint(rest, 11)
-	stime := fieldUint(rest, 12)
-	return name, utime + stime, flags&pfKthread != 0, true
+
+	out.name = b[lp+1 : rp]
+	out.jiffies = fieldUint(rest, 11) + fieldUint(rest, 12)
+	out.kernel = fieldUint(rest, 6)&pfKthread != 0
+	return true
 }
 
-// readRSS returns resident set size in bytes from /proc/[pid]/statm.
+// readRSS returns resident set size in bytes from /proc/[pid]/statm. This is
+// the figure ps and top report; /proc/[pid]/stat's own rss field counts
+// differently and would make Atlas disagree with every other tool.
 func (c *Collector) readRSS(pid int) uint64 {
-	b := c.slurp("/proc/" + strconv.Itoa(pid) + "/statm")
+	b := c.slurpPID(pid, "/statm")
 	if b == nil {
 		return 0
 	}
@@ -374,7 +477,7 @@ func (c *Collector) readRSS(pid int) uint64 {
 
 // readIO returns cumulative read_bytes/write_bytes (0 if not permitted).
 func (c *Collector) readIO(pid int) (read, write uint64) {
-	b := c.slurp("/proc/" + strconv.Itoa(pid) + "/io")
+	b := c.slurpPID(pid, "/io")
 	if b == nil {
 		return 0, 0
 	}
@@ -427,27 +530,58 @@ func bytesToUint(b []byte) uint64 {
 	return v
 }
 
-// countSockets counts socket file descriptors of a process (own procs only).
-func (c *Collector) countSockets(pid int) int {
-	dir := "/proc/" + strconv.Itoa(pid) + "/fd"
-	fds, err := readdirnames(dir)
-	if err != nil {
-		return 0
-	}
-	count := 0
-	for _, fd := range fds {
-		target, ok := c.readlink(dir + "/" + fd)
-		if ok && bytes.HasPrefix(target, socketPrefix) {
-			count++
-		}
-	}
-	return count
-}
-
 var (
 	socketPrefix = []byte("socket:[")
 	driPrefix    = []byte("/dev/dri/")
 )
+
+// gpuRescanTicks is how often every process is swept for new GPU handles. New
+// processes and known GPU clients are checked every tick regardless, so this
+// only has to catch a process that acquired its first GPU handle long after it
+// started — rare enough that a sweep every half minute is generous.
+const gpuRescanTicks = 30
+
+// scanFDs walks a process's open descriptors once, counting sockets and summing
+// DRM engine time as asked. Both callers want the same readlink of the same
+// entries, so they share the walk.
+//
+// GPU clients are deduplicated by drm-client-id: one client can be reachable
+// through several descriptors and would otherwise be counted repeatedly.
+func (c *Collector) scanFDs(pid int, wantSockets, wantGPU bool) (sockets int, gpuNs uint64, hasDRM bool) {
+	dir := "/proc/" + strconv.Itoa(pid) + "/fd"
+	fds, err := readdirnames(dir)
+	if err != nil {
+		return 0, 0, false
+	}
+	var seen map[uint64]bool
+	for _, fd := range fds {
+		target, ok := c.readlink(dir + "/" + fd)
+		if !ok {
+			continue
+		}
+		if wantSockets && bytes.HasPrefix(target, socketPrefix) {
+			sockets++
+			continue
+		}
+		if !wantGPU || !bytes.HasPrefix(target, driPrefix) {
+			continue
+		}
+		hasDRM = true
+		clientID, ns, ok := c.readFdinfoGPU(pid, fd)
+		if !ok {
+			continue
+		}
+		if seen == nil {
+			seen = make(map[uint64]bool)
+		}
+		if seen[clientID] {
+			continue // same GPU client already counted via another descriptor
+		}
+		seen[clientID] = true
+		gpuNs += ns
+	}
+	return sockets, gpuNs, hasDRM
+}
 
 // readlink resolves a symlink into the reusable buffer. The result aliases that
 // buffer and is only valid until the next call. A target longer than the buffer
@@ -471,42 +605,10 @@ func readdirnames(dir string) ([]string, error) {
 	return names, err
 }
 
-// readGPUEngineNs sums the DRM engine nanoseconds across a process's GPU
-// clients (deduplicated by drm-client-id, since one client can be shared by
-// several fds). hasDRM reports whether the process holds any /dev/dri handle.
-func (c *Collector) readGPUEngineNs(pid int) (total uint64, hasDRM bool) {
-	dir := "/proc/" + strconv.Itoa(pid) + "/fd"
-	fds, err := readdirnames(dir)
-	if err != nil {
-		return 0, false
-	}
-	var seen map[uint64]bool
-	for _, fd := range fds {
-		target, ok := c.readlink(dir + "/" + fd)
-		if !ok || !bytes.HasPrefix(target, driPrefix) {
-			continue
-		}
-		hasDRM = true
-		clientID, ns, ok := c.readFdinfoGPU(pid, fd)
-		if !ok {
-			continue
-		}
-		if seen == nil {
-			seen = make(map[uint64]bool)
-		}
-		if seen[clientID] {
-			continue // same GPU client already counted via another fd
-		}
-		seen[clientID] = true
-		total += ns
-	}
-	return total, hasDRM
-}
-
 // readFdinfoGPU parses one /proc/[pid]/fdinfo/[fd], returning the GPU client id
 // and the summed drm-engine-* nanoseconds (gfx + compute + decode + encode).
 func (c *Collector) readFdinfoGPU(pid int, fd string) (clientID, engineNs uint64, ok bool) {
-	b := c.slurp("/proc/" + strconv.Itoa(pid) + "/fdinfo/" + fd)
+	b := c.slurpPID(pid, "/fdinfo/"+fd)
 	if b == nil {
 		return 0, 0, false
 	}
@@ -540,31 +642,62 @@ func clampPct(p float64) float64 {
 	return p
 }
 
-// totalNet sums rx/tx bytes across all interfaces except loopback.
-func totalNet() (rx, tx uint64) {
-	b, err := os.ReadFile("/proc/net/dev")
-	if err != nil {
+// totalNet sums rx/tx bytes across all interfaces except loopback. The file is
+// held open and parsed as bytes: it is read every tick, and the obvious
+// ReadFile-and-Split allocated the whole file plus a string per line each time.
+func (c *Collector) totalNet() (rx, tx uint64) {
+	if c.netDev == nil {
+		c.netDev = sysfs.OpenSize("/proc/net/dev", 4096)
+	}
+	data, ok := c.netDev.Bytes()
+	if !ok {
 		return 0, 0
 	}
-	for _, line := range strings.Split(string(b), "\n") {
-		i := strings.IndexByte(line, ':')
+	for len(data) > 0 {
+		var line []byte
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			line, data = data[:i], data[i+1:]
+		} else {
+			line, data = data, nil
+		}
+		i := bytes.IndexByte(line, ':')
 		if i < 0 {
+			continue // the two header rows
+		}
+		if string(bytes.TrimSpace(line[:i])) == "lo" {
 			continue
 		}
-		name := strings.TrimSpace(line[:i])
-		if name == "lo" {
-			continue
+		// rx bytes is field 0 after the colon, tx bytes is field 8.
+		r, rok := sysfs.ParseUint(netField(line[i+1:], 0))
+		t, tok := sysfs.ParseUint(netField(line[i+1:], 8))
+		if rok && tok {
+			rx += r
+			tx += t
 		}
-		fields := strings.Fields(line[i+1:])
-		if len(fields) < 9 {
-			continue
-		}
-		r, _ := strconv.ParseUint(fields[0], 10, 64)
-		t, _ := strconv.ParseUint(fields[8], 10, 64)
-		rx += r
-		tx += t
 	}
 	return rx, tx
+}
+
+// netField returns the idx-th space-separated field of b.
+func netField(b []byte, idx int) []byte {
+	n := len(b)
+	for i := 0; i < n; {
+		for i < n && (b[i] == ' ' || b[i] == '\t') {
+			i++
+		}
+		start := i
+		for i < n && b[i] != ' ' && b[i] != '\t' {
+			i++
+		}
+		if i == start {
+			break
+		}
+		if idx == 0 {
+			return b[start:i]
+		}
+		idx--
+	}
+	return nil
 }
 
 func deltaRate(cur, prev uint64, dt float64) float64 {

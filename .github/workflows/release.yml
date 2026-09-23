@@ -36,6 +36,13 @@ jobs:
       - name: Trust the checkout
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      # The tag this build is for. On a tag push that is the ref; on a manual
+      # re-run it is the input. github.ref is the branch for a dispatch, which
+      # is why the attach step below must not look at it.
+      - name: Resolve the tag
+        id: tag
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
       - name: Build
         id: build
         run: |
@@ -71,11 +78,15 @@ jobs:
       # pushing a tag. Without one the tarball is still produced above and kept
       # as a workflow artifact.
       - name: Attach to the release, if there is one
-        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          tag="${GITHUB_REF_NAME}"
+          tag="$TAG"
+          case "$tag" in
+            v*) ;;
+            *) echo "Not a version tag ($tag); nothing to attach to."; exit 0 ;;
+          esac
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" dist/*.tar.gz dist/*.tar.gz.sha256 --clobber
             echo "Attached the tarball to release $tag."
