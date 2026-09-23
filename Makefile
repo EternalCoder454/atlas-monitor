@@ -7,6 +7,9 @@ APPDIR  := $(PREFIX)/share/applications
 ICONDIR := $(PREFIX)/share/icons/hicolor/scalable/apps
 ICONACT := $(PREFIX)/share/icons/hicolor/scalable/actions
 
+# The sidebar's own symbolic icons, installed into the actions icon directory.
+ICONS   := cpu memory disk gpu assistant
+
 # TAGS is passed to the Go build. `noai` drops the Assistant page, the Ollama
 # client and the Markdown renderer — see `make build-lean`.
 TAGS    ?=
@@ -48,9 +51,9 @@ install: build
 	printf '%s\n' "$(CURDIR)" > $(DATADIR)/source   # record source dir for in-app "Update and restart"
 	printf '%s\n' "$(TAGS)" > $(DATADIR)/buildtags  # so an in-app update rebuilds the same flavour
 	install -Dm644 assets/icon.svg $(ICONDIR)/$(APPID).svg
-	install -Dm644 assets/icons/atlas-cpu-symbolic.svg $(ICONACT)/atlas-cpu-symbolic.svg
-	install -Dm644 assets/icons/atlas-memory-symbolic.svg $(ICONACT)/atlas-memory-symbolic.svg
-	install -Dm644 assets/icons/atlas-assistant-symbolic.svg $(ICONACT)/atlas-assistant-symbolic.svg
+	for icon in $(ICONS); do \
+		install -Dm644 assets/icons/atlas-$$icon-symbolic.svg $(ICONACT)/atlas-$$icon-symbolic.svg; \
+	done
 	install -d $(APPDIR)
 	sed 's|@BIN@|$(PREFIX)/bin/$(BINARY)|g' assets/$(APPID).desktop > $(APPDIR)/$(APPID).desktop
 	chmod 644 $(APPDIR)/$(APPID).desktop
@@ -62,7 +65,7 @@ uninstall:
 	rm -f $(PREFIX)/bin/$(BINARY)
 	rm -f $(APPDIR)/$(APPID).desktop
 	rm -f $(ICONDIR)/$(APPID).svg
-	rm -f $(ICONACT)/atlas-cpu-symbolic.svg $(ICONACT)/atlas-memory-symbolic.svg $(ICONACT)/atlas-assistant-symbolic.svg
+	for icon in $(ICONS); do rm -f $(ICONACT)/atlas-$$icon-symbolic.svg; done
 	rm -rf $(DATADIR)
 	-update-desktop-database $(APPDIR) 2>/dev/null || true
 

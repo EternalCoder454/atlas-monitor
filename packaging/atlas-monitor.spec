@@ -2,7 +2,7 @@
 # for the Go module cache, so enable it on the COPR project
 # (`copr-cli modify --enable-net on`) or run rpmbuild with modules pre-fetched.
 Name:           atlas-monitor
-Version:        %{?_version}%{!?_version:0.6.0}
+Version:        %{?_version}%{!?_version:0.6.1}
 Release:        1%{?dist}
 Summary:        Lightweight system monitor for GNOME — CPU, memory, disk, network, GPU
 
@@ -45,7 +45,7 @@ go build -trimpath -ldflags="-s -w" -o %{name} .
 install -Dm755 %{name}                       %{buildroot}%{_bindir}/%{name}
 install -Dm644 assets/style.css              %{buildroot}%{_datadir}/%{name}/style.css
 install -Dm644 assets/icon.svg               %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/com.atlas.Monitor.svg
-for icon in cpu memory assistant; do
+for icon in cpu memory disk gpu assistant; do
     install -Dm644 assets/icons/atlas-$icon-symbolic.svg \
         %{buildroot}%{_datadir}/icons/hicolor/scalable/actions/atlas-$icon-symbolic.svg
 done
@@ -66,5 +66,5 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/com.atlas.Monitor.des
 %{_datadir}/icons/hicolor/scalable/actions/atlas-*-symbolic.svg
 
 %changelog
-* Tue Sep 23 2026 EternalHell <77252745+EternalCoder454@users.noreply.github.com> - 0.6.0-1
-- Multi-vendor GPU support, battery page, kernel-thread filter, saved window state
+* Tue Sep 23 2026 EternalHell <77252745+EternalCoder454@users.noreply.github.com> - 0.6.1-1
+- New CPU, memory, disk and GPU icons
