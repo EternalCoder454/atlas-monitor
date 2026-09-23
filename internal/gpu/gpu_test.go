@@ -99,3 +99,51 @@ func TestReaderSmoke(t *testing.T) {
 }
 
 func gib(b uint64) float64 { return float64(b) / (1 << 30) }
+
+// TestDRMBackendDirect exercises the generic backend even on a machine where
+// the AMD or NVIDIA backend would win. It is the path Intel and nouveau users
+// get, and it is the only one that has to walk /proc to find GPU clients, so it
+// is worth running wherever there is a DRM card at all.
+func TestDRMBackendDirect(t *testing.T) {
+	be := newDRMBackend()
+	if be == nil {
+		t.Skip("no DRM card on this machine")
+	}
+	defer be.close()
+
+	if be.label() == "" {
+		t.Error("the backend produced no name")
+	}
+	t.Logf("generic DRM backend picked %q", be.label())
+
+	// Two samples: the first primes the engine counters, the second measures.
+	var first, second Sample
+	be.sample(&first)
+	time.Sleep(1100 * time.Millisecond)
+	be.sample(&second)
+
+	t.Logf("usage=%.1f%% vram=%.2f/%.2f GiB temp=%.0f°C fan=%d power=%.1fW sclk=%.0f",
+		second.UsagePct, gib(second.VramUsed), gib(second.VramTotal),
+		second.TempC, second.FanRPM, second.PowerW, second.SclkMHz)
+
+	if second.UsagePct < 0 || second.UsagePct > 100 {
+		t.Errorf("usage %.1f%% is out of range", second.UsagePct)
+	}
+	if second.VramTotal > 0 && second.VramUsed > second.VramTotal {
+		t.Errorf("VRAM used %d exceeds total %d", second.VramUsed, second.VramTotal)
+	}
+	// The first sample has no previous counters to difference against, so it
+	// must report zero rather than a spike from the boot-time totals.
+	if first.UsagePct != 0 {
+		t.Errorf("the priming sample reported %.1f%% usage, want 0", first.UsagePct)
+	}
+
+	drm, ok := be.(*drmBackend)
+	if !ok {
+		t.Fatalf("unexpected backend type %T", be)
+	}
+	t.Logf("found %d GPU clients, %d engines", len(drm.clients), len(drm.prevEngine))
+	if len(drm.clients) == 0 {
+		t.Log("no processes hold a /dev/dri handle — nothing was rendering")
+	}
+}

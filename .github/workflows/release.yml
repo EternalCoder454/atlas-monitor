@@ -16,7 +16,10 @@ jobs:
   tarball:
     name: binary tarball
     runs-on: ubuntu-latest
-    container: fedora:42
+    # Whatever Fedora this is, the tarball is named after it (rpm -E %fedora),
+    # so the artifact always says which release it was built against rather than
+    # depending on a pinned tag staying valid.
+    container: fedora:latest
     steps:
       - name: Install build dependencies
         run: |
