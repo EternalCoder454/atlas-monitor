@@ -17,7 +17,7 @@ type sidebar struct {
 
 // buildSidebar constructs the fixed 200px navigation panel. onSelect is called
 // with a view name ("cpu", "disk:nvme0n1", ...) whenever a row is activated.
-func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail bool, onSelect func(string)) *sidebar {
+func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, batteryAvail, withAI bool, onSelect func(string)) *sidebar {
 	outer := gtk.NewBox(gtk.OrientationVertical, 0)
 	outer.AddCSSClass("am-sidebar")
 
@@ -28,7 +28,7 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail boo
 
 	diskExp := adw.NewExpanderRow()
 	diskExp.SetTitle("Disk")
-	diskExp.SetIconName("drive-harddisk-solidstate-symbolic")
+	diskExp.SetIconName("atlas-disk-symbolic")
 	for _, d := range disks {
 		appendSubRow(diskExp, d.Label(), d.Name, "disk:"+d.Name, onSelect)
 	}
@@ -44,13 +44,19 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail boo
 	hw.Append(netExp)
 
 	if gpuAvail {
-		appendRow(hw, "GPU", "video-display-symbolic", "gpu", onSelect)
+		appendRow(hw, "GPU", "atlas-gpu-symbolic", "gpu", onSelect)
+	}
+	if batteryAvail {
+		appendRow(hw, "Battery", "battery-symbolic", "power", onSelect)
 	}
 	outer.Append(hw)
 
 	outer.Append(sectionTitle("SYSTEM"))
 	sys := newSidebarList()
-	assistantRow := appendRow(sys, "Assistant", "atlas-assistant-symbolic", "assistant", onSelect)
+	var assistantRow *adw.ActionRow
+	if withAI {
+		assistantRow = appendRow(sys, "Assistant", "atlas-assistant-symbolic", "assistant", onSelect)
+	}
 	appendRow(sys, "Apps", "view-app-grid-symbolic", "apps", onSelect)
 	appendRow(sys, "Services", "system-run-symbolic", "services", onSelect)
 	outer.Append(sys)

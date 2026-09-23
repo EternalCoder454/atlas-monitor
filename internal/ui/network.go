@@ -1,7 +1,7 @@
 package ui
 
 import (
-	"fmt"
+	"strconv"
 
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
@@ -14,14 +14,15 @@ type netView struct {
 	root      *gtk.ScrolledWindow
 	col       *stats.Collector
 	net       *stats.NetStats
-	title     *gtk.Label
-	caption   *gtk.Label
+	title     *liveLabel
+	caption   *liveLabel
+	capBuf    []byte // "<down> ↓   <up> ↑", rebuilt without allocating
 	downGraph *graph.Graph
 	upGraph   *graph.Graph
 
-	vIPv4, vIPv6, vMAC, vSpeed       *gtk.Label
-	vDownRate, vUpRate               *gtk.Label
-	vRxTotal, vTxTotal               *gtk.Label
+	vIPv4, vIPv6, vMAC, vSpeed *liveLabel
+	vDownRate, vUpRate         *liveLabel
+	vRxTotal, vTxTotal         *liveLabel
 }
 
 func newNetView(col *stats.Collector, n *stats.NetStats) *netView {
@@ -38,7 +39,7 @@ func newNetView(col *stats.Collector, n *stats.NetStats) *netView {
 
 	var headBox *gtk.Box
 	v.title, v.caption, headBox = newHeader()
-	v.title.SetText(label)
+	v.title.text(label)
 	box.Append(headBox)
 
 	box.Append(sectionTitle("DOWNLOAD"))
@@ -51,7 +52,7 @@ func newNetView(col *stats.Collector, n *stats.NetStats) *netView {
 
 	box.Append(sectionTitle("DETAILS"))
 	g := newStatGrid()
-	g.add("Interface").SetText(name)
+	g.add("Interface").text(name)
 	v.vIPv4 = g.add("IPv4")
 	v.vIPv6 = g.add("IPv6")
 	v.vMAC = g.add("MAC address")
@@ -62,7 +63,7 @@ func newNetView(col *stats.Collector, n *stats.NetStats) *netView {
 	v.vTxTotal = g.add("Sent total")
 	box.Append(g)
 
-	v.vMAC.SetText(orDash(mac))
+	v.vMAC.text(orDash(mac))
 	return v
 }
 
@@ -79,24 +80,31 @@ func (v *netView) Update() {
 		rxRate, txRate = v.net.RxRate, v.net.TxRate
 		rxTotal, txTotal = v.net.RxTotal, v.net.TxTotal
 	})
-	v.vIPv4.SetText(orDash(ipv4))
-	v.vIPv6.SetText(orDash(ipv6))
-	v.vSpeed.SetText(linkSpeed(speed))
-	v.vDownRate.SetText(format.Rate(rxRate))
-	v.vUpRate.SetText(format.Rate(txRate))
-	v.vRxTotal.SetText(format.Bytes(rxTotal))
-	v.vTxTotal.SetText(format.Bytes(txTotal))
-	v.caption.SetText(format.Rate(rxRate) + " ↓   " + format.Rate(txRate) + " ↑")
+	v.vIPv4.text(orDash(ipv4))
+	v.vIPv6.text(orDash(ipv6))
+	v.vSpeed.commit(appendLinkSpeed(v.vSpeed.scratch(), speed))
+	v.vDownRate.rate(rxRate)
+	v.vUpRate.rate(txRate)
+	v.vRxTotal.bytesVal(rxTotal)
+	v.vTxTotal.bytesVal(txTotal)
+
+	v.capBuf = format.AppendRate(v.capBuf[:0], rxRate)
+	v.capBuf = append(v.capBuf, " ↓   "...)
+	v.capBuf = format.AppendRate(v.capBuf, txRate)
+	v.capBuf = append(v.capBuf, " ↑"...)
+	v.caption.commit(v.capBuf)
+
 	v.downGraph.Refresh()
 	v.upGraph.Refresh()
 }
 
-func linkSpeed(mbit int) string {
-	if mbit <= 0 {
-		return "—"
+func appendLinkSpeed(dst []byte, mbit int) []byte {
+	switch {
+	case mbit <= 0:
+		return append(dst, "—"...)
+	case mbit >= 1000:
+		return append(strconv.AppendFloat(dst, float64(mbit)/1000, 'g', -1, 64), " Gbit/s"...)
+	default:
+		return append(strconv.AppendInt(dst, int64(mbit), 10), " Mbit/s"...)
 	}
-	if mbit >= 1000 {
-		return fmt.Sprintf("%g Gbit/s", float64(mbit)/1000)
-	}
-	return fmt.Sprintf("%d Mbit/s", mbit)
 }

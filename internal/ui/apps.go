@@ -1,13 +1,13 @@
 package ui
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 	"syscall"
 	"unsafe"
 
@@ -25,9 +25,49 @@ import (
 // procRow is a stable row object. The same pointer is kept in the list model
 // for the lifetime of a process (or group), and its values are mutated in place
 // each tick. This avoids recreating ~700 GObjects every second.
+//
+// gen is the tick number in which the row was last seen; rows left behind by an
+// older tick have exited. A generation stamp replaces the "seen" set the diff
+// used to allocate on every refresh.
 type procRow struct {
-	key  string
 	proc process.Proc
+	gen  uint64
+}
+
+// renderFunc appends a cell's text to dst. Working in bytes lets a cell compare
+// the new text against what it already shows and skip the update entirely —
+// which is what most cells do most seconds.
+type renderFunc func(dst []byte, p *process.Proc) []byte
+
+// procCell is the state behind one realised table cell. GTK recycles cells as
+// the table scrolls, so setup/bind/unbind track which row (if any) a cell is
+// currently showing.
+//
+// GTK keeps widgets realised for roughly 200 rows of a list — it measures that
+// many to size the view — so a 700-process table holds about 1800 cells however
+// few are on screen. Refreshing them is therefore the app's hottest path, and
+// each cell skipping an unchanged value is what keeps it nearly free.
+type procCell struct {
+	label  *gtk.Label
+	render renderFunc
+	row    *procRow // nil while the cell is unbound (off screen)
+	buf    []byte   // render scratch
+	cur    []byte   // text currently displayed
+	set    bool
+}
+
+// refresh re-renders the cell, touching GTK only when the text really changed.
+func (c *procCell) refresh() {
+	if c.row == nil {
+		return
+	}
+	c.buf = c.render(c.buf[:0], &c.row.proc)
+	if c.set && bytes.Equal(c.buf, c.cur) {
+		return
+	}
+	c.cur = append(c.cur[:0], c.buf...)
+	c.set = true
+	c.label.SetText(string(c.buf))
 }
 
 type appsView struct {
@@ -40,13 +80,26 @@ type appsView struct {
 	popover    *gtk.PopoverMenu
 
 	// Stable row registry and current model order (parallel to the model).
-	rows  map[string]*procRow
-	order []string
-	// liveCells holds a refresh closure per currently-bound (visible) cell.
-	liveCells map[*gtk.Label]func()
+	// Ungrouped rows are keyed by pid, grouped rows by process name, so the
+	// per-tick diff never has to build a key string.
+	byPID  map[int]*procRow
+	byName map[string]*procRow
+	order  []*procRow
+	gen    uint64
+
+	// cells holds the state of every realised cell, keyed by the native
+	// GtkColumnViewCell pointer (stable for the cell's lifetime).
+	cells map[uintptr]*procCell
+
+	// Scratch reused across ticks.
+	snap     []process.Proc
+	grouping []process.Proc
+	groups   map[string]int
+	appended []*procRow
 
 	search      string
 	grouped     bool
+	showKernel  bool
 	needRebuild bool
 	popHasPar   bool
 	targetPID   int
@@ -55,9 +108,11 @@ type appsView struct {
 
 func newAppsView(proc *process.Collector) *appsView {
 	v := &appsView{
-		proc:      proc,
-		rows:      make(map[string]*procRow),
-		liveCells: make(map[*gtk.Label]func()),
+		proc:   proc,
+		byPID:  make(map[int]*procRow),
+		byName: make(map[string]*procRow),
+		cells:  make(map[uintptr]*procCell),
+		groups: make(map[string]int),
 	}
 
 	v.root = gtk.NewBox(gtk.OrientationVertical, 8)
@@ -71,7 +126,7 @@ func newAppsView(proc *process.Collector) *appsView {
 	searchEntry := gtk.NewSearchEntry()
 	searchEntry.SetHExpand(true)
 	searchEntry.ConnectSearchChanged(func() {
-		v.search = strings.ToLower(searchEntry.Text())
+		v.search = lowerASCII(searchEntry.Text())
 		v.filter.Changed(gtk.FilterChangeDifferent)
 	})
 	groupBtn := gtk.NewToggleButton()
@@ -81,8 +136,20 @@ func newAppsView(proc *process.Collector) *appsView {
 		v.needRebuild = true
 		v.Update()
 	})
+	// Kernel threads are three quarters of /proc on a typical machine and there
+	// is nothing a user can do with them, so they start hidden — which also
+	// keeps the table (and the widgets GTK realises for it) a quarter the size.
+	kernelBtn := gtk.NewToggleButton()
+	kernelBtn.SetLabel("Kernel threads")
+	kernelBtn.SetTooltipText("Show kernel worker threads (kworker, ksoftirqd, …)")
+	kernelBtn.ConnectToggled(func() {
+		v.showKernel = kernelBtn.Active()
+		v.needRebuild = true
+		v.Update()
+	})
 	toolbar.Append(searchEntry)
 	toolbar.Append(groupBtn)
+	toolbar.Append(kernelBtn)
 	v.root.Append(toolbar)
 
 	// Model chain: base -> filter (search) -> sort (column headers) -> selection.
@@ -96,33 +163,37 @@ func newAppsView(proc *process.Collector) *appsView {
 	v.columnView = cv
 
 	cv.AppendColumn(v.textColumn("Name", true, 0,
-		func(p process.Proc) string { return p.Name },
-		func(a, b process.Proc) bool { return strings.ToLower(a.Name) < strings.ToLower(b.Name) }))
+		func(dst []byte, p *process.Proc) []byte { return append(dst, p.Name...) },
+		func(a, b *process.Proc) bool { return lessFold(a.Name, b.Name) }))
 	cv.AppendColumn(v.textColumn("PID", false, 1,
-		func(p process.Proc) string { return strconv.Itoa(p.PID) },
-		func(a, b process.Proc) bool { return a.PID < b.PID }))
+		func(dst []byte, p *process.Proc) []byte { return strconv.AppendInt(dst, int64(p.PID), 10) },
+		func(a, b *process.Proc) bool { return a.PID < b.PID }))
 	cpuCol := v.textColumn("CPU %", false, 1,
-		func(p process.Proc) string { return fmt.Sprintf("%.1f%%", p.CPU) },
-		func(a, b process.Proc) bool { return a.CPU < b.CPU })
+		func(dst []byte, p *process.Proc) []byte { return format.AppendPercent1(dst, p.CPU) },
+		func(a, b *process.Proc) bool { return a.CPU < b.CPU })
 	cv.AppendColumn(cpuCol)
 	cv.AppendColumn(v.textColumn("RAM", false, 1,
-		func(p process.Proc) string { return format.Bytes(p.RSS) },
-		func(a, b process.Proc) bool { return a.RSS < b.RSS }))
-	cv.AppendColumn(v.textColumn("GPU %", false, 1,
-		gpuText,
-		func(a, b process.Proc) bool { return a.GPU < b.GPU }))
+		func(dst []byte, p *process.Proc) []byte { return format.AppendBytes(dst, p.RSS) },
+		func(a, b *process.Proc) bool { return a.RSS < b.RSS }))
+	cv.AppendColumn(v.textColumn("GPU %", false, 1, appendGPU,
+		func(a, b *process.Proc) bool { return a.GPU < b.GPU }))
+	// Sorted by the underlying score, not the label, so the order runs
+	// Very low → High rather than alphabetically.
+	cv.AppendColumn(v.textColumn("Power", false, 0,
+		func(dst []byte, p *process.Proc) []byte { return append(dst, p.Impact().String()...) },
+		func(a, b *process.Proc) bool { return a.PowerScore() < b.PowerScore() }))
 	cv.AppendColumn(v.textColumn("Net ≈ In", false, 1,
-		func(p process.Proc) string { return format.Rate(p.NetIn) },
-		func(a, b process.Proc) bool { return a.NetIn < b.NetIn }))
+		func(dst []byte, p *process.Proc) []byte { return format.AppendRate(dst, p.NetIn) },
+		func(a, b *process.Proc) bool { return a.NetIn < b.NetIn }))
 	cv.AppendColumn(v.textColumn("Net ≈ Out", false, 1,
-		func(p process.Proc) string { return format.Rate(p.NetOut) },
-		func(a, b process.Proc) bool { return a.NetOut < b.NetOut }))
+		func(dst []byte, p *process.Proc) []byte { return format.AppendRate(dst, p.NetOut) },
+		func(a, b *process.Proc) bool { return a.NetOut < b.NetOut }))
 	cv.AppendColumn(v.textColumn("Disk Read", false, 1,
-		func(p process.Proc) string { return format.Rate(p.DiskRead) },
-		func(a, b process.Proc) bool { return a.DiskRead < b.DiskRead }))
+		func(dst []byte, p *process.Proc) []byte { return format.AppendRate(dst, p.DiskRead) },
+		func(a, b *process.Proc) bool { return a.DiskRead < b.DiskRead }))
 	cv.AppendColumn(v.textColumn("Disk Write", false, 1,
-		func(p process.Proc) string { return format.Rate(p.DiskWrite) },
-		func(a, b process.Proc) bool { return a.DiskWrite < b.DiskWrite }))
+		func(dst []byte, p *process.Proc) []byte { return format.AppendRate(dst, p.DiskWrite) },
+		func(a, b *process.Proc) bool { return a.DiskWrite < b.DiskWrite }))
 
 	sortModel := gtk.NewSortListModel(filterModel, cv.Sorter())
 	cv.SetModel(gtk.NewNoSelection(sortModel))
@@ -156,53 +227,94 @@ func (v *appsView) Root() gtk.Widgetter { return v.root }
 // Update diffs the latest process snapshot against the stable row set, mutating
 // existing rows in place and only splicing the model when processes appear or
 // disappear. No per-tick model rebuild, so sort order and scroll position are
-// preserved and no GObjects churn.
+// preserved and no GObjects churn. Every container it uses is reused, so a
+// machine with a steady process list allocates essentially nothing per second.
 func (v *appsView) Update() {
 	if v.needRebuild {
 		v.clearModel()
 		v.needRebuild = false
 	}
 
-	snap := v.proc.Snapshot()
+	v.snap = v.proc.SnapshotInto(v.snap)
+	snap := v.snap
+	if !v.showKernel {
+		snap = withoutKernelThreads(snap)
+	}
 	if v.grouped {
-		snap = groupByName(snap)
+		snap = v.groupByName(snap)
 	}
 
-	seen := make(map[string]bool, len(snap))
-	var toAppend []*procRow
+	v.gen++
+	toAppend := v.appended[:0]
 	for i := range snap {
-		p := snap[i]
-		key := v.keyOf(p)
-		seen[key] = true
-		if row, ok := v.rows[key]; ok {
-			row.proc = p // update values in place
-		} else {
-			row := &procRow{key: key, proc: p}
-			v.rows[key] = row
-			v.order = append(v.order, key)
+		p := &snap[i]
+		row := v.lookup(p)
+		if row == nil {
+			row = &procRow{proc: *p}
+			v.register(row)
+			v.order = append(v.order, row)
 			toAppend = append(toAppend, row)
+		} else {
+			row.proc = *p // update values in place
 		}
+		row.gen = v.gen
 	}
 	if len(toAppend) > 0 {
 		v.model.Splice(len(v.order)-len(toAppend), 0, toAppend...)
 	}
-	// Drop processes that have exited.
-	if len(v.rows) > len(seen) {
-		for i := 0; i < len(v.order); {
-			key := v.order[i]
-			if !seen[key] {
-				v.model.Remove(i)
-				v.order = append(v.order[:i], v.order[i+1:]...)
-				delete(v.rows, key)
-			} else {
-				i++
-			}
+	v.appended = toAppend[:0] // keep the buffer for the next tick
+	// Drop processes that have exited (rows not stamped with this generation).
+	for i := 0; i < len(v.order); {
+		row := v.order[i]
+		if row.gen == v.gen {
+			i++
+			continue
 		}
+		v.model.Remove(i)
+		v.order = append(v.order[:i], v.order[i+1:]...)
+		v.unregister(row)
 	}
 
 	// Refresh only the currently-visible cells (~rows on screen × columns).
-	for _, refresh := range v.liveCells {
-		refresh()
+	for _, c := range v.cells {
+		c.refresh()
+	}
+}
+
+// withoutKernelThreads compacts the snapshot in place, dropping kernel threads.
+// The caller owns the backing array and refills it every tick, so this costs
+// nothing beyond the walk.
+func withoutKernelThreads(procs []process.Proc) []process.Proc {
+	kept := procs[:0]
+	for _, p := range procs {
+		if !p.Kernel {
+			kept = append(kept, p)
+		}
+	}
+	return kept
+}
+
+// lookup finds the stable row for p under the current grouping mode.
+func (v *appsView) lookup(p *process.Proc) *procRow {
+	if v.grouped {
+		return v.byName[p.Name]
+	}
+	return v.byPID[p.PID]
+}
+
+func (v *appsView) register(row *procRow) {
+	if v.grouped {
+		v.byName[row.proc.Name] = row
+	} else {
+		v.byPID[row.proc.PID] = row
+	}
+}
+
+func (v *appsView) unregister(row *procRow) {
+	if v.grouped {
+		delete(v.byName, row.proc.Name)
+	} else {
+		delete(v.byPID, row.proc.PID)
 	}
 }
 
@@ -210,31 +322,32 @@ func (v *appsView) clearModel() {
 	if n := v.model.Len(); n > 0 {
 		v.model.Splice(0, n)
 	}
-	v.rows = make(map[string]*procRow)
+	clear(v.byPID)
+	clear(v.byName)
 	v.order = v.order[:0]
-	v.liveCells = make(map[*gtk.Label]func())
-}
-
-func (v *appsView) keyOf(p process.Proc) string {
-	if v.grouped {
-		return p.Name
+	for _, c := range v.cells {
+		c.row = nil
+		c.set = false
 	}
-	return strconv.Itoa(p.PID)
 }
 
-// matches implements the search filter.
+// matches implements the search filter. It works directly on the row's fields,
+// with no lower-casing copy or PID-to-string conversion per item.
 func (v *appsView) matches(item *coreglib.Object) bool {
 	if v.search == "" {
 		return true
 	}
 	r := gioutil.ObjectValue[*procRow](item)
-	return strings.Contains(strings.ToLower(r.proc.Name), v.search) ||
-		strings.Contains(strconv.Itoa(r.proc.PID), v.search)
+	if containsFold(r.proc.Name, v.search) {
+		return true
+	}
+	var digits [20]byte
+	return containsBytes(strconv.AppendInt(digits[:0], int64(r.proc.PID), 10), v.search)
 }
 
 // textColumn builds a sortable text column. xalign: 0 left, 1 right.
 func (v *appsView) textColumn(title string, expand bool, xalign float64,
-	extract func(process.Proc) string, less func(a, b process.Proc) bool) *gtk.ColumnViewColumn {
+	render renderFunc, less func(a, b *process.Proc) bool) *gtk.ColumnViewColumn {
 
 	factory := gtk.NewSignalListItemFactory()
 	factory.ConnectSetup(func(obj *coreglib.Object) {
@@ -243,27 +356,27 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 		label.SetXAlign(float32(xalign))
 		label.SetEllipsize(3) // PANGO_ELLIPSIZE_END
 		cell.SetChild(label)
-		v.attachContextMenu(label, cell)
+		c := &procCell{label: label, render: render}
+		v.cells[cell.Native()] = c
+		v.attachContextMenu(label, c)
 	})
 	factory.ConnectBind(func(obj *coreglib.Object) {
 		cell := obj.Cast().(*gtk.ColumnViewCell)
-		label, _ := cell.Child().(*gtk.Label)
-		if label == nil {
+		c := v.cells[cell.Native()]
+		if c == nil {
 			return
 		}
-		set := func() {
-			if r := rowOf(cell); r != nil {
-				label.SetText(extract(r.proc))
-			}
-		}
-		set()
-		v.liveCells[label] = set
+		c.row = rowOf(cell)
+		c.refresh()
 	})
 	factory.ConnectUnbind(func(obj *coreglib.Object) {
 		cell := obj.Cast().(*gtk.ColumnViewCell)
-		if label, ok := cell.Child().(*gtk.Label); ok {
-			delete(v.liveCells, label)
+		if c := v.cells[cell.Native()]; c != nil {
+			c.row = nil
 		}
+	})
+	factory.ConnectTeardown(func(obj *coreglib.Object) {
+		delete(v.cells, obj.Cast().(*gtk.ColumnViewCell).Native())
 	})
 
 	col := gtk.NewColumnViewColumn(title, &factory.ListItemFactory)
@@ -276,9 +389,9 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 		ra := gioutil.ObjectValue[*procRow](coreglib.Take(a))
 		rb := gioutil.ObjectValue[*procRow](coreglib.Take(b))
 		switch {
-		case less(ra.proc, rb.proc):
+		case less(&ra.proc, &rb.proc):
 			return -1
-		case less(rb.proc, ra.proc):
+		case less(&rb.proc, &ra.proc):
 			return 1
 		default:
 			return 0
@@ -325,16 +438,15 @@ func (v *appsView) buildContextMenu(parent gtk.Widgetter) {
 }
 
 // attachContextMenu wires a right-click gesture on a cell to the popover,
-// reading the row's process at click time.
-func (v *appsView) attachContextMenu(widget gtk.Widgetter, cell *gtk.ColumnViewCell) {
+// reading the row the cell is bound to at click time.
+func (v *appsView) attachContextMenu(widget gtk.Widgetter, c *procCell) {
 	click := gtk.NewGestureClick()
 	click.SetButton(3) // secondary / right button
 	click.ConnectPressed(func(_ int, x, y float64) {
-		r := rowOf(cell)
-		if r == nil {
+		if c.row == nil {
 			return
 		}
-		v.targetPID, v.targetName = r.proc.PID, r.proc.Name
+		v.targetPID, v.targetName = c.row.proc.PID, c.row.proc.Name
 
 		if v.popHasPar {
 			v.popover.Unparent()
@@ -345,9 +457,7 @@ func (v *appsView) attachContextMenu(widget gtk.Widgetter, cell *gtk.ColumnViewC
 		v.popover.SetPointingTo(&rect)
 		v.popover.Popup()
 	})
-	if w, ok := widget.(*gtk.Label); ok {
-		w.AddController(click)
-	}
+	gtk.BaseWidget(widget).AddController(click)
 }
 
 func (v *appsView) kill(sig syscall.Signal) {
@@ -367,26 +477,29 @@ func (v *appsView) openLocation() {
 	_ = exec.Command("xdg-open", filepath.Dir(exe)).Start()
 }
 
-func gpuText(p process.Proc) string {
+// appendGPU renders the GPU column: a dash for processes that hold no GPU
+// handle, a percentage for DRM clients.
+func appendGPU(dst []byte, p *process.Proc) []byte {
 	if p.GPU < 0 {
-		return "—" // not a GPU client
+		return append(dst, "—"...)
 	}
-	return fmt.Sprintf("%.0f%%", p.GPU)
+	return format.AppendPercent(dst, p.GPU)
 }
 
-// groupByName aggregates processes sharing a name into a single row.
-func groupByName(procs []process.Proc) []process.Proc {
-	byName := make(map[string]*process.Proc)
-	var order []string
+// groupByName aggregates processes sharing a name into a single row, reusing
+// the view's scratch slice and index map.
+func (v *appsView) groupByName(procs []process.Proc) []process.Proc {
+	out := v.grouping[:0]
+	clear(v.groups)
 	for i := range procs {
-		p := procs[i]
-		g, ok := byName[p.Name]
+		p := &procs[i]
+		idx, ok := v.groups[p.Name]
 		if !ok {
-			cp := p
-			byName[p.Name] = &cp
-			order = append(order, p.Name)
+			v.groups[p.Name] = len(out)
+			out = append(out, *p)
 			continue
 		}
+		g := &out[idx]
 		g.CPU += p.CPU
 		g.RSS += p.RSS
 		g.NetIn += p.NetIn
@@ -400,10 +513,84 @@ func groupByName(procs []process.Proc) []process.Proc {
 			g.GPU += p.GPU
 		}
 	}
-	out := make([]process.Proc, 0, len(order))
-	for _, name := range order {
-		out = append(out, *byName[name])
-	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CPU > out[j].CPU })
+	v.grouping = out
 	return out
+}
+
+// lowerASCII lower-cases a search string. Process names are ASCII.
+func lowerASCII(s string) string {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c >= 'A' && c <= 'Z' {
+			b := []byte(s)
+			for ; i < len(b); i++ {
+				if b[i] >= 'A' && b[i] <= 'Z' {
+					b[i] += 'a' - 'A'
+				}
+			}
+			return string(b)
+		}
+	}
+	return s
+}
+
+// containsFold reports whether s contains the already-lower-cased sub,
+// comparing ASCII case-insensitively without allocating.
+func containsFold(s, sub string) bool {
+	n := len(sub)
+	if n == 0 {
+		return true
+	}
+	for i := 0; i+n <= len(s); i++ {
+		if equalFold(s[i:i+n], sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func equalFold(a, lower string) bool {
+	for i := 0; i < len(a); i++ {
+		c := a[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != lower[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// containsBytes is strings.Contains for a byte slice haystack, without the
+// allocation a []byte→string conversion would cost.
+func containsBytes(b []byte, sub string) bool {
+	n := len(sub)
+	if n == 0 {
+		return true
+	}
+	for i := 0; i+n <= len(b); i++ {
+		if string(b[i:i+n]) == sub {
+			return true
+		}
+	}
+	return false
+}
+
+// lessFold orders names case-insensitively without allocating.
+func lessFold(a, b string) bool {
+	for i := 0; i < len(a) && i < len(b); i++ {
+		ca, cb := foldByte(a[i]), foldByte(b[i])
+		if ca != cb {
+			return ca < cb
+		}
+	}
+	return len(a) < len(b)
+}
+
+func foldByte(c byte) byte {
+	if c >= 'A' && c <= 'Z' {
+		return c + 'a' - 'A'
+	}
+	return c
 }

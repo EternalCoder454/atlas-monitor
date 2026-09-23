@@ -1,11 +1,10 @@
 package ui
 
 import (
-	"fmt"
+	"strconv"
 
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
-	"atlas-monitor/internal/format"
 	"atlas-monitor/internal/graph"
 	"atlas-monitor/internal/stats"
 )
@@ -13,13 +12,13 @@ import (
 type gpuView struct {
 	root       *gtk.ScrolledWindow
 	col        *stats.Collector
-	number     *gtk.Label
-	caption    *gtk.Label
+	number     *liveLabel
+	caption    *liveLabel
 	usageGraph *graph.Graph
 	vramGraph  *graph.Graph
 
-	vGpuClock, vMemClock, vTemp, vFan, vPower *gtk.Label
-	vVram, vGtt                               *gtk.Label
+	vGpuClock, vMemClock, vTemp, vFan, vPower *liveLabel
+	vVram, vGtt                               *liveLabel
 }
 
 func newGPUView(col *stats.Collector) *gpuView {
@@ -37,7 +36,7 @@ func newGPUView(col *stats.Collector) *gpuView {
 		name = s.GPU.Name
 		usageHist, vramHist = s.GPU.UsageHist, s.GPU.VramHist
 	})
-	v.caption.SetText(name)
+	v.caption.text(name)
 
 	box.Append(sectionTitle("GPU UTILISATION"))
 	v.usageGraph = graph.New("GPU", graph.ColorGPU, usageHist, graph.Percent, 150)
@@ -65,36 +64,43 @@ func (v *gpuView) Root() gtk.Widgetter { return v.root }
 func (v *gpuView) Update() {
 	var usage, temp, power, gclk, mclk float64
 	var fan int
+	var fanPct float64
 	var vramUsed, vramTotal, gtt uint64
 	v.col.Read(func(s *stats.Stats) {
 		usage = s.GPU.Usage
 		temp, power = s.GPU.Temp, s.GPU.PowerW
 		gclk, mclk = s.GPU.GpuClockMHz, s.GPU.MemClockMHz
-		fan = s.GPU.FanRPM
+		fan, fanPct = s.GPU.FanRPM, s.GPU.FanPercent
 		vramUsed, vramTotal, gtt = s.GPU.VramUsed, s.GPU.VramTotal, s.GPU.GttUsed
 	})
-	v.number.SetText(format.Percent(usage))
-	v.vGpuClock.SetText(format.MHz(gclk))
-	v.vMemClock.SetText(format.MHz(mclk))
-	v.vTemp.SetText(format.Temp(temp))
-	v.vFan.SetText(rpm(fan))
-	v.vPower.SetText(watts(power))
-	v.vVram.SetText(format.GiB(vramUsed) + " / " + format.GiB(vramTotal))
-	v.vGtt.SetText(format.GiB(gtt))
+	v.number.percent(usage)
+	v.vGpuClock.mhz(gclk)
+	v.vMemClock.mhz(mclk)
+	v.vTemp.temp(temp)
+	v.vFan.commit(appendFan(v.vFan.scratch(), fan, fanPct))
+	v.vPower.commit(appendWatts(v.vPower.scratch(), power))
+	v.vVram.gibOf(vramUsed, vramTotal)
+	v.vGtt.gib(gtt)
 	v.usageGraph.Refresh()
 	v.vramGraph.Refresh()
 }
 
-func rpm(r int) string {
-	if r <= 0 {
-		return "0 RPM"
+// appendFan renders whichever figure the driver gives us: amdgpu reports tacho
+// RPM, NVML reports a percentage of maximum.
+func appendFan(dst []byte, rpm int, pct float64) []byte {
+	switch {
+	case rpm > 0:
+		return append(strconv.AppendInt(dst, int64(rpm), 10), " RPM"...)
+	case pct > 0:
+		return append(strconv.AppendFloat(dst, pct, 'f', 0, 64), "%"...)
+	default:
+		return append(dst, "—"...)
 	}
-	return fmt.Sprintf("%d RPM", r)
 }
 
-func watts(w float64) string {
+func appendWatts(dst []byte, w float64) []byte {
 	if w <= 0 {
-		return "—"
+		return append(dst, "—"...)
 	}
-	return fmt.Sprintf("%.0f W", w)
+	return append(strconv.AppendFloat(dst, w, 'f', 0, 64), " W"...)
 }

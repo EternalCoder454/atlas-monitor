@@ -1,3 +1,5 @@
+//go:build !noai
+
 package ui
 
 import (

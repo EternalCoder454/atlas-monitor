@@ -18,7 +18,13 @@ const (
 	Percent Mode = iota
 	// Bytes auto-scales the Y-axis and formats values as byte rates.
 	Bytes
+	// Watts auto-scales the Y-axis and formats values as a power draw.
+	Watts
 )
+
+// autoScaled reports whether the mode picks its Y-axis from the data rather
+// than pinning it to 0..100.
+func (m Mode) autoScaled() bool { return m == Bytes || m == Watts }
 
 // Graph is a single live chart bound to a ring buffer.
 type Graph struct {
@@ -28,6 +34,10 @@ type Graph struct {
 	rb      *stats.RingBuffer
 	mode    Mode
 	scratch []float64 // pre-allocated read buffer, never grows
+
+	// Current-value text, cached so a steady reading costs no allocation.
+	valBuf  []byte
+	valText string
 }
 
 // New builds a graph for the given ring buffer. height is the requested
@@ -57,18 +67,13 @@ func (g *Graph) draw(area *gtk.DrawingArea, cr *cairo.Context, w, h int) {
 	}
 	width, height := float64(w), float64(h)
 
-	// Theme foreground colour for grid lines and text.
-	fr, fg, fb := 0.5, 0.5, 0.5
-	if sc := area.StyleContext(); sc != nil {
-		c := sc.Color()
-		fr, fg, fb = float64(c.Red()), float64(c.Green()), float64(c.Blue())
-	}
+	fr, fg, fb := Foreground(area)
 
 	n := g.rb.ReadInto(g.scratch)
 
 	// Determine vertical scale.
 	scale := 100.0
-	if g.mode == Bytes {
+	if g.mode.autoScaled() {
 		scale = g.rb.Max() * 1.25
 		if scale < 1 {
 			scale = 1
@@ -140,9 +145,31 @@ func (g *Graph) draw(area *gtk.DrawingArea, cr *cairo.Context, w, h int) {
 	cr.ShowText(text)
 }
 
+// formatValue renders v into the graph's scratch buffer and returns the text,
+// reusing the previous string whenever the reading is unchanged (the common
+// case for an idle interface or a pinned percentage).
 func (g *Graph) formatValue(v float64) string {
-	if g.mode == Bytes {
-		return format.Rate(v)
+	switch g.mode {
+	case Bytes:
+		g.valBuf = format.AppendRate(g.valBuf[:0], v)
+	case Watts:
+		g.valBuf = format.AppendWatts(g.valBuf[:0], v)
+	default:
+		g.valBuf = format.AppendPercent(g.valBuf[:0], v)
 	}
-	return format.Percent(v)
+	if g.valText != string(g.valBuf) { // compares without allocating
+		g.valText = string(g.valBuf)
+	}
+	return g.valText
+}
+
+// Foreground returns the widget's themed text colour, used for grid lines and
+// labels. gtk_widget_get_color is a plain struct read; the GtkStyleContext it
+// replaces is deprecated and allocated a wrapper object on every frame.
+func Foreground(w *gtk.DrawingArea) (r, g, b float64) {
+	c := w.Color()
+	if c == nil {
+		return 0.5, 0.5, 0.5
+	}
+	return float64(c.Red()), float64(c.Green()), float64(c.Blue())
 }

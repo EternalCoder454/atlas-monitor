@@ -1,3 +1,5 @@
+//go:build !noai
+
 package ui
 
 import "testing"
@@ -9,10 +11,10 @@ func TestModelInstalled(t *testing.T) {
 		ok   bool
 	}{
 		{"qwen2.5:3b", true},
-		{"qwen2.5", true},         // untagged matches the :3b tag
-		{"llama3.2", true},        // untagged matches the :latest tag
+		{"qwen2.5", true},  // untagged matches the :3b tag
+		{"llama3.2", true}, // untagged matches the :latest tag
 		{"llama3.2:latest", true},
-		{"qwen2.5:7b", false},     // a specific tag that is not present
+		{"qwen2.5:7b", false}, // a specific tag that is not present
 		{"mistral", false},
 		{"", false},
 	}

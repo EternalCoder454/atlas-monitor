@@ -7,16 +7,40 @@ APPDIR  := $(PREFIX)/share/applications
 ICONDIR := $(PREFIX)/share/icons/hicolor/scalable/apps
 ICONACT := $(PREFIX)/share/icons/hicolor/scalable/actions
 
-.PHONY: build run install uninstall clean vet setup-ai
+# The sidebar's own symbolic icons, installed into the actions icon directory.
+ICONS   := cpu memory disk gpu assistant
+
+# TAGS is passed to the Go build. `noai` drops the Assistant page, the Ollama
+# client and the Markdown renderer — see `make build-lean`.
+TAGS    ?=
+.PHONY: build build-lean run install install-lean uninstall clean vet test test-race setup-ai
 
 build:
-	go build -ldflags="-s -w" -o $(BINDIR)/$(BINARY) .
+	go build -tags "$(TAGS)" -trimpath -ldflags="-s -w" -o $(BINDIR)/$(BINARY) .
+
+# A monitor and nothing else: no assistant, no Ollama client, no Markdown.
+build-lean:
+	$(MAKE) build TAGS=noai
+
+install-lean:
+	$(MAKE) install TAGS=noai
 
 run: build
 	./$(BINDIR)/$(BINARY)
 
 vet:
 	go vet ./...
+
+test:
+	go test ./...
+
+# The race detector, split in two: internal/ui builds real GObjects, and -race
+# also enables checkptr, which trips over the unsafe pointer arithmetic in
+# gotk4's weak-reference dependency rather than on anything here. The race
+# detector is kept for it; only that pointer check is switched off.
+test-race:
+	go test -race -count=1 ./internal/stats/ ./internal/process/ ./internal/ai/ ./internal/gpu/ ./internal/power/
+	go test -race -count=1 -gcflags=all=-d=checkptr=0 ./internal/ui/
 
 setup-ai:
 	bash scripts/setup-ai.sh
@@ -25,10 +49,11 @@ install: build
 	install -Dm755 $(BINDIR)/$(BINARY) $(PREFIX)/bin/$(BINARY)
 	install -Dm644 assets/style.css $(DATADIR)/style.css
 	printf '%s\n' "$(CURDIR)" > $(DATADIR)/source   # record source dir for in-app "Update and restart"
+	printf '%s\n' "$(TAGS)" > $(DATADIR)/buildtags  # so an in-app update rebuilds the same flavour
 	install -Dm644 assets/icon.svg $(ICONDIR)/$(APPID).svg
-	install -Dm644 assets/icons/atlas-cpu-symbolic.svg $(ICONACT)/atlas-cpu-symbolic.svg
-	install -Dm644 assets/icons/atlas-memory-symbolic.svg $(ICONACT)/atlas-memory-symbolic.svg
-	install -Dm644 assets/icons/atlas-assistant-symbolic.svg $(ICONACT)/atlas-assistant-symbolic.svg
+	for icon in $(ICONS); do \
+		install -Dm644 assets/icons/atlas-$$icon-symbolic.svg $(ICONACT)/atlas-$$icon-symbolic.svg; \
+	done
 	install -d $(APPDIR)
 	sed 's|@BIN@|$(PREFIX)/bin/$(BINARY)|g' assets/$(APPID).desktop > $(APPDIR)/$(APPID).desktop
 	chmod 644 $(APPDIR)/$(APPID).desktop
@@ -40,7 +65,7 @@ uninstall:
 	rm -f $(PREFIX)/bin/$(BINARY)
 	rm -f $(APPDIR)/$(APPID).desktop
 	rm -f $(ICONDIR)/$(APPID).svg
-	rm -f $(ICONACT)/atlas-cpu-symbolic.svg $(ICONACT)/atlas-memory-symbolic.svg $(ICONACT)/atlas-assistant-symbolic.svg
+	for icon in $(ICONS); do rm -f $(ICONACT)/atlas-$$icon-symbolic.svg; done
 	rm -rf $(DATADIR)
 	-update-desktop-database $(APPDIR) 2>/dev/null || true
 

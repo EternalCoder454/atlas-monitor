@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
@@ -9,6 +11,9 @@ import (
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
 	"atlas-monitor/internal/config"
+	"atlas-monitor/internal/format"
+	"atlas-monitor/internal/gfx"
+	"atlas-monitor/internal/sysmem"
 )
 
 const modelsURL = "https://ollama.com/library"
@@ -39,18 +44,25 @@ func ShowSettings(parent gtk.Widgetter, s *config.Settings, h SettingsHooks) {
 	stack.SetTransitionType(gtk.StackTransitionTypeCrossfade)
 	stack.SetTransitionDuration(120)
 
-	mp := newModelPromptPage(s, h)
-	qp := newQuickPromptsPage(s, h)
-	ap := newAppPage(s, h)
-	stack.AddNamed(mp.page, "model")
-	stack.AddNamed(qp.page, "prompts")
-	stack.AddNamed(ap.page, "app")
+	// The assistant pages only exist when the assistant is compiled in
+	// (`make build-lean` drops it).
+	var mp *modelPromptPage
+	var qp *quickPromptsPage
 
 	sidebar := gtk.NewListBox()
 	sidebar.AddCSSClass("navigation-sidebar")
 	sidebar.SetVExpand(true)
-	addSettingsRow(sidebar, "Model & Prompt", "model")
-	addSettingsRow(sidebar, "Quick Prompts", "prompts")
+
+	if aiCompiledIn {
+		mp = newModelPromptPage(s, h)
+		qp = newQuickPromptsPage(s, h)
+		stack.AddNamed(mp.page, "model")
+		stack.AddNamed(qp.page, "prompts")
+		addSettingsRow(sidebar, "Model & Prompt", "model")
+		addSettingsRow(sidebar, "Quick Prompts", "prompts")
+	}
+	ap := newAppPage(s, h)
+	stack.AddNamed(ap.page, "app")
 	addSettingsRow(sidebar, "App", "app")
 	sidebar.ConnectRowSelected(func(row *gtk.ListBoxRow) {
 		if row != nil {
@@ -73,14 +85,18 @@ func ShowSettings(parent gtk.Widgetter, s *config.Settings, h SettingsHooks) {
 
 	// Persist apply-rows that weren't explicitly confirmed when the dialog closes.
 	dlg.ConnectClosed(func() {
-		s.AssistantTitle = nonEmpty(strings.TrimSpace(mp.name.Text()), config.Defaults().AssistantTitle)
-		s.Model = strings.TrimSpace(mp.model.Text())
-		s.OllamaURL = strings.TrimSpace(mp.url.Text())
-		s.SystemPrompt = nonEmpty(strings.TrimSpace(textViewText(mp.prompt)), config.DefaultSystemPrompt)
-		def := config.DefaultQuickPrompts()
-		for i := range s.QuickPrompts {
-			s.QuickPrompts[i].Name = nonEmpty(strings.TrimSpace(qp.names[i].Text()), def[i].Name)
-			s.QuickPrompts[i].Prompt = nonEmpty(strings.TrimSpace(qp.prompts[i].Text()), def[i].Prompt)
+		if mp != nil {
+			s.AssistantTitle = nonEmpty(strings.TrimSpace(mp.name.Text()), config.Defaults().AssistantTitle)
+			s.Model = strings.TrimSpace(mp.model.Text())
+			s.OllamaURL = strings.TrimSpace(mp.url.Text())
+			s.SystemPrompt = nonEmpty(strings.TrimSpace(textViewText(mp.prompt)), config.DefaultSystemPrompt)
+		}
+		if qp != nil {
+			def := config.DefaultQuickPrompts()
+			for i := range s.QuickPrompts {
+				s.QuickPrompts[i].Name = nonEmpty(strings.TrimSpace(qp.names[i].Text()), def[i].Name)
+				s.QuickPrompts[i].Prompt = nonEmpty(strings.TrimSpace(qp.prompts[i].Text()), def[i].Prompt)
+			}
 		}
 		_ = config.Save(*s)
 		fire(h.OnChange)
@@ -241,6 +257,8 @@ func newAppPage(s *config.Settings, h SettingsHooks) *appPage {
 		version = "unknown"
 	}
 
+	p.page.Add(perfGroup(s, h))
+
 	updGroup := adw.NewPreferencesGroup()
 	updGroup.SetTitle("Updates")
 	updGroup.SetDescription("Atlas updates by pulling the selected channel from GitHub and reinstalling. " +
@@ -319,6 +337,121 @@ func newAppPage(s *config.Settings, h SettingsHooks) *appPage {
 	aboutGroup.Add(loc)
 	p.page.Add(aboutGroup)
 	return p
+}
+
+// perfGroup builds the rendering-mode selector and the live self-memory
+// readout. Rendering is the single biggest influence on how much memory Atlas
+// uses, so it gets a first-class setting rather than an environment variable.
+func perfGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
+	g := adw.NewPreferencesGroup()
+	g.SetTitle("Performance")
+	g.SetDescription("Atlas draws its charts on the CPU by default. That keeps the GPU driver stack — Mesa, " +
+		"the Vulkan loader and LLVM, around 60 MiB of it — out of the process entirely. Switch to GPU if you " +
+		"want smoother window resizing on a high-refresh display.")
+
+	labels := make([]string, len(gfx.Modes))
+	selected := 0
+	for i, m := range gfx.Modes {
+		labels[i] = m.Label
+		if m.Value == s.RenderMode {
+			selected = i
+		}
+	}
+	render := adw.NewComboRow()
+	render.SetTitle("Rendering")
+	render.SetSubtitle(gfx.Modes[selected].Detail)
+	render.SetModel(gtk.NewStringList(labels))
+	render.SetSelected(uint(selected))
+	render.NotifyProperty("selected", func() {
+		idx := int(render.Selected())
+		if idx < 0 || idx >= len(gfx.Modes) || gfx.Modes[idx].Value == s.RenderMode {
+			return
+		}
+		s.RenderMode = gfx.Modes[idx].Value
+		render.SetSubtitle(gfx.Modes[idx].Detail + " · restart Atlas to apply")
+		_ = config.Save(*s)
+		fire(h.OnChange)
+	})
+	g.Add(render)
+
+	// Sampling interval. Slower is cheaper, and stretches the graphs: they hold
+	// 60 samples whatever the rate.
+	intervals := make([]string, len(config.RefreshChoices))
+	chosen := 0
+	current := config.NormalizeRefresh(s.RefreshSeconds)
+	for i, sec := range config.RefreshChoices {
+		intervals[i] = refreshLabel(sec)
+		if sec == current {
+			chosen = i
+		}
+	}
+	refresh := adw.NewComboRow()
+	refresh.SetTitle("Refresh interval")
+	refresh.SetSubtitle(refreshDetail(current))
+	refresh.SetModel(gtk.NewStringList(intervals))
+	refresh.SetSelected(uint(chosen))
+	refresh.NotifyProperty("selected", func() {
+		idx := int(refresh.Selected())
+		if idx < 0 || idx >= len(config.RefreshChoices) {
+			return
+		}
+		s.RefreshSeconds = config.RefreshChoices[idx]
+		refresh.SetSubtitle(refreshDetail(s.RefreshSeconds))
+		_ = config.Save(*s)
+		fire(h.OnChange)
+	})
+	g.Add(refresh)
+
+	usage := adw.NewActionRow()
+	usage.SetTitle("Memory used by Atlas")
+	usage.SetSubtitle(selfMemory())
+	usage.SetSubtitleSelectable(true)
+	g.Add(usage)
+
+	release := adw.NewButtonRow()
+	release.SetTitle("Release idle memory now")
+	release.SetStartIconName("user-trash-symbolic")
+	release.ConnectActivated(func() {
+		sysmem.Release()
+		usage.SetSubtitle(selfMemory())
+	})
+	g.Add(release)
+	return g
+}
+
+// refreshLabel names an interval in the dropdown.
+func refreshLabel(seconds int) string {
+	if seconds == 1 {
+		return "Every second"
+	}
+	return "Every " + strconv.Itoa(seconds) + " seconds"
+}
+
+// refreshDetail explains what the choice costs and buys.
+func refreshDetail(seconds int) string {
+	if seconds == 1 {
+		return "Graphs cover the last minute"
+	}
+	return "Lighter on the CPU · graphs cover the last " +
+		strconv.Itoa(seconds) + " minutes"
+}
+
+// selfMemory reports this process's resident set, read straight from
+// /proc/self/statm — the same figure a task manager shows for Atlas.
+func selfMemory() string {
+	b, err := os.ReadFile("/proc/self/statm")
+	if err != nil {
+		return "unavailable"
+	}
+	fields := strings.Fields(string(b))
+	if len(fields) < 2 {
+		return "unavailable"
+	}
+	pages, err := strconv.ParseUint(fields[1], 10, 64)
+	if err != nil {
+		return "unavailable"
+	}
+	return format.Bytes(pages*uint64(os.Getpagesize())) + " resident"
 }
 
 func channelName(ch string) string {

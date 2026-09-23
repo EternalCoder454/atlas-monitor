@@ -1,7 +1,6 @@
 package stats
 
 import (
-	"bufio"
 	"bytes"
 	"net"
 	"os"
@@ -14,7 +13,7 @@ import (
 // discoverNets enumerates interfaces from /proc/net/dev and reads their static
 // attributes (MAC, link speed, addresses).
 func (c *Collector) discoverNets() {
-	counters := readNetDev()
+	counters := c.readNetDev()
 	var nets []*NetStats
 	for name := range counters {
 		n := &NetStats{
@@ -35,7 +34,7 @@ func (c *Collector) discoverNets() {
 	}
 	// Stable order: loopback last, otherwise alphabetical.
 	sortNets(nets)
-	active := defaultRouteIface()
+	active := c.defaultRouteIface()
 	c.write(func(s *Stats) {
 		s.Nets = nets
 		s.ActiveNet = active
@@ -51,8 +50,8 @@ func (c *Collector) collectNets() {
 	}
 	c.netLast = now
 
-	counters := readNetDev()
-	active := defaultRouteIface()
+	counters := c.readNetDev()
+	active := c.defaultRouteIface()
 
 	// IP addresses change rarely but each refresh is a netlink round-trip per
 	// interface, so only refresh them every 5th tick (and on the first).
@@ -87,8 +86,9 @@ func (c *Collector) collectNets() {
 
 // defaultRouteIface returns the interface carrying the default route. Called by
 // the net collector goroutine so the UI never parses /proc/net/route itself.
-func defaultRouteIface() string {
-	data, err := os.ReadFile("/proc/net/route")
+func (c *Collector) defaultRouteIface() string {
+	data, keep, err := readInto("/proc/net/route", c.routeBuf)
+	c.routeBuf = keep
 	if err != nil {
 		return ""
 	}
@@ -123,28 +123,30 @@ func parseDefaultRoute(data []byte) string {
 	return best
 }
 
-// readNetDev returns interface -> [rxBytes, txBytes].
-func readNetDev() map[string][2]uint64 {
-	out := make(map[string][2]uint64)
-	f, err := os.Open("/proc/net/dev")
+// readNetDev returns interface -> [rxBytes, txBytes], reusing the collector's
+// buffer and map.
+func (c *Collector) readNetDev() map[string][2]uint64 {
+	out := c.netCounters
+	clear(out)
+	data, keep, err := readInto("/proc/net/dev", c.netBuf)
+	c.netBuf = keep
 	if err != nil {
 		return out
 	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := sc.Text()
-		i := strings.IndexByte(line, ':')
+	for len(data) > 0 {
+		var line []byte
+		line, data = nextLine(data)
+		i := bytes.IndexByte(line, ':')
 		if i < 0 {
 			continue // header lines
 		}
-		name := strings.TrimSpace(line[:i])
-		fields := strings.Fields(line[i+1:])
-		if len(fields) < 9 {
+		// rx bytes is field 0, tx bytes is field 8.
+		rx, tx := field(line[i+1:], 0), field(line[i+1:], 8)
+		if rx == nil || tx == nil {
 			continue
 		}
-		// rx bytes is field 0, tx bytes is field 8.
-		out[name] = [2]uint64{atou(fields[0]), atou(fields[8])}
+		name := string(bytes.TrimSpace(line[:i])) // reused as the map key after the first tick
+		out[name] = [2]uint64{parseUintBytes(rx), parseUintBytes(tx)}
 	}
 	return out
 }

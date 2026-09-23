@@ -1,3 +1,5 @@
+//go:build !noai
+
 package ui
 
 import (
@@ -35,9 +37,9 @@ type assistantView struct {
 	scroller   *gtk.ScrolledWindow
 	entry      *gtk.Entry
 	send       *gtk.Button
-	quickBtn   *gtk.MenuButton  // dropdown of saved quick prompts
-	quickPop   *gtk.Popover     // its content, rebuilt from settings on change
-	respText   strings.Builder  // accumulates the streaming reply
+	quickBtn   *gtk.MenuButton // dropdown of saved quick prompts
+	quickPop   *gtk.Popover    // its content, rebuilt from settings on change
+	respText   strings.Builder // accumulates the streaming reply
 
 	// Setup card: shown when Ollama is unreachable or the model isn't installed,
 	// so a fresh user is told exactly what to run instead of hitting a cryptic

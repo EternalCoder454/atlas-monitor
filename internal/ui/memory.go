@@ -12,17 +12,19 @@ import (
 type memView struct {
 	root      *gtk.ScrolledWindow
 	col       *stats.Collector
-	number    *gtk.Label
-	caption   *gtk.Label
+	number    *liveLabel
+	caption   *liveLabel
+	capBuf    []byte // "of N GiB in use", rebuilt without allocating
 	ramGraph  *graph.Graph
 	swapGraph *graph.Graph
 	breakdown *gtk.DrawingArea
 
 	// Current breakdown values (bytes), read by the draw func on the main thread.
 	bUsed, bCached, bFree, bTotal float64
+	lastBreakdown                 [4]float64 // last drawn values; skips redundant redraws
 
-	vTotal, vUsed, vCached, vAvail *gtk.Label
-	vSwapTotal, vSwapUsed          *gtk.Label
+	vTotal, vUsed, vCached, vAvail *liveLabel
+	vSwapTotal, vSwapUsed          *liveLabel
 }
 
 func newMemView(col *stats.Collector) *memView {
@@ -78,14 +80,18 @@ func (v *memView) Update() {
 		swapT, swapU = s.Mem.SwapTotal, s.Mem.SwapUsed
 	})
 
-	v.number.SetText(format.GiB(used))
-	v.caption.SetText("of " + format.GiB(total) + " in use")
-	v.vTotal.SetText(format.GiB(total))
-	v.vUsed.SetText(format.GiB(used))
-	v.vCached.SetText(format.GiB(cached))
-	v.vAvail.SetText(format.GiB(avail))
-	v.vSwapTotal.SetText(format.GiB(swapT))
-	v.vSwapUsed.SetText(format.GiB(swapU))
+	v.number.gib(used)
+	v.capBuf = append(v.capBuf[:0], "of "...)
+	v.capBuf = format.AppendGiB(v.capBuf, total)
+	v.capBuf = append(v.capBuf, " in use"...)
+	v.caption.commit(v.capBuf)
+
+	v.vTotal.gib(total)
+	v.vUsed.gib(used)
+	v.vCached.gib(cached)
+	v.vAvail.gib(avail)
+	v.vSwapTotal.gib(swapT)
+	v.vSwapUsed.gib(swapU)
 
 	// Breakdown: app-used | cached | free, summing to total.
 	appUsed := float64(total) - float64(free) - float64(cached)
@@ -93,7 +99,10 @@ func (v *memView) Update() {
 		appUsed = 0
 	}
 	v.bUsed, v.bCached, v.bFree, v.bTotal = appUsed, float64(cached), float64(free), float64(total)
-	v.breakdown.QueueDraw()
+	if next := [4]float64{v.bUsed, v.bCached, v.bFree, v.bTotal}; next != v.lastBreakdown {
+		v.lastBreakdown = next
+		v.breakdown.QueueDraw()
+	}
 
 	v.ramGraph.Refresh()
 	v.swapGraph.Refresh()
@@ -104,13 +113,14 @@ func (v *memView) drawBreakdown(cr *cairo.Context, w, h int) {
 		return
 	}
 	width, height := float64(w), float64(h)
-	segs := []struct {
-		val        float64
-		r, g, b    float64
+	// used: red, cached: yellow, free: green — matching memLegend below.
+	segs := [3]struct {
+		val     float64
+		r, g, b float64
 	}{
-		{v.bUsed, 0xe0 / 255.0, 0x1b / 255.0, 0x24 / 255.0},   // used: red
-		{v.bCached, 0xf5 / 255.0, 0xc2 / 255.0, 0x11 / 255.0}, // cached: yellow
-		{v.bFree, 0x2e / 255.0, 0xc2 / 255.0, 0x7e / 255.0},   // free: green
+		{v.bUsed, 0xe0 / 255.0, 0x1b / 255.0, 0x24 / 255.0},
+		{v.bCached, 0xf5 / 255.0, 0xc2 / 255.0, 0x11 / 255.0},
+		{v.bFree, 0x2e / 255.0, 0xc2 / 255.0, 0x7e / 255.0},
 	}
 	x := 0.0
 	for _, s := range segs {
