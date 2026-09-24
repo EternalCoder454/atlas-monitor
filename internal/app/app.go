@@ -3,7 +3,6 @@
 package app
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,6 +36,8 @@ type App struct {
 	aiClient *ai.Client
 	content  *ui.Window
 	win      *adw.ApplicationWindow
+	// updateOffered keeps the launch prompt to once per run.
+	updateOffered bool
 }
 
 // New creates the application. css is the embedded stylesheet contents and
@@ -141,6 +142,8 @@ func (a *App) activate() {
 	a.content.StartRefresh()
 	win.Present()
 
+	a.startUpdateCheck(win)
+
 	// Dev aid: ATLAS_OPEN_SETTINGS=1 opens the settings dialog at startup.
 	if os.Getenv("ATLAS_OPEN_SETTINGS") == "1" {
 		glib.TimeoutAdd(400, func() bool {
@@ -244,35 +247,12 @@ func (a *App) location() string {
 	return ""
 }
 
-// checkUpdate fetches origin and reports whether the given channel has commits
-// the local checkout does not. It changes nothing on disk, so the Settings
-// "Update" action can skip the rebuild/restart when already up to date.
+// checkUpdate adapts CheckUpdate to what the Settings dialog wants: a yes/no
+// and one line to show. The detail it drops — the version and the changelog —
+// is only needed by the prompt at launch.
 func (a *App) checkUpdate(channel string) (available bool, info string, err error) {
-	src := sourceDir()
-	if src == "" {
-		return false, "", fmt.Errorf("source location unknown — install with `make install`")
-	}
-	git := func(args ...string) (string, error) {
-		out, err := exec.Command("git", append([]string{"-C", src}, args...)...).Output()
-		return strings.TrimSpace(string(out)), err
-	}
-	if _, err := git("rev-parse", "--git-dir"); err != nil {
-		return false, "", fmt.Errorf("source is not a git checkout")
-	}
-	if _, err := git("fetch", "--quiet", "origin", channel); err != nil {
-		return false, "", fmt.Errorf("couldn't reach GitHub")
-	}
-	local, _ := git("rev-parse", "--short", "HEAD")
-	remote, _ := git("rev-parse", "--short", "origin/"+channel)
-	name := "Release"
-	if channel == "beta" {
-		name = "Beta"
-	}
-	// Up to date when origin/<channel> is already contained in HEAD.
-	if exec.Command("git", "-C", src, "merge-base", "--is-ancestor", "origin/"+channel, "HEAD").Run() == nil {
-		return false, fmt.Sprintf("Up to date on %s (%s)", name, local), nil
-	}
-	return true, fmt.Sprintf("%s update available: %s → %s", name, local, remote), nil
+	u, err := a.CheckUpdate(channel)
+	return u.Available, u.Summary, err
 }
 
 // loadCSS installs the embedded stylesheet for the default display.
@@ -317,3 +297,69 @@ func applyTextRendering(mode string) {
 // fontRenderingManual is GTK_FONT_RENDERING_MANUAL. The enum is not bound by
 // gotk4, and the property takes the integer value.
 const fontRenderingManual = 1
+
+// startUpdateCheck looks for a newer version once, shortly after the window is
+// up, and offers it.
+//
+// The check runs off the UI thread because it ends in a `git fetch`, which talks
+// to GitHub and can take seconds or hang on a bad connection; doing that on the
+// main loop would freeze the window before the user has seen it. It is delayed a
+// little so the app finishes drawing first, and it is silent about everything
+// except finding something: no dialog when up to date, none when offline, none
+// when Atlas was installed from a tarball and has no checkout to pull.
+func (a *App) startUpdateCheck(win *adw.ApplicationWindow) {
+	if !a.settings.UpdateCheck || a.updateOffered {
+		return
+	}
+	channel := a.settings.UpdateChannel
+	if channel != "main" && channel != "beta" {
+		channel = "main"
+	}
+	glib.TimeoutAdd(1500, func() bool {
+		go func() {
+			info, err := a.CheckUpdate(channel)
+			if err != nil || !info.Available {
+				return // nothing to say, and nothing worth interrupting for
+			}
+			glib.IdleAdd(func() { a.offerUpdate(win, info) })
+		}()
+		return false
+	})
+}
+
+// offerUpdate shows what is waiting and lets the user take it or leave it.
+func (a *App) offerUpdate(win *adw.ApplicationWindow, info UpdateInfo) {
+	if a.updateOffered {
+		return // once per run: an update prompt is not something to repeat
+	}
+	a.updateOffered = true
+
+	heading := "Update Found"
+	if info.Version != "" {
+		heading = "Update Found — v" + info.Version
+	}
+
+	body := "A newer version of Atlas Monitor is available."
+	if len(info.Changes) > 0 {
+		var b strings.Builder
+		b.WriteString("What's new:\n")
+		for _, c := range info.Changes {
+			b.WriteString("\n•  ")
+			b.WriteString(c)
+		}
+		body = b.String()
+	}
+
+	dlg := adw.NewAlertDialog(heading, body)
+	dlg.AddResponse("later", "Update Later")
+	dlg.AddResponse("now", "Update Now")
+	dlg.SetResponseAppearance("now", adw.ResponseSuggested)
+	dlg.SetDefaultResponse("now")
+	dlg.SetCloseResponse("later")
+	dlg.ConnectResponse(func(response string) {
+		if response == "now" {
+			a.onRestart()
+		}
+	})
+	dlg.Present(win)
+}

@@ -307,3 +307,36 @@ func TestSaveIsNotWorldReadable(t *testing.T) {
 		t.Errorf("after a second save settings.json is mode %#o", mode)
 	}
 }
+
+// TestUpdateCheckDefaultsOn covers the launch-time update check being on unless
+// the user turns it off. The Defaults-then-unmarshal pattern matters here: a
+// settings file written before this option existed has no key for it, and must
+// come back with the check enabled rather than with Go's zero value.
+func TestUpdateCheckDefaultsOn(t *testing.T) {
+	if !Defaults().UpdateCheck {
+		t.Error("Defaults has the update check off")
+	}
+
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "atlas-monitor"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	settings := filepath.Join(dir, "atlas-monitor", "settings.json")
+
+	// An older file, with no update_check key at all.
+	if err := os.WriteFile(settings, []byte(`{"refresh_seconds": 2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !Load().UpdateCheck {
+		t.Error("a settings file predating the option came back with the check off")
+	}
+
+	// An explicit false has to survive, or the switch would not stay off.
+	if err := os.WriteFile(settings, []byte(`{"update_check": false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if Load().UpdateCheck {
+		t.Error("an explicit update_check=false was ignored")
+	}
+}

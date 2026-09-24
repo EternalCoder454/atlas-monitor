@@ -313,7 +313,24 @@ func newAppPage(s *config.Settings, h SettingsHooks) *appPage {
 			fire(h.OnChange)
 		}
 	})
+	// Checking on launch is on by default: an update nobody hears about is not
+	// much use. It is one switch to stop, and stopping it leaves the manual
+	// Update button below working exactly as before.
+	autoCheck := adw.NewSwitchRow()
+	autoCheck.SetTitle("Check for updates on launch")
+	autoCheck.SetSubtitle("Asks GitHub once, shortly after Atlas opens, and only speaks up if there is something newer")
+	autoCheck.SetActive(s.UpdateCheck)
+	autoCheck.NotifyProperty("active", func() {
+		if s.UpdateCheck == autoCheck.Active() {
+			return
+		}
+		s.UpdateCheck = autoCheck.Active()
+		_ = config.Save(*s)
+		fire(h.OnChange)
+	})
+
 	updGroup.Add(channel)
+	updGroup.Add(autoCheck)
 	updGroup.Add(status)
 
 	update := adw.NewButtonRow()
