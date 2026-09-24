@@ -142,9 +142,14 @@ func hardwareICDs() []string {
 	return out
 }
 
+// drmVendorGlob locates the DRM cards' PCI vendor IDs. A variable so the tests
+// can point it at a synthetic tree — this machine's real hardware would only
+// ever exercise one branch of the ICD selection.
+var drmVendorGlob = "/sys/class/drm/card*/device/vendor"
+
 // drmVendors lists the PCI vendor IDs of the DRM cards present.
 func drmVendors() []string {
-	files, _ := filepath.Glob("/sys/class/drm/card*/device/vendor")
+	files, _ := filepath.Glob(drmVendorGlob)
 	var out []string
 	seen := map[string]bool{}
 	for _, f := range files {

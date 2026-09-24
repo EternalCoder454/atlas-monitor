@@ -193,5 +193,35 @@ func Save(s Settings) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path(), b, 0o644)
+	// Write to a sibling and rename over the target, so the settings file is
+	// never observed half-written. Atlas saves on window close, which is exactly
+	// when the process is most likely to be killed mid-write — and a truncated
+	// file reads back as no settings at all, silently resetting the window size,
+	// the last view and the refresh interval.
+	tmp := path() + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	// Flush before the rename: rename only orders the directory entry, so
+	// without this the new name can be visible while its contents are not.
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path()); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
