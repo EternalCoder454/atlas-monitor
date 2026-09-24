@@ -223,6 +223,7 @@ func newModelPromptPage(s *config.Settings, h SettingsHooks) *modelPromptPage {
 
 	reset := adw.NewButtonRow()
 	reset.SetTitle("Reset prompt to default")
+	reset.SetStartIconName("atlas-reset-symbolic")
 	reset.ConnectActivated(func() { p.prompt.Buffer().SetText(config.DefaultSystemPrompt) })
 	promptGroup.Add(reset)
 	p.page.Add(promptGroup)
@@ -335,7 +336,7 @@ func newAppPage(s *config.Settings, h SettingsHooks) *appPage {
 
 	update := adw.NewButtonRow()
 	update.SetTitle("Update")
-	update.SetStartIconName("software-update-available-symbolic")
+	update.SetStartIconName("atlas-update-symbolic")
 	update.AddCSSClass("suggested-action")
 	update.ConnectActivated(func() {
 		if h.CheckUpdate == nil {
@@ -480,7 +481,7 @@ func perfGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 
 	release := adw.NewButtonRow()
 	release.SetTitle("Release idle memory now")
-	release.SetStartIconName("user-trash-symbolic")
+	release.SetStartIconName("atlas-trash-symbolic")
 	release.ConnectActivated(func() {
 		sysmem.Release()
 		usage.SetSubtitle(selfMemory())

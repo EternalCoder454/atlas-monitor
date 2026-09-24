@@ -45,7 +45,7 @@ go build -trimpath -ldflags="-s -w" -o %{name} .
 install -Dm755 %{name}                       %{buildroot}%{_bindir}/%{name}
 install -Dm644 assets/style.css              %{buildroot}%{_datadir}/%{name}/style.css
 install -Dm644 assets/icon.svg               %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/com.atlas.Monitor.svg
-for icon in cpu memory disk gpu assistant; do
+for icon in cpu memory disk gpu assistant network wifi battery apps services settings prompts update trash reset; do
     install -Dm644 assets/icons/atlas-$icon-symbolic.svg \
         %{buildroot}%{_datadir}/icons/hicolor/scalable/actions/atlas-$icon-symbolic.svg
 done
@@ -57,7 +57,7 @@ sed 's|@BIN@|%{_bindir}/%{name}|g' assets/com.atlas.Monitor.desktop \
 desktop-file-validate %{buildroot}%{_datadir}/applications/com.atlas.Monitor.desktop
 
 %files
-%license LICENSE
+%license LICENSE NOTICE
 %doc README.md
 %{_bindir}/%{name}
 %{_datadir}/%{name}/

@@ -42,7 +42,7 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, ba
 
 	netExp := adw.NewExpanderRow()
 	netExp.SetTitle("Network")
-	netExp.SetIconName("network-wired-symbolic")
+	netExp.SetIconName("atlas-network-symbolic")
 	netRows := make(map[string]*adw.ActionRow)
 	for _, n := range nets {
 		netRows[n.Name] = appendSubRow(netExp, n.Label(), n.Name, "net:"+n.Name, onSelect)
@@ -53,7 +53,7 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, ba
 		sb.gpuVal = rowValue(appendRow(hw, "GPU", "atlas-gpu-symbolic", "gpu", onSelect))
 	}
 	if batteryAvail {
-		appendRow(hw, "Battery", "battery-symbolic", "power", onSelect)
+		appendRow(hw, "Battery", "atlas-battery-symbolic", "power", onSelect)
 	}
 	outer.Append(hw)
 
@@ -63,8 +63,8 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, ba
 	if withAI {
 		assistantRow = appendRow(sys, "Assistant", "atlas-assistant-symbolic", "assistant", onSelect)
 	}
-	appendRow(sys, "Apps", "view-app-grid-symbolic", "apps", onSelect)
-	appendRow(sys, "Services", "system-run-symbolic", "services", onSelect)
+	appendRow(sys, "Apps", "atlas-apps-symbolic", "apps", onSelect)
+	appendRow(sys, "Services", "atlas-services-symbolic", "services", onSelect)
 	outer.Append(sys)
 
 	// Default highlight on CPU.

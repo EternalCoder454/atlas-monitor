@@ -58,7 +58,7 @@ jobs:
           mkdir -p "dist/$name/assets"
           cp bin/atlas-monitor "dist/$name/"
           cp -r assets/style.css assets/icon.svg assets/icons assets/com.atlas.Monitor.desktop "dist/$name/assets/"
-          cp packaging/install.sh README.md LICENSE "dist/$name/"
+          cp packaging/install.sh README.md LICENSE NOTICE "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           ( cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256" )
 

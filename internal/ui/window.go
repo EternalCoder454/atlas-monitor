@@ -320,10 +320,10 @@ func (w *Window) updateNetIcon(active string) {
 	if w.netExp == nil {
 		return
 	}
-	icon := "network-wired-symbolic"
+	icon := "atlas-network-symbolic"
 	if active != "" {
 		if _, err := os.Stat("/sys/class/net/" + active + "/wireless"); err == nil {
-			icon = "network-wireless-symbolic"
+			icon = "atlas-wifi-symbolic"
 		}
 	}
 	w.netExp.SetIconName(icon)
