@@ -515,14 +515,35 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 		dim = nil
 	}
 
+	// GTK builds and discards list-item cells as the table changes, and each
+	// setup used to make a fresh GtkLabel. gotk4 keeps a reference to every
+	// GObject it hands a Go callback and never gives it back, so those labels —
+	// and the accessibility context GTK creates alongside each one — were never
+	// freed. Measured with heaptrack under heavy process churn: 4905 labels in
+	// 150 seconds on this page against zero on a page with no table, about a
+	// kilobyte each.
+	//
+	// The labels are pooled per column instead. A column only ever needs as many
+	// as GTK realises at once, so after the table has filled the pool no more
+	// are created, and the pinning stops growing with them. The pool is a plain
+	// slice in this closure: one per column, only ever touched from the UI
+	// thread.
+	var pool []*gtk.Label
+
 	factory := gtk.NewSignalListItemFactory()
 	factory.ConnectSetup(func(obj *coreglib.Object) {
 		cell := obj.Cast().(*gtk.ColumnViewCell)
-		label := gtk.NewLabel("")
-		label.SetXAlign(float32(xalign))
-		label.SetEllipsize(3) // PANGO_ELLIPSIZE_END
-		if numeric {
-			label.AddCSSClass("am-num")
+		var label *gtk.Label
+		if n := len(pool); n > 0 {
+			label, pool = pool[n-1], pool[:n-1]
+			label.SetText("")
+		} else {
+			label = gtk.NewLabel("")
+			label.SetXAlign(float32(xalign))
+			label.SetEllipsize(3) // PANGO_ELLIPSIZE_END
+			if numeric {
+				label.AddCSSClass("am-num")
+			}
 		}
 		cell.SetChild(label)
 		c := &procCell{label: label, render: render, dim: dim}
@@ -548,6 +569,15 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 		cell := obj.Cast().(*gtk.ColumnViewCell)
 		if c := v.cells[cell.Native()]; c != nil && c.label != nil {
 			delete(v.byLabel, c.label.Object.Native())
+			// Take the label off the cell before the cell goes, and keep it for
+			// the next one. Without the unparent GTK would complain about a
+			// widget with a parent being added elsewhere.
+			cell.SetChild(nil)
+			if c.dimmed {
+				c.label.RemoveCSSClass("am-zero")
+				c.dimmed = false
+			}
+			pool = append(pool, c.label)
 		}
 		delete(v.cells, cell.Native())
 	})
