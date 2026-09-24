@@ -244,8 +244,13 @@ func TestDiskSpaceAgreesWithDF(t *testing.T) {
 	}
 }
 
-// TestRootDiskIdentified checks exactly one disk is flagged as hosting /, since
-// the Storage page sorts on it and the sidebar names it the primary drive.
+// TestRootDiskIdentified checks the disk hosting / is singled out, since the
+// Storage page sorts on it and the sidebar names it the primary drive.
+//
+// Whether any disk can be flagged at all depends on the machine: a container
+// usually has / on an overlayfs with no /dev/ device behind it, so there is
+// nothing to flag and flagging something would be the bug. The strict check
+// therefore runs only where /proc/mounts really does show a block device at /.
 func TestRootDiskIdentified(t *testing.T) {
 	var roots, total int
 	var name string
@@ -261,11 +266,38 @@ func TestRootDiskIdentified(t *testing.T) {
 	if total == 0 {
 		t.Skip("no disks discovered")
 	}
+	// More than one primary drive is wrong everywhere.
+	if roots > 1 {
+		t.Fatalf("%d disks flagged IsRoot, want at most 1 (of %d disks)", roots, total)
+	}
+	if !blockDeviceAtRoot(t) {
+		if roots != 0 {
+			t.Errorf("%q flagged IsRoot, but no block device is mounted at /", name)
+		}
+		t.Skip("/ is not backed by a /dev/ device (overlayfs?), nothing to identify")
+	}
 	if roots != 1 {
 		t.Errorf("%d disks flagged IsRoot, want exactly 1 (of %d disks)", roots, total)
 	} else {
 		t.Logf("root disk is %s (of %d disks)", name, total)
 	}
+}
+
+// blockDeviceAtRoot reports whether /proc/mounts shows a /dev/ device mounted at
+// /, which is what discoverDisks needs in order to flag one.
+func blockDeviceAtRoot(t *testing.T) bool {
+	t.Helper()
+	data, err := os.ReadFile("/proc/mounts")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 2 && f[1] == "/" && strings.HasPrefix(f[0], "/dev/") {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------- network
