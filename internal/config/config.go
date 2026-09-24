@@ -89,6 +89,7 @@ type Settings struct {
 	Model          string `json:"model"`
 	TextRendering  string `json:"text_rendering"`
 	UpdateCheck    bool   `json:"update_check"`
+	ShowIOColumns  bool   `json:"show_io_columns"`
 	AssistantTitle string `json:"assistant_title"` // page header / chat label; sidebar stays "Assistant"
 	SystemPrompt   string `json:"system_prompt"`
 	UpdateChannel  string `json:"update_channel"` // "main" (Release) or "beta" (newest features/fixes)

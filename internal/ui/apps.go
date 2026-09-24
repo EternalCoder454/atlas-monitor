@@ -18,6 +18,7 @@ import (
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
+	"atlas-monitor/internal/config"
 	"atlas-monitor/internal/format"
 	"atlas-monitor/internal/process"
 )
@@ -235,7 +236,7 @@ type appsView struct {
 	targetStart uint64
 }
 
-func newAppsView(proc *process.Collector) *appsView {
+func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settings) *appsView {
 	v := &appsView{
 		proc:    proc,
 		byPID:   make(map[int]*procRow),
@@ -283,9 +284,14 @@ func newAppsView(proc *process.Collector) *appsView {
 		v.needRebuild = true
 		v.Update()
 	})
+	colBtn := gtk.NewMenuButton()
+	colBtn.SetLabel("Columns")
+	colBtn.SetTooltipText("Choose which columns the table shows")
+
 	toolbar.Append(searchEntry)
 	toolbar.Append(groupBtn)
 	toolbar.Append(kernelBtn)
+	toolbar.Append(colBtn)
 	v.root.Append(toolbar)
 
 	// Model chain: base -> filter (search) -> sort (column headers) -> selection.
@@ -300,7 +306,8 @@ func newAppsView(proc *process.Collector) *appsView {
 
 	cv.AppendColumn(v.textColumn("Name", true, 0,
 		func(dst []byte, p *process.Proc) []byte { return append(dst, p.Name...) },
-		func(a, b *process.Proc) bool { return lessFold(a.Name, b.Name) }))
+		func(a, b *process.Proc) bool { return lessFold(a.Name, b.Name) },
+		colOpts{minChars: 16}))
 	cv.AppendColumn(v.textColumn("PID", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return strconv.AppendInt(dst, int64(p.PID), 10) },
 		func(a, b *process.Proc) bool { return a.PID < b.PID }))
@@ -312,8 +319,10 @@ func newAppsView(proc *process.Collector) *appsView {
 	cv.AppendColumn(v.textColumn("RAM", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendBytes(dst, p.RSS) },
 		func(a, b *process.Proc) bool { return a.RSS < b.RSS }))
-	cv.AppendColumn(v.textColumn("GPU %", false, 1, appendGPU,
-		func(a, b *process.Proc) bool { return a.GPU < b.GPU }))
+	if gpuAvail {
+		cv.AppendColumn(v.textColumn("GPU %", false, 1, appendGPU,
+			func(a, b *process.Proc) bool { return a.GPU < b.GPU }))
+	}
 	// Sorted by the underlying score, not the label, so the order runs
 	// Very low → High rather than alphabetically.
 	cv.AppendColumn(v.textColumn("Power", false, 0,
@@ -326,12 +335,49 @@ func newAppsView(proc *process.Collector) *appsView {
 	cv.AppendColumn(v.textColumn("Net ≈ Out", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendRate(dst, p.NetOut) },
 		func(a, b *process.Proc) bool { return a.NetOut < b.NetOut }))
-	cv.AppendColumn(v.textColumn("Disk Read", false, 1,
+	// Per-process disk figures count blocks that actually reach the drive, and
+	// on any machine with room for a page cache that is almost nothing: two
+	// columns of "0 B/s" holding width that the name column needed. They are
+	// still there for whoever wants them, behind the Columns button.
+	readCol := v.textColumn("Disk Read", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendRate(dst, p.DiskRead) },
-		func(a, b *process.Proc) bool { return a.DiskRead < b.DiskRead }))
-	cv.AppendColumn(v.textColumn("Disk Write", false, 1,
+		func(a, b *process.Proc) bool { return a.DiskRead < b.DiskRead })
+	writeCol := v.textColumn("Disk Write", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendRate(dst, p.DiskWrite) },
-		func(a, b *process.Proc) bool { return a.DiskWrite < b.DiskWrite }))
+		func(a, b *process.Proc) bool { return a.DiskWrite < b.DiskWrite })
+	readCol.SetVisible(settings.ShowIOColumns)
+	writeCol.SetVisible(settings.ShowIOColumns)
+	cv.AppendColumn(readCol)
+	cv.AppendColumn(writeCol)
+
+	ioChk := gtk.NewCheckButtonWithLabel("Disk read and write")
+	ioChk.SetActive(settings.ShowIOColumns)
+	ioChk.ConnectToggled(func() {
+		on := ioChk.Active()
+		if on == settings.ShowIOColumns {
+			return
+		}
+		readCol.SetVisible(on)
+		writeCol.SetVisible(on)
+		settings.ShowIOColumns = on
+		_ = config.Save(*settings)
+	})
+	ioNote := gtk.NewLabel("Counts only reads and writes that reach the drive, so most\nprograms sit at zero whatever they are doing.")
+	ioNote.SetXAlign(0)
+	ioNote.AddCSSClass("dim-label")
+	ioNote.AddCSSClass("caption")
+
+	colBox := gtk.NewBox(gtk.OrientationVertical, 6)
+	colBox.SetMarginTop(10)
+	colBox.SetMarginBottom(10)
+	colBox.SetMarginStart(12)
+	colBox.SetMarginEnd(12)
+	colBox.Append(ioChk)
+	colBox.Append(ioNote)
+
+	colPop := gtk.NewPopover()
+	colPop.SetChild(colBox)
+	colBtn.SetPopover(colPop)
 
 	sortModel := gtk.NewSortListModel(filterModel, cv.Sorter())
 	cv.SetModel(gtk.NewNoSelection(sortModel))
@@ -582,6 +628,14 @@ type colOpts struct {
 	dim func([]byte) bool
 	// heat grades a reading as worth noticing. Only the CPU column sets it.
 	heat func(*process.Proc) int
+	// minChars is a floor on the column's width, in characters.
+	//
+	// Every cell label ellipsises, which means its minimum width is next to
+	// nothing, which means GTK squeezes it before any column whose content has
+	// a natural size. The name is the widest column and the only one that
+	// expands, so it was always the one that collapsed — a table of "electr…"
+	// and "youtu…" beside four columns of zeroes with room to spare.
+	minChars int
 }
 
 func (v *appsView) textColumn(title string, expand bool, xalign float64,
@@ -623,7 +677,10 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 		} else {
 			label = gtk.NewLabel("")
 			label.SetXAlign(float32(xalign))
-			label.SetEllipsize(3) // PANGO_ELLIPSIZE_END
+			label.SetEllipsize(3)
+			if o.minChars > 0 {
+				label.SetWidthChars(o.minChars)
+			} // PANGO_ELLIPSIZE_END
 			if numeric {
 				label.AddCSSClass("am-num")
 			}

@@ -117,7 +117,7 @@ func (w *Window) Build() gtk.Widgetter {
 			return a
 		})
 	}
-	w.addView("apps", func() View { return newAppsView(w.proc) })
+	w.addView("apps", func() View { return newAppsView(w.proc, gpuAvail, w.settings) })
 	w.addView("services", func() View { return newServicesView() })
 
 	w.netStable = make([]string, len(nets))
