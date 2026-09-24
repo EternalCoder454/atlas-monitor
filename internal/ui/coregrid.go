@@ -50,7 +50,14 @@ func newCoreGrid(n int) *coreGrid {
 	for i := range g.labels {
 		g.labels[i] = fmt.Sprintf("Core %d", i)
 	}
+	// Seeded to match the zeroed usages above, because set() only writes a
+	// label when a reading changes: a core that has been idle since the page
+	// opened never changes, and would otherwise sit there with no figure at all
+	// while its busier neighbours were labelled.
 	g.pct = make([]string, n)
+	for i := range g.pct {
+		g.pct[i] = "0%"
+	}
 	rows := (n + g.cols - 1) / g.cols
 	g.SetContentHeight(rows * coreRowHeight)
 	g.SetHExpand(true)
