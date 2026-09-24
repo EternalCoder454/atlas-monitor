@@ -17,6 +17,8 @@ type diskView struct {
 	readGraph  *graph.Graph
 	writeGraph *graph.Graph
 	capacity   *capacityBar
+	capSection *gtk.Box
+	capNote    *gtk.Label
 	capUsedDot *colorDot
 	capUsed    *gtk.Label
 	capFree    *gtk.Label
@@ -67,15 +69,31 @@ func newDiskView(col *stats.Collector, disk *stats.DiskStats) *diskView {
 	// page to find out. Throughput matters less often and reads below.
 	if !isSwap {
 		box.Append(sectionTitle("CAPACITY"))
+		v.capSection = gtk.NewBox(gtk.OrientationVertical, 0)
 		v.capacity = newCapacityBar(24)
-		box.Append(v.capacity)
+		v.capSection.Append(v.capacity)
 		v.capUsed = gtk.NewLabel("")
 		v.capFree = gtk.NewLabel("")
 		v.capUsedDot = newColorDot(graph.ColorCPU, 0.95)
-		box.Append(legendRow(
+		v.capSection.Append(legendRow(
 			legendEntry(v.capUsedDot, v.capUsed),
 			legendEntry(newColorDot(graph.ColorFree, 0.30), v.capFree),
 		))
+		box.Append(v.capSection)
+
+		// A drive with no mounted filesystem has no usage to report. Drawn as
+		// numbers it came out as "0 B used · 0 B free" under an empty bar,
+		// which reads as an empty disk, or a broken sensor, rather than as a
+		// question Atlas cannot answer. The throughput below is still real —
+		// the kernel counts blocks whether or not anything is mounted — so only
+		// this section stands down.
+		v.capNote = gtk.NewLabel("Not mounted, so there is no usage to show. Mount the drive in your " +
+			"file manager and its capacity will appear here.")
+		v.capNote.AddCSSClass("am-subtle")
+		v.capNote.SetWrap(true)
+		v.capNote.SetXAlign(0)
+		v.capNote.SetVisible(false)
+		box.Append(v.capNote)
 	}
 
 	box.Append(sectionTitle("READ SPEED"))
@@ -111,14 +129,22 @@ func (v *diskView) Update() {
 		rTotal, wTotal = v.disk.ReadTotal, v.disk.WriteTotal
 		rRate, wRate = v.disk.ReadRate, v.disk.WriteRate
 	})
-	v.vUsed.bytesVal(usedBytes)
-	v.vFree.bytesVal(free)
-	if v.capacity != nil {
+	switch {
+	case v.capacity == nil: // swap: no filesystem, and none expected
+		v.vUsed.bytesVal(usedBytes)
+		v.vFree.bytesVal(free)
+	case usedBytes+free == 0: // nothing mounted, so nothing to measure
+		v.capSection.SetVisible(false)
+		v.capNote.SetVisible(true)
+		v.vUsed.text("—")
+		v.vFree.text("—")
+	default:
+		v.capSection.SetVisible(true)
+		v.capNote.SetVisible(false)
+		v.vUsed.bytesVal(usedBytes)
+		v.vFree.bytesVal(free)
 		total := float64(usedBytes + free)
-		frac := 0.0
-		if total > 0 {
-			frac = float64(usedBytes) / total
-		}
+		frac := float64(usedBytes) / total
 		used := capacityColor(frac)
 		v.capacity.set(total,
 			capSeg{float64(usedBytes), used, 0.95},
