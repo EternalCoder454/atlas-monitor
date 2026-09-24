@@ -2,7 +2,7 @@
 # for the Go module cache, so enable it on the COPR project
 # (`copr-cli modify --enable-net on`) or run rpmbuild with modules pre-fetched.
 Name:           atlas-monitor
-Version:        %{?_version}%{!?_version:0.7.0}
+Version:        %{?_version}%{!?_version:0.8.0}
 Release:        1%{?dist}
 Summary:        Lightweight system monitor for GNOME — CPU, memory, disk, network, GPU
 
@@ -66,6 +66,13 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/com.atlas.Monitor.des
 %{_datadir}/icons/hicolor/scalable/actions/atlas-*-symbolic.svg
 
 %changelog
+* Thu Sep 24 2026 EternalHell <77252745+EternalCoder454@users.noreply.github.com> - 0.8.0-1
+- Fix a memory leak on the Apps page that grew about a megabyte a minute
+- Launching Atlas twice no longer builds a second app inside the first
+- Text now rasterises the way the desktop asks, fixing soft text at 1080p
+- Per-core readings, a capacity bar on Storage, live figures in the sidebar
+- Idle readings in the process table are dimmed so activity stands out
+
 * Wed Sep 24 2026 EternalHell <77252745+EternalCoder454@users.noreply.github.com> - 0.7.0-1
 - Halve the CPU and cut read syscalls by two thirds in the collectors
 
