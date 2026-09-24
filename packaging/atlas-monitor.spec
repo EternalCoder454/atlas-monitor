@@ -2,7 +2,7 @@
 # for the Go module cache, so enable it on the COPR project
 # (`copr-cli modify --enable-net on`) or run rpmbuild with modules pre-fetched.
 Name:           atlas-monitor
-Version:        %{?_version}%{!?_version:0.8.0}
+Version:        %{?_version}%{!?_version:0.8.1}
 Release:        1%{?dist}
 Summary:        Lightweight system monitor for GNOME — CPU, memory, disk, network, GPU
 
@@ -66,6 +66,12 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/com.atlas.Monitor.des
 %{_datadir}/icons/hicolor/scalable/actions/atlas-*-symbolic.svg
 
 %changelog
+* Thu Sep 24 2026 EternalHell <77252745+EternalCoder454@users.noreply.github.com> - 0.8.1-1
+- End Task can no longer signal a process that merely reused the PID
+- The updater no longer treats its own checkout path as shell syntax
+- Settings warns when the assistant would send this machine's details off it
+- Logs moved out of shared /tmp paths; the settings file is no longer world readable
+
 * Thu Sep 24 2026 EternalHell <77252745+EternalCoder454@users.noreply.github.com> - 0.8.0-1
 - Fix a memory leak on the Apps page that grew about a megabyte a minute
 - Launching Atlas twice no longer builds a second app inside the first
