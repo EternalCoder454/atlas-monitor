@@ -135,18 +135,26 @@ func (g *Graph) draw(area *gtk.DrawingArea, cr *cairo.Context, w, h int) {
 		}
 		cr.LineTo(px(n-1), height)
 		cr.ClosePath()
+		// The palette was chosen against a dark background. On a light one the
+		// paler colours — disk read's yellow worst of all — leave a 2px line
+		// that all but disappears against white, so they are taken down a shade
+		// when the theme is light. Dark mode keeps the colour it was drawn for.
+		lr, lg, lb := g.color.R, g.color.G, g.color.B
+		if (fr+fg+fb)/3 < 0.5 { // dark text means a light background
+			lr, lg, lb = lr*0.72, lg*0.72, lb*0.72
+		}
 		if grad, err := cairo.NewPatternLinear(0, 0, 0, height); err == nil {
 			grad.AddColorStopRGBA(0, g.color.R, g.color.G, g.color.B, 0.34)
 			grad.AddColorStopRGBA(1, g.color.R, g.color.G, g.color.B, 0.02)
 			cr.SetSource(grad)
 			cr.Fill()
 		} else {
-			cr.SetSourceRGBA(g.color.R, g.color.G, g.color.B, 0.20)
+			cr.SetSourceRGBA(lr, lg, lb, 0.20)
 			cr.Fill()
 		}
 
 		// Solid line on top.
-		cr.SetSourceRGBA(g.color.R, g.color.G, g.color.B, 1)
+		cr.SetSourceRGBA(lr, lg, lb, 1)
 		cr.SetLineWidth(2)
 		cr.MoveTo(px(0), py(g.scratch[0]))
 		for i := 1; i < n; i++ {
@@ -184,23 +192,32 @@ func (g *Graph) draw(area *gtk.DrawingArea, cr *cairo.Context, w, h int) {
 	cr.MoveTo(width-float64(tw)-8, 5)
 	pangocairo.ShowLayout(cr, g.valueLayout)
 
+	// What the top of the chart is worth, under the current reading.
+	//
 	// On an auto-scaled chart the vertical axis means nothing on its own: the
-	// same picture describes kilobytes and gigabytes. The highest reading still
-	// on screen says what the height is worth, and gives the empty space above
-	// an idle line something to say. A percentage chart needs no such note —
-	// its axis is always nought to a hundred.
-	if g.mode.autoScaled() && n > 0 {
+	// same picture describes kilobytes and gigabytes, so the highest reading
+	// still on screen says what the height stands for. A percentage chart is
+	// pinned to a hundred — but nothing on screen said so, and sitting beside
+	// charts that do rescale, a line along the bottom could as easily have been
+	// read as a machine at full tilt on a chart scaled to itself.
+	ceiling := ""
+	switch {
+	case g.mode.autoScaled() && n > 0:
 		if peak := g.rb.Max(); peak > 0 {
-			text := "peak " + string(g.formatInto(peak))
-			if text != g.shownPeak {
-				g.peakLayout.SetText(text)
-				g.shownPeak = text
-			}
-			pw, _ := g.peakLayout.PixelSize()
-			cr.SetSourceRGBA(fr, fg, fb, 0.45)
-			cr.MoveTo(width-float64(pw)-8, 5+float64(th))
-			pangocairo.ShowLayout(cr, g.peakLayout)
+			ceiling = "peak " + string(g.formatInto(peak))
 		}
+	case g.mode == Percent:
+		ceiling = "100%"
+	}
+	if ceiling != "" {
+		if ceiling != g.shownPeak {
+			g.peakLayout.SetText(ceiling)
+			g.shownPeak = ceiling
+		}
+		pw, _ := g.peakLayout.PixelSize()
+		cr.SetSourceRGBA(fr, fg, fb, 0.45)
+		cr.MoveTo(width-float64(pw)-8, 5+float64(th))
+		pangocairo.ShowLayout(cr, g.peakLayout)
 	}
 }
 
