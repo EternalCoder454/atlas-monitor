@@ -30,6 +30,7 @@ map=(
     cpu:cpu
     memory:memory
     disk:disk
+    gpu:gpu
     assistant:assistant
     ethernet:network
     wifi:wifi
