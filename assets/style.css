@@ -91,6 +91,18 @@
   font-feature-settings: "tnum" 1;
 }
 
+/* A busy process, marked so it can be found at a glance. The colours are the
+   theme's own warning and error, kept faint: this is a hint on a dense table,
+   not an alarm. Thresholds are per core — see cpuHeat. */
+.am-warm {
+  color: @warning_color;
+}
+
+.am-hot {
+  color: @error_color;
+  font-weight: bold;
+}
+
 /* A reading of zero is still worth showing — it says the collector is working —
    but it should not compete with the rows that are actually doing something. */
 .am-zero {

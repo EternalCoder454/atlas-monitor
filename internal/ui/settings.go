@@ -203,8 +203,8 @@ func newModelPromptPage(s *config.Settings, h SettingsHooks) *modelPromptPage {
 
 	promptGroup := adw.NewPreferencesGroup()
 	promptGroup.SetTitle("System prompt")
-	promptGroup.SetDescription("Instructions sent to the model before the live system data (which is always " +
-		"appended automatically). Edit this to change how the assistant behaves.")
+	promptGroup.SetDescription("Sets how the assistant behaves. Sent to the model ahead of the live " +
+		"system data, which is always attached for you.")
 
 	p.prompt = gtk.NewTextView()
 	p.prompt.SetWrapMode(gtk.WrapWordChar)
@@ -429,7 +429,7 @@ func perfGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 		}
 	}
 	text := adw.NewComboRow()
-	text.SetTitle("Text")
+	text.SetTitle("Font rendering")
 	text.SetSubtitle(gfx.TextModes[textSel].Detail)
 	text.SetModel(gtk.NewStringList(textLabels))
 	text.SetSelected(uint(textSel))

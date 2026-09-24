@@ -75,6 +75,13 @@ type procCell struct {
 	// the CSS class is only touched when it changes.
 	dim    func([]byte) bool
 	dimmed bool
+
+	// heat marks a reading as worth noticing. Dimming answers "which rows can I
+	// ignore"; this answers the opposite question, which is the one you open the
+	// page to ask. Only the CPU column uses it: it is the one column with a
+	// scale that means the same thing on every machine.
+	heat   func(*process.Proc) int
+	heated int
 }
 
 // refresh re-renders the cell, touching GTK only when the text really changed.
@@ -98,6 +105,55 @@ func (c *procCell) refresh() {
 				c.label.RemoveCSSClass("am-zero")
 			}
 		}
+	}
+	if c.heat != nil {
+		if h := c.heat(&c.row.proc); h != c.heated {
+			for _, cls := range heatClasses {
+				c.label.RemoveCSSClass(cls)
+			}
+			if h > 0 && h <= len(heatClasses) {
+				c.label.AddCSSClass(heatClasses[h-1])
+			}
+			c.heated = h
+		}
+	}
+}
+
+// heatClasses are the styles for a busy reading, in increasing order.
+var heatClasses = []string{"am-warm", "am-hot"}
+
+// cpuHeat grades a process's CPU share. The thresholds are per core, matching
+// what the column shows: a thread pinned to one core reads 100 whatever the
+// machine has. Below a quarter of a core nothing is marked, because on a busy
+// desktop that would mark half the table and mean nothing.
+func cpuHeat(p *process.Proc) int {
+	switch {
+	case p.CPU >= 60:
+		return 2
+	case p.CPU >= 25:
+		return 1
+	}
+	return 0
+}
+
+// resortActiveColumn asks the column currently being sorted on to compare its
+// rows again. Nothing happens when the table is unsorted.
+func (v *appsView) resortActiveColumn() {
+	if v.columnView == nil {
+		return
+	}
+	// ColumnView.Sorter returns the base type; the concrete object is the
+	// column-view sorter that knows which column is primary.
+	cvs, ok := v.columnView.Sorter().Cast().(*gtk.ColumnViewSorter)
+	if !ok || cvs == nil {
+		return
+	}
+	col := cvs.PrimarySortColumn()
+	if col == nil {
+		return
+	}
+	if so := v.sortFor[col]; so != nil {
+		so.Changed(gtk.SorterChangeDifferent)
 	}
 }
 
@@ -129,6 +185,13 @@ type appsView struct {
 	byName map[string]*procRow
 	order  []*procRow
 	gen    uint64
+
+	// sortFor maps a column to its comparer. The table is sorted by GTK, which
+	// re-sorts when the model changes — but the rows are mutated in place, so
+	// nothing tells it the numbers moved. Without a nudge the order is whatever
+	// it was when the rows were first added, which meant a table headed "CPU %"
+	// that never actually put the busy process at the top.
+	sortFor map[*gtk.ColumnViewColumn]*gtk.Sorter
 
 	// free holds rows whose process has exited. They stay in the list model and
 	// are reused for the next process that appears, so the model's item set only
@@ -178,6 +241,7 @@ func newAppsView(proc *process.Collector) *appsView {
 		byPID:   make(map[int]*procRow),
 		byName:  make(map[string]*procRow),
 		cells:   make(map[uintptr]*procCell),
+		sortFor: make(map[*gtk.ColumnViewColumn]*gtk.Sorter),
 		byLabel: make(map[uintptr]*procCell),
 		groups:  make(map[string]int),
 	}
@@ -242,7 +306,8 @@ func newAppsView(proc *process.Collector) *appsView {
 		func(a, b *process.Proc) bool { return a.PID < b.PID }))
 	cpuCol := v.textColumn("CPU %", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendPercent1(dst, p.CPU) },
-		func(a, b *process.Proc) bool { return a.CPU < b.CPU })
+		func(a, b *process.Proc) bool { return a.CPU < b.CPU },
+		colOpts{heat: cpuHeat})
 	cv.AppendColumn(cpuCol)
 	cv.AppendColumn(v.textColumn("RAM", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendBytes(dst, p.RSS) },
@@ -254,7 +319,7 @@ func newAppsView(proc *process.Collector) *appsView {
 	cv.AppendColumn(v.textColumn("Power", false, 0,
 		func(dst []byte, p *process.Proc) []byte { return append(dst, p.Impact().String()...) },
 		func(a, b *process.Proc) bool { return a.PowerScore() < b.PowerScore() },
-		func(b []byte) bool { return string(b) == process.ImpactVeryLow.String() }))
+		colOpts{dim: func(b []byte) bool { return string(b) == process.ImpactVeryLow.String() }}))
 	cv.AppendColumn(v.textColumn("Net ≈ In", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendRate(dst, p.NetIn) },
 		func(a, b *process.Proc) bool { return a.NetIn < b.NetIn }))
@@ -380,6 +445,16 @@ func (v *appsView) applyRows(snap []process.Proc) {
 	v.appended = toAppend[:0] // keep the buffers for the next tick
 	v.pending = pending[:0]
 
+	// Tell the sorter the readings moved. Every row's values are rewritten in
+	// place each tick and GTK has no way to know, so without this the order
+	// never changes after the rows are first added — a table headed "CPU %"
+	// that never put the busy process at the top.
+	//
+	// Only the column actually being sorted on is nudged. Nudging all ten made
+	// GTK re-sort the whole table once per column per tick, which measured at
+	// half again the page's cost for nine sorts nobody asked for.
+	v.resortActiveColumn()
+
 	// The filter decides visibility from row.live, which GTK cannot see change,
 	// so a row appearing or retiring has to be announced — but only if the
 	// visible set really is different now. On a machine with busy process churn
@@ -500,19 +575,27 @@ func (v *appsView) matchesRow(r *procRow) bool {
 // right-aligned column is a numeric one, which is what decides both the tabular
 // figures and the dimming of idle readings; dimWhen overrides that test for
 // columns whose "nothing happening" value is not a zero.
+// colOpts are the behaviours only some columns want.
+type colOpts struct {
+	// dim overrides the default test for an uninteresting reading, for a column
+	// whose quiet value is not a zero.
+	dim func([]byte) bool
+	// heat grades a reading as worth noticing. Only the CPU column sets it.
+	heat func(*process.Proc) int
+}
+
 func (v *appsView) textColumn(title string, expand bool, xalign float64,
 	render renderFunc, less func(a, b *process.Proc) bool,
-	dimWhen ...func([]byte) bool) *gtk.ColumnViewColumn {
+	opt ...colOpts) *gtk.ColumnViewColumn {
 
+	var o colOpts
+	if len(opt) > 0 {
+		o = opt[0]
+	}
 	numeric := xalign == 1
-	dim := func([]byte) bool { return false }
-	switch {
-	case len(dimWhen) > 0 && dimWhen[0] != nil:
-		dim = dimWhen[0]
-	case numeric:
+	dim := o.dim
+	if dim == nil && numeric {
 		dim = isIdleReading
-	default:
-		dim = nil
 	}
 
 	// GTK builds and discards list-item cells as the table changes, and each
@@ -546,7 +629,7 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 			}
 		}
 		cell.SetChild(label)
-		c := &procCell{label: label, render: render, dim: dim}
+		c := &procCell{label: label, render: render, dim: dim, heat: o.heat}
 		v.cells[cell.Native()] = c
 		v.byLabel[label.Object.Native()] = c
 	})
@@ -586,8 +669,11 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 	col.SetExpand(expand)
 	col.SetResizable(true)
 
-	// Sorting runs only when the user changes the sort or the process set
-	// changes — never every tick — so the Take() wrappers here are not a hot path.
+	// This runs on every tick now, because the rows' values change in place and
+	// the sorter has to be told (see applyRows). The Take() wrappers below are
+	// therefore a warm path: they are safe because the set of row objects is
+	// bounded — rows are recycled rather than replaced — so the references gotk4
+	// keeps on them do not accumulate.
 	sorter := gtk.NewCustomSorter(func(a, b unsafe.Pointer) int {
 		ra := gioutil.ObjectValue[*procRow](coreglib.Take(a))
 		rb := gioutil.ObjectValue[*procRow](coreglib.Take(b))
@@ -601,6 +687,7 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 		}
 	})
 	col.SetSorter(&sorter.Sorter)
+	v.sortFor[col] = &sorter.Sorter
 	return col
 }
 
