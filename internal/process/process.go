@@ -450,6 +450,12 @@ func (c *Collector) readStat(pid int, out *statLine) bool {
 	if b == nil {
 		return false
 	}
+	return parseStatLine(b, out)
+}
+
+// parseStatLine is the parsing half of readStat, split out so it can be fed
+// malformed input directly — see FuzzParseStatLine. out.name aliases b.
+func parseStatLine(b []byte, out *statLine) bool {
 	// comm is parenthesised and may contain spaces; split after the last ')'.
 	lp := bytes.IndexByte(b, '(')
 	rp := bytes.LastIndexByte(b, ')')

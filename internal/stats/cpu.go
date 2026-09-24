@@ -186,6 +186,15 @@ func (c *Collector) collectCPU() {
 	})
 }
 
+// maxCore bounds the core number a "cpuN" line may carry. The parser adds
+// digits without an overflow check — that is the point of it, no allocation and
+// no strconv — so a line with an absurd number of digits would wrap the value
+// and, cast to int, could come out negative, which collectCPU would read as the
+// aggregate line and use to overwrite the whole-CPU figure. No kernel builds
+// with anything near this many CPUs (CONFIG_NR_CPUS tops out in the thousands),
+// so rejecting the line is the right answer.
+const maxCore = 1 << 20
+
 // parseCPUStatLine parses one "cpu..." line of /proc/stat. idle folds in iowait
 // (column 4), matching the historical behaviour; total is the sum of all
 // columns. core is -1 for the aggregate line and the core number otherwise, so
@@ -212,7 +221,7 @@ func parseCPUStatLine(line []byte) (core int, idle, total uint64, ok bool) {
 			}
 			if rest := name[len(cpuPrefix):]; len(rest) > 0 {
 				n, valid := sysfs.ParseUint(rest)
-				if !valid {
+				if !valid || n > maxCore {
 					return -1, 0, 0, false
 				}
 				core = int(n)

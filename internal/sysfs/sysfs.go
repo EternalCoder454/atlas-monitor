@@ -92,12 +92,18 @@ func (f *File) Bytes() ([]byte, bool) {
 }
 
 // Uint re-reads the file as an unsigned integer.
+//
+// The contents are trimmed first, which matters for the leading space: ParseUint
+// stops at the first non-digit, so without the trim an attribute written as
+// " 42" would read as no value at all and the figure would quietly disappear
+// from the page. ReadUint has always trimmed; this is the same contract on the
+// held-descriptor path.
 func (f *File) Uint() (uint64, bool) {
 	b, ok := f.Bytes()
 	if !ok {
 		return 0, false
 	}
-	return ParseUint(b)
+	return ParseUint(TrimSpace(b))
 }
 
 // ParseUint reads the leading digits of b, ignoring any trailing newline.

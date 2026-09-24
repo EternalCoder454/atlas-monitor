@@ -156,3 +156,44 @@ func BenchmarkReadFile(b *testing.B) {
 		ReadUint(path)
 	}
 }
+
+// TestUintTrimsWhitespace pins the contract Uint shares with ReadUint. A sysfs
+// attribute written with a leading space used to read as no value at all, which
+// on the held-descriptor path meant a GPU or temperature figure silently
+// vanishing from the page rather than being wrong in a visible way.
+func TestUintTrimsWhitespace(t *testing.T) {
+	cases := []struct {
+		content string
+		want    uint64
+		ok      bool
+	}{
+		{"42", 42, true},
+		{"42\n", 42, true},
+		{" 42", 42, true},
+		{"  42  \n", 42, true},
+		{"\t42\r\n", 42, true},
+		{"abc", 0, false},
+		{" abc ", 0, false},
+		{"\n", 0, false},
+	}
+	for _, c := range cases {
+		path := filepath.Join(t.TempDir(), "attr")
+		if err := os.WriteFile(path, []byte(c.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		f := OpenSize(path, 8)
+		if f == nil || !f.OK() {
+			t.Fatalf("OpenSize(%q) failed", c.content)
+		}
+		got, ok := f.Uint()
+		if ok != c.ok || got != c.want {
+			t.Errorf("Uint() of %q = (%d, %v), want (%d, %v)", c.content, got, ok, c.want, c.ok)
+		}
+		// The one-shot path must agree.
+		rgot, rok := ReadUint(path)
+		if rok != c.ok || rgot != c.want {
+			t.Errorf("ReadUint() of %q = (%d, %v), want (%d, %v)", c.content, rgot, rok, c.want, c.ok)
+		}
+		f.Close()
+	}
+}
