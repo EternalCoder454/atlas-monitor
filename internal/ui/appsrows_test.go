@@ -25,6 +25,22 @@ func newTestAppsView() *appsView {
 	return v
 }
 
+// itoa keeps each row's name distinct without pulling in strconv's formatting
+// for a test fixture.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b [20]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(b[i:])
+}
+
 // procs builds a snapshot from a list of pids.
 func procs(pids ...int) []process.Proc {
 	out := make([]process.Proc, len(pids))
@@ -262,4 +278,78 @@ func churnSet(round, n int) []int {
 		out[i] = 10000 + round*n + i
 	}
 	return out
+}
+
+// TestAppsSteadyChurnDoesNotChangeVisibility is what keeps the table's cells
+// from being rebuilt every second. When a process exits and another appears in
+// the same tick, the row is reused: its contents change but whether it is shown
+// does not, so GTK must not be told the filter changed. Telling it anyway made
+// GTK tear down and rebuild every realised cell once a second, which was both
+// the page's main cost and, through the per-cell signal handlers, its main leak.
+func TestAppsSteadyChurnDoesNotChangeVisibility(t *testing.T) {
+	v := newTestAppsView()
+	v.applyRows(procs(1, 2, 3, 4, 5))
+
+	snapshot := func() map[*procRow]bool {
+		m := make(map[*procRow]bool, len(v.order))
+		for _, row := range v.order {
+			m[row] = row.shown
+		}
+		return m
+	}
+
+	for round := 0; round < 50; round++ {
+		before := snapshot()
+		// Replace the whole set, one for one: same count, all new pids.
+		base := 100 + round*5
+		v.applyRows(procs(base, base+1, base+2, base+3, base+4))
+
+		flips := 0
+		for row, was := range before {
+			if row.shown != was {
+				flips++
+			}
+		}
+		if flips != 0 {
+			t.Fatalf("round %d: %d rows changed visibility on a one-for-one replacement; "+
+				"GTK would rebuild the table's cells", round, flips)
+		}
+		if got := len(livePIDs(v)); got != 5 {
+			t.Fatalf("round %d: %d rows visible, want 5", round, got)
+		}
+	}
+	// And the bookkeeping must stay consistent with reality.
+	for _, row := range v.order {
+		if row.shown != row.live {
+			t.Errorf("row for pid %d has shown=%v live=%v", row.proc.PID, row.shown, row.live)
+		}
+	}
+}
+
+// TestAppsVisibilityChangesWhenTheCountMoves is the other half: when the number
+// of processes really does change, the filter has to be told, or rows would
+// linger or stay hidden.
+func TestAppsVisibilityChangesWhenTheCountMoves(t *testing.T) {
+	v := newTestAppsView()
+	v.applyRows(procs(1, 2, 3, 4, 5))
+
+	v.applyRows(procs(1, 2)) // three exit
+	if got := len(livePIDs(v)); got != 2 {
+		t.Errorf("%d rows visible after three exited, want 2", got)
+	}
+	for _, row := range v.order {
+		if row.shown != row.live {
+			t.Errorf("pid %d: shown=%v live=%v after a shrink", row.proc.PID, row.shown, row.live)
+		}
+	}
+
+	v.applyRows(procs(1, 2, 7, 8, 9, 10)) // four appear, one more than before
+	if got := len(livePIDs(v)); got != 6 {
+		t.Errorf("%d rows visible after four appeared, want 6", got)
+	}
+	for _, row := range v.order {
+		if row.shown != row.live {
+			t.Errorf("pid %d: shown=%v live=%v after a grow", row.proc.PID, row.shown, row.live)
+		}
+	}
 }

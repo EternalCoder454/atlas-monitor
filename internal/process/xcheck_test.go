@@ -59,43 +59,58 @@ func cutToken(s string) (tok, rest string) {
 
 // TestRSSAgreesWithPS is the headline correctness check: the RSS column in the
 // Apps table has to be the number ps and every other tool on the machine
-// reports, or the app is lying. Processes are allowed to grow or shrink between
-// our sample and ps's, so a per-process mismatch is not a failure on its own —
-// a systematic one is.
+// reports, or the app is lying.
+//
+// The comparison brackets ps between two of our own scans. A process that is
+// allocating hard — a compiler, say — can grow tens of megabytes in the
+// milliseconds between the two readings, and that is the machine moving rather
+// than a disagreement. ps's figure has to fall inside the range our scans saw,
+// which stays strict on a quiet machine without failing on a busy one.
 func TestRSSAgreesWithPS(t *testing.T) {
 	c := New()
 	c.collect()
-	got := c.Snapshot()
+	first := c.Snapshot()
 	ref := readPS(t)
+	c.collect()
+	second := c.Snapshot()
+
+	rssOf := func(snap []Proc) map[int]uint64 {
+		m := make(map[int]uint64, len(snap))
+		for _, p := range snap {
+			m[p.PID] = p.RSS
+		}
+		return m
+	}
+	a, b := rssOf(first), rssOf(second)
 
 	var compared, agree, off int
-	for _, p := range got {
-		r, ok := ref[p.PID]
-		if !ok {
-			continue // started or exited between the two scans
+	for pid, r := range ref {
+		lo, ok1 := a[pid]
+		hi, ok2 := b[pid]
+		if !ok1 || !ok2 {
+			continue // started or exited during the comparison
+		}
+		if lo > hi {
+			lo, hi = hi, lo
 		}
 		compared++
-		diff := int64(p.RSS) - int64(r.rss)
-		if diff < 0 {
-			diff = -diff
-		}
-		// 4 MiB or 10%, whichever is larger: a busy process really can move
-		// that much in the milliseconds between the two reads.
-		tol := int64(r.rss / 10)
+		// 4 MiB or 10% of slack outside the bracket, for the allocation that
+		// happened between our second scan and ps's own read.
+		tol := hi / 10
 		if tol < 4<<20 {
 			tol = 4 << 20
 		}
-		if diff <= tol {
+		if r.rss+tol >= lo && r.rss <= hi+tol {
 			agree++
-		} else {
-			off++
-			if off <= 5 {
-				t.Logf("RSS mismatch pid=%d %s: atlas=%d ps=%d (diff %d)", p.PID, p.Name, p.RSS, r.rss, diff)
-			}
+			continue
+		}
+		off++
+		if off <= 5 {
+			t.Logf("RSS outside the bracket pid=%d %s: ours [%d, %d], ps=%d", pid, r.comm, lo, hi, r.rss)
 		}
 	}
 	if compared < 5 {
-		t.Skipf("only %d processes visible in both views, nothing to compare", compared)
+		t.Skipf("only %d processes visible in every view, nothing to compare", compared)
 	}
 	if ratio := float64(agree) / float64(compared); ratio < 0.95 {
 		t.Errorf("RSS agrees with ps for only %d/%d processes (%.0f%%); want >=95%%", agree, compared, ratio*100)

@@ -1,3 +1,11 @@
+//go:build !race
+
+// This file decides what it decides by watching finalizers run, and the race
+// detector changes when they do — under -race even the control case, a plain
+// list model, reports nothing released. The behaviour being characterised
+// belongs to gotk4 rather than to Atlas, so there is nothing here the race
+// detector could usefully find.
+
 package ui
 
 import (
@@ -12,22 +20,6 @@ import (
 
 	"atlas-monitor/internal/process"
 )
-
-// itoa keeps each row's name distinct without pulling in strconv's formatting
-// for a test fixture.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(b[i:])
-}
 
 // A row spliced into a gioutil.ListModel is stored in a process-global registry
 // and handed to C as an id; the Go value is released only when the GObject

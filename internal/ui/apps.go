@@ -38,6 +38,12 @@ type procRow struct {
 	// stays in the list model and is hidden by the filter — see the free list in
 	// appsView for why rows are recycled rather than removed.
 	live bool
+
+	// shown is what the filter last decided about this row. The two differ only
+	// between a row changing state and GTK being told, which is what makes it
+	// possible to notice that a row retired and reused within one tick never
+	// changed visibility at all.
+	shown bool
 }
 
 // renderFunc appends a cell's text to dst. Working in bytes lets a cell compare
@@ -109,8 +115,11 @@ type appsView struct {
 	free []*procRow
 
 	// cells holds the state of every realised cell, keyed by the native
-	// GtkColumnViewCell pointer (stable for the cell's lifetime).
-	cells map[uintptr]*procCell
+	// GtkColumnViewCell pointer (stable for the cell's lifetime). byLabel is the
+	// same set keyed by the label inside each cell, which is what a click on the
+	// table resolves to.
+	cells   map[uintptr]*procCell
+	byLabel map[uintptr]*procCell
 
 	// Scratch reused across ticks.
 	snap     []process.Proc
@@ -123,18 +132,18 @@ type appsView struct {
 	grouped     bool
 	showKernel  bool
 	needRebuild bool
-	popHasPar   bool
 	targetPID   int
 	targetName  string
 }
 
 func newAppsView(proc *process.Collector) *appsView {
 	v := &appsView{
-		proc:   proc,
-		byPID:  make(map[int]*procRow),
-		byName: make(map[string]*procRow),
-		cells:  make(map[uintptr]*procCell),
-		groups: make(map[string]int),
+		proc:    proc,
+		byPID:   make(map[int]*procRow),
+		byName:  make(map[string]*procRow),
+		cells:   make(map[uintptr]*procCell),
+		byLabel: make(map[uintptr]*procCell),
+		groups:  make(map[string]int),
 	}
 
 	v.root = gtk.NewBox(gtk.OrientationVertical, 8)
@@ -284,7 +293,6 @@ func (v *appsView) Update() {
 // by the tests, which have neither a collector nor a display.
 func (v *appsView) applyRows(snap []process.Proc) {
 	v.gen++
-	changed := 0 // rows that moved between hidden and visible this tick
 
 	// Three passes, in this order for a reason. Processes that are still here
 	// are stamped first; then rows whose process is gone are retired, which is
@@ -305,7 +313,6 @@ func (v *appsView) applyRows(snap []process.Proc) {
 	for _, row := range v.order {
 		if row.live && row.gen != v.gen {
 			row.live = false
-			changed++
 			v.unregister(row)
 			v.free = append(v.free, row)
 		}
@@ -327,7 +334,6 @@ func (v *appsView) applyRows(snap []process.Proc) {
 			toAppend = append(toAppend, row)
 		}
 		row.gen = v.gen
-		changed++
 		v.register(row)
 	}
 	if len(toAppend) > 0 {
@@ -337,9 +343,31 @@ func (v *appsView) applyRows(snap []process.Proc) {
 	v.pending = pending[:0]
 
 	// The filter decides visibility from row.live, which GTK cannot see change,
-	// so a row appearing or retiring has to be announced.
-	if changed > 0 {
+	// so a row appearing or retiring has to be announced — but only if the
+	// visible set really is different now. On a machine with busy process churn
+	// most ticks retire a row and immediately reuse it for a new process, which
+	// changes that row's contents but not whether it is shown. Announcing those
+	// ticks anyway made GTK tear down and rebuild the table's cells every
+	// second, which is most of what the page cost and most of what it leaked.
+	var hidden, revealed int
+	for _, row := range v.order {
+		if row.live == row.shown {
+			continue
+		}
+		row.shown = row.live
+		if row.live {
+			revealed++
+		} else {
+			hidden++
+		}
+	}
+	switch {
+	case hidden > 0 && revealed > 0:
 		v.filter.Changed(gtk.FilterChangeDifferent)
+	case hidden > 0:
+		v.filter.Changed(gtk.FilterChangeMoreStrict)
+	case revealed > 0:
+		v.filter.Changed(gtk.FilterChangeLessStrict)
 	}
 }
 
@@ -389,13 +417,18 @@ func (v *appsView) clearModel() {
 	clear(v.byPID)
 	clear(v.byName)
 	v.free = v.free[:0]
+	hidden := false
 	for _, row := range v.order {
+		if row.live {
+			hidden = true
+		}
 		row.live = false
+		row.shown = false
 		row.gen = 0
 		v.free = append(v.free, row)
 	}
-	if len(v.order) > 0 {
-		v.filter.Changed(gtk.FilterChangeDifferent)
+	if hidden {
+		v.filter.Changed(gtk.FilterChangeMoreStrict)
 	}
 	for _, c := range v.cells {
 		c.row = nil
@@ -438,7 +471,7 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 		cell.SetChild(label)
 		c := &procCell{label: label, render: render}
 		v.cells[cell.Native()] = c
-		v.attachContextMenu(label, c)
+		v.byLabel[label.Object.Native()] = c
 	})
 	factory.ConnectBind(func(obj *coreglib.Object) {
 		cell := obj.Cast().(*gtk.ColumnViewCell)
@@ -456,7 +489,11 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 		}
 	})
 	factory.ConnectTeardown(func(obj *coreglib.Object) {
-		delete(v.cells, obj.Cast().(*gtk.ColumnViewCell).Native())
+		cell := obj.Cast().(*gtk.ColumnViewCell)
+		if c := v.cells[cell.Native()]; c != nil && c.label != nil {
+			delete(v.byLabel, c.label.Object.Native())
+		}
+		delete(v.cells, cell.Native())
 	})
 
 	col := gtk.NewColumnViewColumn(title, &factory.ListItemFactory)
@@ -515,29 +552,54 @@ func (v *appsView) buildContextMenu(parent gtk.Widgetter) {
 
 	v.popover = gtk.NewPopoverMenuFromModel(menu)
 	v.popover.SetHasArrow(false)
+
+	// One gesture for the whole table, parented once. Anything per-cell here
+	// would be registered for the life of the process — see attachContextMenu.
+	if w, ok := parent.(*gtk.ColumnView); ok {
+		v.attachContextMenu(w)
+	}
 }
 
-// attachContextMenu wires a right-click gesture on a cell to the popover,
-// reading the row the cell is bound to at click time.
-func (v *appsView) attachContextMenu(widget gtk.Widgetter, c *procCell) {
+// attachContextMenu wires one right-click gesture to the whole table, resolving
+// the row under the pointer at click time.
+//
+// It used to be a gesture per cell, connected in the factory's setup handler.
+// That leaks: gotk4 registers every Go callback in a process-wide registry and
+// does not release the entry when the widget goes away — around eleven live
+// objects per gesture, and disconnecting the handler first only halves it (see
+// TestPerWidgetGestureClosuresAreRetained). GTK builds cells constantly, on
+// scrolling as much as on refreshes, so on a machine with busy process churn the
+// Apps page grew by roughly a megabyte a minute for as long as it was open.
+// One gesture for the table costs one registration for the life of the process.
+func (v *appsView) attachContextMenu(cv *gtk.ColumnView) {
+	v.popover.SetParent(cv)
 	click := gtk.NewGestureClick()
 	click.SetButton(3) // secondary / right button
 	click.ConnectPressed(func(_ int, x, y float64) {
-		if c.row == nil {
+		c := v.cellAt(cv, x, y)
+		if c == nil || c.row == nil {
 			return
 		}
 		v.targetPID, v.targetName = c.row.proc.PID, c.row.proc.Name
-
-		if v.popHasPar {
-			v.popover.Unparent()
-		}
-		v.popover.SetParent(widget)
-		v.popHasPar = true
 		rect := gdk.NewRectangle(int(x), int(y), 1, 1)
 		v.popover.SetPointingTo(&rect)
 		v.popover.Popup()
 	})
-	gtk.BaseWidget(widget).AddController(click)
+	cv.AddController(click)
+}
+
+// cellAt finds the cell under a point in the table. Pick returns the deepest
+// widget there, which is the label a cell owns (or something inside it), so the
+// walk goes up a few parents looking for one this view put there.
+func (v *appsView) cellAt(cv *gtk.ColumnView, x, y float64) *procCell {
+	w := cv.Pick(x, y, gtk.PickDefault)
+	for i := 0; w != nil && i < 4; i++ {
+		if c := v.byLabel[gtk.BaseWidget(w).Object.Native()]; c != nil {
+			return c
+		}
+		w = gtk.BaseWidget(w).Parent()
+	}
+	return nil
 }
 
 func (v *appsView) kill(sig syscall.Signal) {

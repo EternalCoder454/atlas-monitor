@@ -82,35 +82,41 @@ func freeFigures(t *testing.T) (mem, swap map[string]uint64) {
 // tools read straight out of /proc/meminfo — and then checks our Used against
 // free's *available* column, not its used column.
 func TestMemoryAgreesWithFree(t *testing.T) {
+	// Bracket free(1) between two of our own reads. On a machine that is
+	// actively allocating — a parallel build, say — MemAvailable can move by a
+	// gigabyte between two reads of /proc/meminfo, and that is the machine
+	// moving rather than a disagreement.
+	var first, second MemStats
+	sample(t, 2, func(s *Stats) { first = s.Mem })
 	mem, swap := freeFigures(t)
+	sample(t, 2, func(s *Stats) { second = s.Mem })
 
-	var got MemStats
-	sample(t, 2, func(s *Stats) { got = s.Mem })
-
-	if got.Total != mem["total"] {
-		t.Errorf("Mem.Total = %d, free says %d", got.Total, mem["total"])
+	if first.Total != mem["total"] {
+		t.Errorf("Mem.Total = %d, free says %d", first.Total, mem["total"])
 	}
-	// Available moves as the machine works; a few MiB of drift is expected.
-	const tol = 64 << 20
-	if d := diffU(got.Available, mem["available"]); d > tol {
-		t.Errorf("Mem.Available = %d, free says %d (diff %d)", got.Available, mem["available"], d)
+	// Total is fixed; the moving figures are checked against the range our two
+	// reads saw, with a little slack outside it.
+	const slack = 64 << 20
+	within := func(name string, lo, hi, want uint64) {
+		t.Helper()
+		if lo > hi {
+			lo, hi = hi, lo
+		}
+		if want+slack < lo || want > hi+slack {
+			t.Errorf("%s: free says %d, outside the [%d, %d] range our reads bracketed", name, want, lo, hi)
+		}
 	}
-	if want := mem["total"] - mem["available"]; diffU(got.Used, want) > tol {
-		t.Errorf("Mem.Used = %d, want total-available = %d (diff %d)", got.Used, want, diffU(got.Used, want))
-	}
-	if d := diffU(got.Cached, mem["buff/cache"]); d > tol {
-		t.Errorf("Mem.Cached = %d, free says buff/cache %d (diff %d)", got.Cached, mem["buff/cache"], d)
-	}
+	within("Available", first.Available, second.Available, mem["available"])
+	within("Cached", first.Cached, second.Cached, mem["buff/cache"])
+	within("Used", first.Used, second.Used, mem["total"]-mem["available"])
 	if swap != nil {
-		if got.SwapTotal != swap["total"] {
-			t.Errorf("Mem.SwapTotal = %d, free says %d", got.SwapTotal, swap["total"])
+		if first.SwapTotal != swap["total"] {
+			t.Errorf("Mem.SwapTotal = %d, free says %d", first.SwapTotal, swap["total"])
 		}
-		if d := diffU(got.SwapUsed, swap["used"]); d > tol {
-			t.Errorf("Mem.SwapUsed = %d, free says %d (diff %d)", got.SwapUsed, swap["used"], d)
-		}
+		within("SwapUsed", first.SwapUsed, second.SwapUsed, swap["used"])
 	}
 	t.Logf("total=%d used=%d avail=%d cached=%d swap=%d/%d",
-		got.Total, got.Used, got.Available, got.Cached, got.SwapUsed, got.SwapTotal)
+		first.Total, first.Used, first.Available, first.Cached, first.SwapUsed, first.SwapTotal)
 }
 
 // TestMemoryInvariants checks the figures are internally consistent, which the
@@ -425,7 +431,7 @@ func TestCPUUsageAgreesWithProcStat(t *testing.T) {
 	c.Start()
 	defer c.Stop()
 
-	const samples = 6
+	const samples = 10
 	var sum float64
 	var n int
 	for i := 0; i < samples; i++ {
@@ -446,10 +452,17 @@ func TestCPUUsageAgreesWithProcStat(t *testing.T) {
 	want := 100 * (1 - float64(idle1-idle0)/float64(total1-total0))
 	got := sum / float64(n)
 	// Our sample mean is a mean of instantaneous readings over the same window,
-	// so it should track the window average closely; 6 points is enough to be
-	// within a few percent unless load is spiking.
-	if d := got - want; d > 8 || d < -8 {
-		t.Errorf("mean CPU usage %.2f%% over %v, /proc/stat implies %.2f%% (diff %.2f)", got, elapsed.Round(time.Millisecond), want, d)
+	// so it tracks the window average — but only as well as sampling allows. On
+	// a machine whose load is swinging between idle and pegged, ten point
+	// samples cannot reconstruct the average, so the tolerance widens with how
+	// busy the window was. This stays tight on a quiet machine, which is where
+	// a real disagreement would show.
+	tol := 8.0
+	if want > 50 {
+		tol = 20.0
+	}
+	if d := got - want; d > tol || d < -tol {
+		t.Errorf("mean CPU usage %.2f%% over %v, /proc/stat implies %.2f%% (diff %.2f, tolerance %.0f)", got, elapsed.Round(time.Millisecond), want, d, tol)
 	} else {
 		t.Logf("mean CPU usage %.2f%% over %v, /proc/stat implies %.2f%% (diff %.2f)", got, elapsed.Round(time.Millisecond), want, d)
 	}
