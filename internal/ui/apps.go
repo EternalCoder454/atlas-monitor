@@ -66,6 +66,15 @@ type procCell struct {
 	buf    []byte   // render scratch
 	cur    []byte   // text currently displayed
 	set    bool
+
+	// dim decides whether this reading is the boring one — a rate of zero, a
+	// process with no GPU handle, a power draw of "Very low". Those are worth
+	// showing, since a blank cell would look like a collector failure, but a
+	// table where nine columns in ten read zero hides the rows that are
+	// actually doing something. dimmed tracks what the label currently wears so
+	// the CSS class is only touched when it changes.
+	dim    func([]byte) bool
+	dimmed bool
 }
 
 // refresh re-renders the cell, touching GTK only when the text really changed.
@@ -80,6 +89,28 @@ func (c *procCell) refresh() {
 	c.cur = append(c.cur[:0], c.buf...)
 	c.set = true
 	c.label.SetText(string(c.buf))
+	if c.dim != nil {
+		if d := c.dim(c.buf); d != c.dimmed {
+			c.dimmed = d
+			if d {
+				c.label.AddCSSClass("am-zero")
+			} else {
+				c.label.RemoveCSSClass("am-zero")
+			}
+		}
+	}
+}
+
+// isIdleReading reports whether a numeric cell shows nothing of interest: no
+// digit above zero anywhere in it. That covers "0 B/s", "0.0%", "0.00 GiB" and
+// the em dash used where a figure does not apply.
+func isIdleReading(b []byte) bool {
+	for _, ch := range b {
+		if ch >= '1' && ch <= '9' {
+			return false
+		}
+	}
+	return true
 }
 
 type appsView struct {
@@ -156,6 +187,7 @@ func newAppsView(proc *process.Collector) *appsView {
 	toolbar := gtk.NewBox(gtk.OrientationHorizontal, 8)
 	searchEntry := gtk.NewSearchEntry()
 	searchEntry.SetHExpand(true)
+	searchEntry.SetPlaceholderText("Search by name or PID")
 	searchEntry.ConnectSearchChanged(func() {
 		v.search = lowerASCII(searchEntry.Text())
 		v.filter.Changed(gtk.FilterChangeDifferent)
@@ -216,7 +248,8 @@ func newAppsView(proc *process.Collector) *appsView {
 	// Very low → High rather than alphabetically.
 	cv.AppendColumn(v.textColumn("Power", false, 0,
 		func(dst []byte, p *process.Proc) []byte { return append(dst, p.Impact().String()...) },
-		func(a, b *process.Proc) bool { return a.PowerScore() < b.PowerScore() }))
+		func(a, b *process.Proc) bool { return a.PowerScore() < b.PowerScore() },
+		func(b []byte) bool { return string(b) == process.ImpactVeryLow.String() }))
 	cv.AppendColumn(v.textColumn("Net ≈ In", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendRate(dst, p.NetIn) },
 		func(a, b *process.Proc) bool { return a.NetIn < b.NetIn }))
@@ -458,9 +491,24 @@ func (v *appsView) matchesRow(r *procRow) bool {
 	return containsBytes(strconv.AppendInt(digits[:0], int64(r.proc.PID), 10), v.search)
 }
 
-// textColumn builds a sortable text column. xalign: 0 left, 1 right.
+// textColumn builds a sortable text column. xalign: 0 left, 1 right. A
+// right-aligned column is a numeric one, which is what decides both the tabular
+// figures and the dimming of idle readings; dimWhen overrides that test for
+// columns whose "nothing happening" value is not a zero.
 func (v *appsView) textColumn(title string, expand bool, xalign float64,
-	render renderFunc, less func(a, b *process.Proc) bool) *gtk.ColumnViewColumn {
+	render renderFunc, less func(a, b *process.Proc) bool,
+	dimWhen ...func([]byte) bool) *gtk.ColumnViewColumn {
+
+	numeric := xalign == 1
+	dim := func([]byte) bool { return false }
+	switch {
+	case len(dimWhen) > 0 && dimWhen[0] != nil:
+		dim = dimWhen[0]
+	case numeric:
+		dim = isIdleReading
+	default:
+		dim = nil
+	}
 
 	factory := gtk.NewSignalListItemFactory()
 	factory.ConnectSetup(func(obj *coreglib.Object) {
@@ -468,8 +516,11 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 		label := gtk.NewLabel("")
 		label.SetXAlign(float32(xalign))
 		label.SetEllipsize(3) // PANGO_ELLIPSIZE_END
+		if numeric {
+			label.AddCSSClass("am-num")
+		}
 		cell.SetChild(label)
-		c := &procCell{label: label, render: render}
+		c := &procCell{label: label, render: render, dim: dim}
 		v.cells[cell.Native()] = c
 		v.byLabel[label.Object.Native()] = c
 	})

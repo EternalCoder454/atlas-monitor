@@ -168,7 +168,8 @@ func (v *servicesView) buildToolbar() *gtk.Box {
 	bar.Append(allToggle)
 
 	search := gtk.NewSearchEntry()
-	search.SetHExpand(false)
+	search.SetHExpand(true) // take the slack, rather than sitting as a sliver
+	search.SetPlaceholderText("Search services")
 	search.ConnectSearchChanged(func() {
 		v.search = strings.ToLower(search.Text())
 		v.filter.Changed(gtk.FilterChangeDifferent)

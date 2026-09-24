@@ -105,3 +105,26 @@ func BenchmarkCollectCPU(b *testing.B) {
 		c.collectCPU()
 	}
 }
+
+// TestCacheSize covers the translation of sysfs's own cache-size spelling into
+// the units the rest of the app uses. The CPU page showed "36864K" before this,
+// which is the kernel's wording rather than anything a person would write.
+func TestCacheSize(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"48K", "48 KiB"},
+		{"2048K", "2.0 MiB"},
+		{"36864K", "36.0 MiB"},
+		{"1M", "1.0 MiB"},
+		{"1G", "1.00 GiB"},
+		{"", ""},
+		{"weird", "weird"},   // no recognised suffix: pass it through
+		{"K", "K"},           // no number
+		{"12", "12"},         // no suffix
+		{"1024K", "1.0 MiB"}, // carries to the next unit
+	}
+	for _, c := range cases {
+		if got := cacheSize(c.in); got != c.want {
+			t.Errorf("cacheSize(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

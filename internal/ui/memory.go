@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"github.com/diamondburned/gotk4/pkg/cairo"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
 	"atlas-monitor/internal/format"
@@ -17,11 +16,7 @@ type memView struct {
 	capBuf    []byte // "of N GiB in use", rebuilt without allocating
 	ramGraph  *graph.Graph
 	swapGraph *graph.Graph
-	breakdown *gtk.DrawingArea
-
-	// Current breakdown values (bytes), read by the draw func on the main thread.
-	bUsed, bCached, bFree, bTotal float64
-	lastBreakdown                 [4]float64 // last drawn values; skips redundant redraws
+	breakdown *capacityBar
 
 	vTotal, vUsed, vCached, vAvail *liveLabel
 	vSwapTotal, vSwapUsed          *liveLabel
@@ -44,14 +39,8 @@ func newMemView(col *stats.Collector) *memView {
 	v.ramGraph = graph.New("RAM", graph.ColorMemory, ramHist, graph.Percent, 140)
 	box.Append(v.ramGraph)
 
-	// Used / Cached / Free breakdown bar with a legend.
-	v.breakdown = gtk.NewDrawingArea()
-	v.breakdown.SetContentHeight(24)
-	v.breakdown.SetHExpand(true)
-	v.breakdown.AddCSSClass("am-breakdown")
-	v.breakdown.SetDrawFunc(func(_ *gtk.DrawingArea, cr *cairo.Context, w, h int) {
-		v.drawBreakdown(cr, w, h)
-	})
+	// In use / Cached / Free breakdown bar with a legend.
+	v.breakdown = newCapacityBar(24)
 	box.Append(v.breakdown)
 	box.Append(memLegend())
 
@@ -93,61 +82,27 @@ func (v *memView) Update() {
 	v.vSwapTotal.gib(swapT)
 	v.vSwapUsed.gib(swapU)
 
-	// Breakdown: app-used | cached | free, summing to total.
+	// Breakdown: app-used | cached | free, summing to total. Shades of the one
+	// memory colour rather than red/amber/green — a machine with a quarter of
+	// its RAM in use is not in a warning state.
 	appUsed := float64(total) - float64(free) - float64(cached)
 	if appUsed < 0 {
 		appUsed = 0
 	}
-	v.bUsed, v.bCached, v.bFree, v.bTotal = appUsed, float64(cached), float64(free), float64(total)
-	if next := [4]float64{v.bUsed, v.bCached, v.bFree, v.bTotal}; next != v.lastBreakdown {
-		v.lastBreakdown = next
-		v.breakdown.QueueDraw()
-	}
+	v.breakdown.set(float64(total),
+		capSeg{appUsed, graph.ColorMemory, 0.95},
+		capSeg{float64(cached), graph.ColorMemory, 0.38},
+		capSeg{float64(free), graph.ColorFree, 0.14})
 
 	v.ramGraph.Refresh()
 	v.swapGraph.Refresh()
 }
 
-func (v *memView) drawBreakdown(cr *cairo.Context, w, h int) {
-	if v.bTotal <= 0 {
-		return
-	}
-	width, height := float64(w), float64(h)
-	// used: red, cached: yellow, free: green — matching memLegend below.
-	segs := [3]struct {
-		val     float64
-		r, g, b float64
-	}{
-		{v.bUsed, 0xe0 / 255.0, 0x1b / 255.0, 0x24 / 255.0},
-		{v.bCached, 0xf5 / 255.0, 0xc2 / 255.0, 0x11 / 255.0},
-		{v.bFree, 0x2e / 255.0, 0xc2 / 255.0, 0x7e / 255.0},
-	}
-	x := 0.0
-	for _, s := range segs {
-		segW := width * s.val / v.bTotal
-		cr.SetSourceRGBA(s.r, s.g, s.b, 0.9)
-		cr.Rectangle(x, 0, segW, height)
-		cr.Fill()
-		x += segW
-	}
-}
-
-// memLegend builds a compact coloured legend for the breakdown bar.
+// memLegend builds the swatch-and-label row under the breakdown bar.
 func memLegend() *gtk.Box {
-	box := gtk.NewBox(gtk.OrientationHorizontal, 16)
-	box.Append(legendItem("#e01b24", "Used"))
-	box.Append(legendItem("#f5c211", "Cached"))
-	box.Append(legendItem("#2ec27e", "Free"))
-	return box
-}
-
-func legendItem(color, text string) *gtk.Box {
-	b := gtk.NewBox(gtk.OrientationHorizontal, 6)
-	dot := gtk.NewLabel("")
-	dot.SetMarkup("<span color='" + color + "'>■</span>")
-	lbl := gtk.NewLabel(text)
-	lbl.AddCSSClass("am-subtle")
-	b.Append(dot)
-	b.Append(lbl)
-	return b
+	return legendRow(
+		legendEntry(newColorDot(graph.ColorMemory, 0.95), gtk.NewLabel("In use")),
+		legendEntry(newColorDot(graph.ColorMemory, 0.38), gtk.NewLabel("Cached")),
+		legendEntry(newColorDot(graph.ColorFree, 0.30), gtk.NewLabel("Free")),
+	)
 }

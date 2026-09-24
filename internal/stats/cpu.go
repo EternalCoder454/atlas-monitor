@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"atlas-monitor/internal/format"
 	"atlas-monitor/internal/sysfs"
 )
 
@@ -270,13 +271,39 @@ func readBaseFreq() float64 {
 	return 0
 }
 
+// cacheSize turns sysfs's own spelling of a cache size — "48K", "36864K" — into
+// the units the rest of the app uses. The kernel always writes whole kibibytes
+// or mebibytes with a single-letter suffix; anything else is passed through
+// rather than guessed at.
+func cacheSize(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	mult := uint64(1)
+	switch raw[len(raw)-1] {
+	case 'K':
+		mult = 1 << 10
+	case 'M':
+		mult = 1 << 20
+	case 'G':
+		mult = 1 << 30
+	default:
+		return raw
+	}
+	n, ok := sysfs.ParseUint([]byte(raw[:len(raw)-1]))
+	if !ok {
+		return raw
+	}
+	return format.Bytes(n * mult)
+}
+
 // readCaches reads L1d/L1i/L2/L3 sizes from cpu0's cache hierarchy.
 func readCaches() (l1d, l1i, l2, l3 string) {
 	idxs, _ := filepath.Glob("/sys/devices/system/cpu/cpu0/cache/index*")
 	for _, idx := range idxs {
 		level := sysfs.ReadString(filepath.Join(idx, "level"))
 		ctype := sysfs.ReadString(filepath.Join(idx, "type"))
-		size := sysfs.ReadString(filepath.Join(idx, "size"))
+		size := cacheSize(sysfs.ReadString(filepath.Join(idx, "size")))
 		switch {
 		case level == "1" && ctype == "Data":
 			l1d = size

@@ -353,3 +353,21 @@ func TestAppsVisibilityChangesWhenTheCountMoves(t *testing.T) {
 		}
 	}
 }
+
+// TestIsIdleReading covers the test behind the dimming of the process table's
+// quiet columns. Nine columns in ten read zero on a normal machine, and a table
+// where everything shouts equally loudly hides the rows doing real work.
+func TestIsIdleReading(t *testing.T) {
+	idle := []string{"0 B/s", "0.0%", "0.00 GiB", "—", "0", "0.000", ""}
+	busy := []string{"1 B/s", "0.1%", "10.0%", "512 KiB", "1.2 MiB/s", "100%", "0.5 W"}
+	for _, s := range idle {
+		if !isIdleReading([]byte(s)) {
+			t.Errorf("isIdleReading(%q) = false, want true", s)
+		}
+	}
+	for _, s := range busy {
+		if isIdleReading([]byte(s)) {
+			t.Errorf("isIdleReading(%q) = true, want false", s)
+		}
+	}
+}

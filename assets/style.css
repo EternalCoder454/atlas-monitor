@@ -42,6 +42,15 @@
   opacity: 0.7;
 }
 
+/* The live reading on the right of a sidebar row: present but quiet, so the
+   row still reads as a navigation item first and a gauge second. */
+.am-sidebar-value {
+  opacity: 0.55;
+  font-size: 0.85em;
+  font-feature-settings: "tnum" 1;
+  margin-right: 2px;
+}
+
 /* ---- Headlines & captions ------------------------------------------ */
 
 .am-headline {
@@ -68,8 +77,24 @@
   opacity: 0.6;
 }
 
+/* Tabular figures rather than a monospace face: digits still line up column to
+   column as the readings change, but the text keeps the window's own font
+   instead of looking like a code listing, and the space before a unit stops
+   opening into a gap. */
 .am-stat-value {
-  font-family: monospace;
+  font-feature-settings: "tnum" 1;
+}
+
+/* The same treatment for the process table's numeric columns, where alignment
+   matters just as much and there are far more of them. */
+.am-num {
+  font-feature-settings: "tnum" 1;
+}
+
+/* A reading of zero is still worth showing — it says the collector is working —
+   but it should not compete with the rows that are actually doing something. */
+.am-zero {
+  opacity: 0.35;
 }
 
 /* ---- Graphs & breakdown bar ---------------------------------------- */
@@ -78,6 +103,16 @@
 .am-breakdown {
   background-color: alpha(@window_fg_color, 0.03);
   border-radius: 8px;
+}
+
+/* The chart and core-grid text is drawn with Pango from the widget's own
+   style, so its size is set here rather than in pixels in the draw code. */
+.am-graph {
+  font-size: 0.82em;
+}
+
+.am-core-grid {
+  font-size: 0.8em;
 }
 
 /* ---- Assistant chat ------------------------------------------------ */
