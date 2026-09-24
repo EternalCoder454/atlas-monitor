@@ -1,0 +1,37 @@
+Atlas Monitor
+Copyright (c) EternalCoder454
+
+This product includes third-party material, listed below. Atlas Monitor's own
+source is covered by LICENSE; the terms here apply only to the material named.
+
+--------------------------------------------------------------------------------
+Material Symbols
+--------------------------------------------------------------------------------
+
+The symbolic icons in assets/icons/atlas-*-symbolic.svg are derived from
+Material Symbols by Google, used under the Apache License, Version 2.0.
+
+    https://fonts.google.com/icons
+    https://github.com/google/material-design-icons
+
+    Copyright (c) Google LLC
+
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use these files except in compliance with the License.
+    You may obtain a copy of the License at
+
+        http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+
+The files are modified from the originals: renamed, given a 16px nominal size
+and a black fill, and annotated. The artwork itself is unchanged. The source
+downloads are kept beside them under their plain names, and
+scripts/import-icons.sh performs the conversion.
+
+assets/icons/atlas-gpu-symbolic.svg and assets/icon.svg are original work and
+are covered by LICENSE, not by the above.

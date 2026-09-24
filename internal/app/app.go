@@ -116,7 +116,7 @@ func (a *App) activate() {
 	}
 	header.SetTitleWidget(adw.NewWindowTitle("Atlas Monitor", subtitle))
 
-	gear := gtk.NewButtonFromIconName("emblem-system-symbolic")
+	gear := gtk.NewButtonFromIconName("atlas-settings-symbolic")
 	gear.SetTooltipText("Settings")
 	gear.ConnectClicked(func() {
 		ui.ShowSettings(win, &a.settings, a.settingsHooks())

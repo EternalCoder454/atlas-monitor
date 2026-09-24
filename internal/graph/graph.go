@@ -40,6 +40,7 @@ type Graph struct {
 	// Current-value text, cached so a steady reading costs no allocation.
 	valBuf  []byte
 	valText string
+	peakBuf []byte
 
 	// Text is drawn through Pango rather than Cairo's "toy" API, so the chart
 	// labels use the desktop font at the desktop's hinting settings instead of
@@ -49,7 +50,9 @@ type Graph struct {
 	// to take effect here, which is the same deal the rendering mode has.
 	labelLayout *pango.Layout
 	valueLayout *pango.Layout
+	peakLayout  *pango.Layout
 	shownValue  string
+	shownPeak   string
 }
 
 // New builds a graph for the given ring buffer. height is the requested
@@ -63,6 +66,12 @@ func New(label string, color Color, rb *stats.RingBuffer, mode Mode, height int)
 		mode:        mode,
 		scratch:     make([]float64, stats.HistLen),
 	}
+	// Deliberately a fixed height rather than one that grows with the window.
+	// Letting the charts expand was tried and is worse: a percentage chart draws
+	// its line at the reading, so on an idle machine a taller chart is simply a
+	// larger empty area, and on the Storage page the growth pushed the details
+	// below the bottom edge. What the space needed was meaning, not more of it —
+	// hence the peak marker on the auto-scaled charts.
 	g.SetContentHeight(height)
 	g.SetHExpand(true)
 	g.AddCSSClass("am-graph")
@@ -116,15 +125,25 @@ func (g *Graph) draw(area *gtk.DrawingArea, cr *cairo.Context, w, h int) {
 			return height - r*height
 		}
 
-		// Filled area under the curve.
+		// Filled area under the curve, fading out towards the baseline. A flat
+		// wash reads as a solid block on a chart that is mostly empty — which a
+		// percentage chart on an idle machine always is — where a gradient reads
+		// as depth under the line.
 		cr.MoveTo(px(0), height)
 		for i := 0; i < n; i++ {
 			cr.LineTo(px(i), py(g.scratch[i]))
 		}
 		cr.LineTo(px(n-1), height)
 		cr.ClosePath()
-		cr.SetSourceRGBA(g.color.R, g.color.G, g.color.B, 0.20)
-		cr.Fill()
+		if grad, err := cairo.NewPatternLinear(0, 0, 0, height); err == nil {
+			grad.AddColorStopRGBA(0, g.color.R, g.color.G, g.color.B, 0.34)
+			grad.AddColorStopRGBA(1, g.color.R, g.color.G, g.color.B, 0.02)
+			cr.SetSource(grad)
+			cr.Fill()
+		} else {
+			cr.SetSourceRGBA(g.color.R, g.color.G, g.color.B, 0.20)
+			cr.Fill()
+		}
 
 		// Solid line on top.
 		cr.SetSourceRGBA(g.color.R, g.color.G, g.color.B, 1)
@@ -139,6 +158,7 @@ func (g *Graph) draw(area *gtk.DrawingArea, cr *cairo.Context, w, h int) {
 	if g.labelLayout == nil {
 		g.labelLayout = area.CreatePangoLayout(g.label)
 		g.valueLayout = area.CreatePangoLayout("")
+		g.peakLayout = area.CreatePangoLayout("")
 	}
 
 	// Label, top-left.
@@ -159,10 +179,44 @@ func (g *Graph) draw(area *gtk.DrawingArea, cr *cairo.Context, w, h int) {
 		g.valueLayout.SetText(text)
 		g.shownValue = text
 	}
-	tw, _ := g.valueLayout.PixelSize()
+	tw, th := g.valueLayout.PixelSize()
 	cr.SetSourceRGBA(fr, fg, fb, 0.92)
 	cr.MoveTo(width-float64(tw)-8, 5)
 	pangocairo.ShowLayout(cr, g.valueLayout)
+
+	// On an auto-scaled chart the vertical axis means nothing on its own: the
+	// same picture describes kilobytes and gigabytes. The highest reading still
+	// on screen says what the height is worth, and gives the empty space above
+	// an idle line something to say. A percentage chart needs no such note —
+	// its axis is always nought to a hundred.
+	if g.mode.autoScaled() && n > 0 {
+		if peak := g.rb.Max(); peak > 0 {
+			text := "peak " + string(g.formatInto(peak))
+			if text != g.shownPeak {
+				g.peakLayout.SetText(text)
+				g.shownPeak = text
+			}
+			pw, _ := g.peakLayout.PixelSize()
+			cr.SetSourceRGBA(fr, fg, fb, 0.45)
+			cr.MoveTo(width-float64(pw)-8, 5+float64(th))
+			pangocairo.ShowLayout(cr, g.peakLayout)
+		}
+	}
+}
+
+// formatInto renders v the way this chart formats its readings, into a scratch
+// buffer kept apart from the current-value one so the two cannot clobber each
+// other mid-draw.
+func (g *Graph) formatInto(v float64) []byte {
+	switch g.mode {
+	case Bytes:
+		g.peakBuf = format.AppendRate(g.peakBuf[:0], v)
+	case Watts:
+		g.peakBuf = format.AppendWatts(g.peakBuf[:0], v)
+	default:
+		g.peakBuf = format.AppendPercent(g.peakBuf[:0], v)
+	}
+	return g.peakBuf
 }
 
 // formatValue renders v into the graph's scratch buffer and returns the text,

@@ -161,6 +161,17 @@ func (w *Window) Build() gtk.Widgetter {
 		initial = "cpu"
 	}
 	w.selectView(initial)
+
+	// And again once the window is on screen. GTK gives initial focus to the
+	// first focusable widget, which is the first sidebar row, and a GtkListBox
+	// selects the row that receives focus — after Build has run. Without this
+	// the hardware list came up with CPU highlighted whatever page was open,
+	// which is what anyone reopening Atlas on Apps or Services saw, since it
+	// restores the page you left. Re-asserting from an idle callback runs after
+	// focus has landed, so the content stays the thing that decides.
+	hbox.ConnectMap(func() {
+		glib.IdleAdd(func() { w.sidebar.selectView(w.active) })
+	})
 	return hbox
 }
 
@@ -267,6 +278,9 @@ func (w *Window) selectView(name string) {
 	}
 	w.active = name
 	w.stack.SetVisibleChildName(name)
+	if w.sidebar != nil {
+		w.sidebar.selectView(name)
+	}
 	// The per-process collector is expensive, so only run it where it is used:
 	// the Apps table and the Assistant (which reports top processes).
 	if needsProcs(name) {
@@ -320,10 +334,10 @@ func (w *Window) updateNetIcon(active string) {
 	if w.netExp == nil {
 		return
 	}
-	icon := "network-wired-symbolic"
+	icon := "atlas-network-symbolic"
 	if active != "" {
 		if _, err := os.Stat("/sys/class/net/" + active + "/wireless"); err == nil {
-			icon = "network-wireless-symbolic"
+			icon = "atlas-wifi-symbolic"
 		}
 	}
 	w.netExp.SetIconName(icon)

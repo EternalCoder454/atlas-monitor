@@ -439,3 +439,33 @@ func TestCellLabelsArePooled(t *testing.T) {
 		}
 	}
 }
+
+// TestCPUHeat covers the grading behind the process table's busy markers. The
+// thresholds are per core, matching what the column shows: a single thread
+// pinned to one core reads 100 whatever the machine has, so the same numbers
+// mean the same thing on a laptop and a workstation.
+func TestCPUHeat(t *testing.T) {
+	cases := []struct {
+		cpu  float64
+		want int
+	}{
+		{0, 0}, {0.5, 0}, {10, 0}, {24.9, 0},
+		{25, 1}, {40, 1}, {59.9, 1},
+		{60, 2}, {100, 2}, {800, 2}, // a threaded process can exceed one core
+		{-1, 0}, // never negative, but do not mark it if it is
+	}
+	for _, c := range cases {
+		p := process.Proc{CPU: c.cpu}
+		if got := cpuHeat(&p); got != c.want {
+			t.Errorf("cpuHeat(%.1f%%) = %d, want %d", c.cpu, got, c.want)
+		}
+	}
+	// Every level the grader can return must have a style to go with it, or a
+	// busy process would be graded and then drawn exactly like a quiet one.
+	for _, c := range cases {
+		p := process.Proc{CPU: c.cpu}
+		if h := cpuHeat(&p); h > len(heatClasses) {
+			t.Errorf("cpuHeat returned level %d but only %d styles exist", h, len(heatClasses))
+		}
+	}
+}

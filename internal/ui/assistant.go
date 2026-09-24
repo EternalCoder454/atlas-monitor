@@ -121,7 +121,7 @@ func newAssistantView(col *stats.Collector, proc *process.Collector, client *ai.
 
 	inputRow := gtk.NewBox(gtk.OrientationHorizontal, 8)
 	v.quickBtn = gtk.NewMenuButton()
-	v.quickBtn.SetIconName("view-list-symbolic")
+	v.quickBtn.SetIconName("atlas-prompts-symbolic")
 	v.quickBtn.SetTooltipText("Quick prompts")
 	v.quickPop = gtk.NewPopover()
 	v.quickBtn.SetPopover(v.quickPop)

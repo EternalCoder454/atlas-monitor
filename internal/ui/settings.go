@@ -203,8 +203,8 @@ func newModelPromptPage(s *config.Settings, h SettingsHooks) *modelPromptPage {
 
 	promptGroup := adw.NewPreferencesGroup()
 	promptGroup.SetTitle("System prompt")
-	promptGroup.SetDescription("Instructions sent to the model before the live system data (which is always " +
-		"appended automatically). Edit this to change how the assistant behaves.")
+	promptGroup.SetDescription("Sets how the assistant behaves. Sent to the model ahead of the live " +
+		"system data, which is always attached for you.")
 
 	p.prompt = gtk.NewTextView()
 	p.prompt.SetWrapMode(gtk.WrapWordChar)
@@ -223,6 +223,7 @@ func newModelPromptPage(s *config.Settings, h SettingsHooks) *modelPromptPage {
 
 	reset := adw.NewButtonRow()
 	reset.SetTitle("Reset prompt to default")
+	reset.SetStartIconName("atlas-reset-symbolic")
 	reset.ConnectActivated(func() { p.prompt.Buffer().SetText(config.DefaultSystemPrompt) })
 	promptGroup.Add(reset)
 	p.page.Add(promptGroup)
@@ -335,7 +336,7 @@ func newAppPage(s *config.Settings, h SettingsHooks) *appPage {
 
 	update := adw.NewButtonRow()
 	update.SetTitle("Update")
-	update.SetStartIconName("software-update-available-symbolic")
+	update.SetStartIconName("atlas-update-symbolic")
 	update.AddCSSClass("suggested-action")
 	update.ConnectActivated(func() {
 		if h.CheckUpdate == nil {
@@ -428,7 +429,7 @@ func perfGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 		}
 	}
 	text := adw.NewComboRow()
-	text.SetTitle("Text")
+	text.SetTitle("Font rendering")
 	text.SetSubtitle(gfx.TextModes[textSel].Detail)
 	text.SetModel(gtk.NewStringList(textLabels))
 	text.SetSelected(uint(textSel))
@@ -480,7 +481,7 @@ func perfGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 
 	release := adw.NewButtonRow()
 	release.SetTitle("Release idle memory now")
-	release.SetStartIconName("user-trash-symbolic")
+	release.SetStartIconName("atlas-trash-symbolic")
 	release.ConnectActivated(func() {
 		sysmem.Release()
 		usage.SetSubtitle(selfMemory())
