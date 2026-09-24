@@ -308,18 +308,12 @@ func (a *App) offerUpdate(win *adw.ApplicationWindow, info UpdateInfo) {
 		heading = "Update Found — v" + info.Version
 	}
 
-	body := "A newer version of Atlas Monitor is available."
+	dlg := adw.NewAlertDialog(heading, "")
 	if len(info.Changes) > 0 {
-		var b strings.Builder
-		b.WriteString("What's new:\n")
-		for _, c := range info.Changes {
-			b.WriteString("\n•  ")
-			b.WriteString(c)
-		}
-		body = b.String()
+		dlg.SetExtraChild(changelogList(info.Changes))
+	} else {
+		dlg.SetBody("A newer version of Atlas Monitor is available.")
 	}
-
-	dlg := adw.NewAlertDialog(heading, body)
 	dlg.AddResponse("later", "Update Later")
 	dlg.AddResponse("now", "Update Now")
 	dlg.SetResponseAppearance("now", adw.ResponseSuggested)
@@ -331,4 +325,32 @@ func (a *App) offerUpdate(win *adw.ApplicationWindow, info UpdateInfo) {
 		}
 	})
 	dlg.Present(win)
+}
+
+// changelogList lays the release notes out as a list instead of as dialog prose.
+// An AlertDialog centres its body, and a centred bullet list gives every line a
+// different left edge for the eye to find — which is exactly the thing a list is
+// meant to save you from.
+func changelogList(changes []string) gtk.Widgetter {
+	box := gtk.NewBox(gtk.OrientationVertical, 8)
+
+	intro := gtk.NewLabel("What's new:")
+	intro.SetXAlign(0)
+	box.Append(intro)
+
+	for _, c := range changes {
+		row := gtk.NewBox(gtk.OrientationHorizontal, 8)
+		bullet := gtk.NewLabel("•")
+		bullet.SetVAlign(gtk.AlignStart)
+		row.Append(bullet)
+
+		text := gtk.NewLabel(c)
+		text.SetXAlign(0)
+		text.SetWrap(true)
+		text.SetMaxWidthChars(46)
+		row.Append(text)
+
+		box.Append(row)
+	}
+	return box
 }

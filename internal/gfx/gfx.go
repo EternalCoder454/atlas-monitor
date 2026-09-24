@@ -57,8 +57,12 @@ const (
 // TextModes lists the selectable text-rendering modes with their labels, in the
 // order the Settings dialog shows them.
 var TextModes = []struct{ Value, Label, Detail string }{
-	{TextSharp, "Sharp (hinted)", "Follows your desktop's font settings. Crisper on 1080p displays."},
-	{TextAuto, "Automatic", "Lets GTK choose. Softer text at 1x, no difference worth seeing on HiDPI."},
+	// Keep both short. A combo row lays its value out beside the subtitle, and
+	// a subtitle long enough to fill the row on one line takes the width the
+	// value needed: "Sharp (hinted)" against the old wording came out as
+	// "Shar…", which tells the reader nothing about their own setting.
+	{TextSharp, "Sharp", "Hinted. Crisper on 1080p."},
+	{TextAuto, "Automatic", "GTK decides. Softer at 1x."},
 }
 
 // NormalizeText maps an unknown or empty text mode onto the default.

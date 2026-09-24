@@ -63,10 +63,14 @@ func (a *App) startUpdate(done func(ok bool)) {
 	status.SetMaxWidthChars(42)
 	body.Append(status)
 
-	// Where the end of a failed build goes. It is compiler output rather than
-	// prose: centred and proportional it is unreadable, so it gets the left
-	// edge and a fixed width, and it stays hidden unless there is something to
-	// put in it.
+	// Where the end of a failed build goes, folded away.
+	//
+	// It is compiler output rather than prose, so it gets the left edge, a
+	// fixed width and a monospace face. It is also not for the person being
+	// told the update failed — leading with a make error is alarming in a way
+	// the situation does not warrant, since nothing is broken and the old
+	// version is still running. The dialog says that in words; the log waits
+	// behind a disclosure for whoever is going to report it.
 	detail := gtk.NewLabel("")
 	detail.SetXAlign(0)
 	detail.SetWrap(true)
@@ -81,8 +85,23 @@ func (a *App) startUpdate(done func(ok bool)) {
 	detail.SetCanFocus(false)
 	detail.AddCSSClass("monospace")
 	detail.AddCSSClass("caption")
-	detail.SetVisible(false)
-	body.Append(detail)
+
+	copyBtn := gtk.NewButtonWithLabel("Copy log")
+	copyBtn.SetHAlign(gtk.AlignStart)
+	copyBtn.ConnectClicked(func() {
+		copyBtn.Clipboard().SetText(detail.Text())
+		copyBtn.SetLabel("Copied")
+	})
+
+	detailBox := gtk.NewBox(gtk.OrientationVertical, 8)
+	detailBox.SetMarginTop(8)
+	detailBox.Append(detail)
+	detailBox.Append(copyBtn)
+
+	expander := gtk.NewExpander("Technical details")
+	expander.SetVisible(false)
+	expander.SetChild(detailBox)
+	body.Append(expander)
 
 	dlg.SetExtraChild(body)
 	// Closing the dialog only puts it away; the build carries on, and the app
@@ -107,10 +126,11 @@ func (a *App) startUpdate(done func(ok bool)) {
 				if errors.Is(err, errNoCheckout) {
 					status.SetText(err.Error() + "\nDownload the newer version from the project page instead.")
 				} else {
-					status.SetText("The update didn't finish — Atlas Monitor is still on v" + a.version + ".")
+					status.SetText("The update couldn't be installed.\nAtlas Monitor is still on v" +
+						a.version + " and running normally.")
 					if tail := updateLogTail(maxLogTail); tail != "" {
 						detail.SetText(tail)
-						detail.SetVisible(true)
+						expander.SetVisible(true)
 					}
 				}
 				if done != nil {
