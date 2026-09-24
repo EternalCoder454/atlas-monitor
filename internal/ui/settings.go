@@ -374,6 +374,34 @@ func perfGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 	})
 	g.Add(render)
 
+	// Text rendering. Separate from the renderer above: this one decides
+	// whether GTK may skip hinting, which is only obvious on a 1x display.
+	textLabels := make([]string, len(gfx.TextModes))
+	textSel := 0
+	currentText := gfx.NormalizeText(s.TextRendering)
+	for i, m := range gfx.TextModes {
+		textLabels[i] = m.Label
+		if m.Value == currentText {
+			textSel = i
+		}
+	}
+	text := adw.NewComboRow()
+	text.SetTitle("Text")
+	text.SetSubtitle(gfx.TextModes[textSel].Detail)
+	text.SetModel(gtk.NewStringList(textLabels))
+	text.SetSelected(uint(textSel))
+	text.NotifyProperty("selected", func() {
+		idx := int(text.Selected())
+		if idx < 0 || idx >= len(gfx.TextModes) || gfx.TextModes[idx].Value == s.TextRendering {
+			return
+		}
+		s.TextRendering = gfx.TextModes[idx].Value
+		text.SetSubtitle(gfx.TextModes[idx].Detail + " · restart Atlas to apply")
+		_ = config.Save(*s)
+		fire(h.OnChange)
+	})
+	g.Add(text)
+
 	// Sampling interval. Slower is cheaper, and stretches the graphs: they hold
 	// 60 samples whatever the rate.
 	intervals := make([]string, len(config.RefreshChoices))

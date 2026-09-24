@@ -16,6 +16,10 @@ type diskView struct {
 	caption    *liveLabel
 	readGraph  *graph.Graph
 	writeGraph *graph.Graph
+	capacity   *capacityBar
+	capUsedDot *colorDot
+	capUsed    *gtk.Label
+	capFree    *gtk.Label
 
 	vSize, vUsed, vFree     *liveLabel
 	vReadTotal, vWriteTotal *liveLabel
@@ -59,6 +63,21 @@ func newDiskView(col *stats.Collector, disk *stats.DiskStats) *diskView {
 		box.Append(note)
 	}
 
+	// Capacity first: how full the drive is, which is the thing you open this
+	// page to find out. Throughput matters less often and reads below.
+	if !isSwap {
+		box.Append(sectionTitle("CAPACITY"))
+		v.capacity = newCapacityBar(24)
+		box.Append(v.capacity)
+		v.capUsed = gtk.NewLabel("")
+		v.capFree = gtk.NewLabel("")
+		v.capUsedDot = newColorDot(graph.ColorCPU, 0.95)
+		box.Append(legendRow(
+			legendEntry(v.capUsedDot, v.capUsed),
+			legendEntry(newColorDot(graph.ColorFree, 0.30), v.capFree),
+		))
+	}
+
 	box.Append(sectionTitle("READ SPEED"))
 	v.readGraph = graph.New("Read", graph.ColorDiskRead, readHist, graph.Bytes, 130)
 	box.Append(v.readGraph)
@@ -85,15 +104,29 @@ func newDiskView(col *stats.Collector, disk *stats.DiskStats) *diskView {
 func (v *diskView) Root() gtk.Widgetter { return v.root }
 
 func (v *diskView) Update() {
-	var used, free, rTotal, wTotal uint64
+	var usedBytes, free, rTotal, wTotal uint64
 	var rRate, wRate float64
 	v.col.Read(func(s *stats.Stats) {
-		used, free = v.disk.Used, v.disk.Free
+		usedBytes, free = v.disk.Used, v.disk.Free
 		rTotal, wTotal = v.disk.ReadTotal, v.disk.WriteTotal
 		rRate, wRate = v.disk.ReadRate, v.disk.WriteRate
 	})
-	v.vUsed.bytesVal(used)
+	v.vUsed.bytesVal(usedBytes)
 	v.vFree.bytesVal(free)
+	if v.capacity != nil {
+		total := float64(usedBytes + free)
+		frac := 0.0
+		if total > 0 {
+			frac = float64(usedBytes) / total
+		}
+		used := capacityColor(frac)
+		v.capacity.set(total,
+			capSeg{float64(usedBytes), used, 0.95},
+			capSeg{float64(free), graph.ColorFree, 0.14})
+		v.capUsedDot.setColor(used, 0.95)
+		v.capUsed.SetText(format.Bytes(usedBytes) + " used")
+		v.capFree.SetText(format.Bytes(free) + " free")
+	}
 	v.vReadRate.rate(rRate)
 	v.vWriteRate.rate(wRate)
 	v.vReadTotal.bytesVal(rTotal)

@@ -48,6 +48,7 @@ type Window struct {
 	stack        *gtk.Stack
 	views        map[string]*lazyView
 	asst         assistant
+	sidebar      *sidebar
 	assistantRow *adw.ActionRow
 	active       string
 	visible      bool
@@ -126,6 +127,7 @@ func (w *Window) Build() gtk.Widgetter {
 	orderedNets := orderByActive(nets, activeNet)
 
 	sb := buildSidebar(disks, orderedNets, gpuAvail, batteryAvail, aiCompiledIn, w.selectView)
+	w.sidebar = sb
 	w.assistantRow = sb.assistantRow
 	w.netExp = sb.netExp
 	w.netRows = sb.netRows
@@ -212,6 +214,9 @@ func (w *Window) installTick() {
 			return true
 		}
 		w.reorderNets()
+		if w.sidebar != nil {
+			w.col.Read(w.sidebar.update)
+		}
 		w.tickActive()
 		if time.Since(w.lastTrim) >= trimInterval {
 			w.lastTrim = time.Now()

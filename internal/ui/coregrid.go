@@ -2,9 +2,13 @@ package ui
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 
 	"github.com/diamondburned/gotk4/pkg/cairo"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
+	"github.com/diamondburned/gotk4/pkg/pango"
+	"github.com/diamondburned/gotk4/pkg/pangocairo"
 
 	"atlas-monitor/internal/graph"
 )
@@ -17,6 +21,21 @@ type coreGrid struct {
 	usages []float64
 	labels []string // "Core N", built once (kept out of the draw hot path)
 	cols   int
+	dirty  bool // a reading changed, so its layout needs new text
+
+	// Core labels and readings are drawn through Pango rather than Cairo's
+	// "toy" text API. That API picks a font by family name with no reference to
+	// the desktop's own, and gets none of GTK's hinting configuration, which is
+	// why these labels looked soft next to every other piece of text in the
+	// window.
+	//
+	// There is a layout per cell rather than one reused for all of them, because
+	// setting a layout's text re-shapes it: sharing one would re-shape sixty-four
+	// strings on every frame. The names never change, so they are shaped once;
+	// a reading is re-shaped only on the tick its value actually moves.
+	names []*pango.Layout
+	pcts  []*pango.Layout
+	pct   []string
 }
 
 const coreRowHeight = 34
@@ -31,6 +50,7 @@ func newCoreGrid(n int) *coreGrid {
 	for i := range g.labels {
 		g.labels[i] = fmt.Sprintf("Core %d", i)
 	}
+	g.pct = make([]string, n)
 	rows := (n + g.cols - 1) / g.cols
 	g.SetContentHeight(rows * coreRowHeight)
 	g.SetHExpand(true)
@@ -46,6 +66,10 @@ func (g *coreGrid) set(usages []float64) {
 	for i := range g.usages {
 		if i < len(usages) && g.usages[i] != usages[i] {
 			g.usages[i] = usages[i]
+			if p := strconv.Itoa(int(usages[i]+0.5)) + "%"; p != g.pct[i] {
+				g.pct[i] = p
+				g.dirty = true // re-shape this reading on the next draw
+			}
 			changed = true
 		}
 	}
@@ -62,22 +86,39 @@ func (g *coreGrid) draw(area *gtk.DrawingArea, cr *cairo.Context, w, h int) {
 	fr, fg, fb := graph.Foreground(area)
 
 	cellW := float64(w) / float64(g.cols)
-	cr.SelectFontFace("sans-serif", cairo.FontSlantNormal, cairo.FontWeightNormal)
-	cr.SetFontSize(10)
+	if g.names == nil {
+		g.names = make([]*pango.Layout, n)
+		g.pcts = make([]*pango.Layout, n)
+		for i := range g.names {
+			g.names[i] = area.CreatePangoLayout(g.labels[i])
+			g.pcts[i] = area.CreatePangoLayout("")
+		}
+		g.dirty = true
+	}
+	if g.dirty {
+		for i := range g.pcts {
+			g.pcts[i].SetText(g.pct[i])
+		}
+		g.dirty = false
+	}
 
 	for i := 0; i < n; i++ {
 		x := float64(i%g.cols) * cellW
 		y := float64(i/g.cols) * coreRowHeight
-
-		cr.SetSourceRGBA(fr, fg, fb, 0.6)
-		cr.MoveTo(x+2, y+12)
-		cr.ShowText(g.labels[i])
-
 		barX, barY := x+2, y+18.0
 		barW, barH := cellW-8, 7.0
-		cr.SetSourceRGBA(fr, fg, fb, 0.12)
-		cr.Rectangle(barX, barY, barW, barH)
-		cr.Fill()
+
+		// Name on the left, reading on the right, on one line above the bar.
+		cr.SetSourceRGBA(fr, fg, fb, 0.75)
+		cr.MoveTo(barX, y+1)
+		pangocairo.ShowLayout(cr, g.names[i])
+
+		if g.pct[i] != "" {
+			tw, _ := g.pcts[i].PixelSize()
+			cr.SetSourceRGBA(fr, fg, fb, 0.55)
+			cr.MoveTo(barX+barW-float64(tw), y+1)
+			pangocairo.ShowLayout(cr, g.pcts[i])
+		}
 
 		u := g.usages[i]
 		if u < 0 {
@@ -85,8 +126,31 @@ func (g *coreGrid) draw(area *gtk.DrawingArea, cr *cairo.Context, w, h int) {
 		} else if u > 100 {
 			u = 100
 		}
-		cr.SetSourceRGBA(graph.ColorCPU.R, graph.ColorCPU.G, graph.ColorCPU.B, 0.9)
-		cr.Rectangle(barX, barY, barW*u/100, barH)
+
+		// Rounded track and fill: square ends read as unfinished at this size.
+		cr.SetSourceRGBA(fr, fg, fb, 0.14)
+		roundedBar(cr, barX, barY, barW, barH)
 		cr.Fill()
+		if u > 0 {
+			fw := barW * u / 100
+			if fw < barH { // keep a very small reading from becoming a sliver
+				fw = barH
+			}
+			cr.SetSourceRGBA(graph.ColorCPU.R, graph.ColorCPU.G, graph.ColorCPU.B, 0.95)
+			roundedBar(cr, barX, barY, fw, barH)
+			cr.Fill()
+		}
 	}
+}
+
+// roundedBar traces a pill-shaped rectangle, the radius being half its height.
+func roundedBar(cr *cairo.Context, x, y, w, h float64) {
+	r := h / 2
+	if w < h {
+		w = h
+	}
+	cr.NewPath()
+	cr.Arc(x+r, y+r, r, math.Pi/2, 3*math.Pi/2)
+	cr.Arc(x+w-r, y+r, r, 3*math.Pi/2, math.Pi/2)
+	cr.ClosePath()
 }

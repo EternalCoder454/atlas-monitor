@@ -18,4 +18,9 @@ var (
 	ColorDiskWr   = rgb(0xed, 0x33, 0x3b) // red-orange
 	ColorBattery  = rgb(0x33, 0xd1, 0x7a) // battery green
 	ColorPowerDrw = rgb(0xf6, 0xd3, 0x2d) // draw: amber
+
+	// ColorFree is the neutral used for the unfilled part of a capacity bar. It
+	// is a grey rather than a hue so that "space you still have" never competes
+	// with the reading beside it.
+	ColorFree = rgb(0x9a, 0x9d, 0xa3)
 )

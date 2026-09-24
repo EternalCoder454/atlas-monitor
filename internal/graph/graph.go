@@ -5,6 +5,8 @@ package graph
 import (
 	"github.com/diamondburned/gotk4/pkg/cairo"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
+	"github.com/diamondburned/gotk4/pkg/pango"
+	"github.com/diamondburned/gotk4/pkg/pangocairo"
 
 	"atlas-monitor/internal/format"
 	"atlas-monitor/internal/stats"
@@ -38,6 +40,16 @@ type Graph struct {
 	// Current-value text, cached so a steady reading costs no allocation.
 	valBuf  []byte
 	valText string
+
+	// Text is drawn through Pango rather than Cairo's "toy" API, so the chart
+	// labels use the desktop font at the desktop's hinting settings instead of
+	// whatever cairo_select_font_face picks. The layouts are built once from the
+	// widget and reused: creating one per frame would both re-shape the text and
+	// churn a gotk4 wrapper each time. A font change at runtime needs a restart
+	// to take effect here, which is the same deal the rendering mode has.
+	labelLayout *pango.Layout
+	valueLayout *pango.Layout
+	shownValue  string
 }
 
 // New builds a graph for the given ring buffer. height is the requested
@@ -124,25 +136,33 @@ func (g *Graph) draw(area *gtk.DrawingArea, cr *cairo.Context, w, h int) {
 		cr.Stroke()
 	}
 
-	cr.SelectFontFace("sans-serif", cairo.FontSlantNormal, cairo.FontWeightNormal)
-	cr.SetFontSize(11)
+	if g.labelLayout == nil {
+		g.labelLayout = area.CreatePangoLayout(g.label)
+		g.valueLayout = area.CreatePangoLayout("")
+	}
 
 	// Label, top-left.
 	if g.label != "" {
-		cr.SetSourceRGBA(fr, fg, fb, 0.6)
-		cr.MoveTo(6, 15)
-		cr.ShowText(g.label)
+		cr.SetSourceRGBA(fr, fg, fb, 0.66)
+		cr.MoveTo(8, 5)
+		pangocairo.ShowLayout(cr, g.labelLayout)
 	}
 
-	// Current value, top-right (width estimated to avoid TextExtents).
+	// Current value, top-right. Pango measures the text, so it lands where it
+	// should instead of where a character-count estimate guessed.
 	cur := 0.0
 	if n > 0 {
 		cur = g.scratch[n-1]
 	}
 	text := g.formatValue(cur)
-	cr.SetSourceRGBA(fr, fg, fb, 0.85)
-	cr.MoveTo(width-float64(len(text))*6.5-6, 15)
-	cr.ShowText(text)
+	if text != g.shownValue {
+		g.valueLayout.SetText(text)
+		g.shownValue = text
+	}
+	tw, _ := g.valueLayout.PixelSize()
+	cr.SetSourceRGBA(fr, fg, fb, 0.92)
+	cr.MoveTo(width-float64(tw)-8, 5)
+	pangocairo.ShowLayout(cr, g.valueLayout)
 }
 
 // formatValue renders v into the graph's scratch buffer and returns the text,

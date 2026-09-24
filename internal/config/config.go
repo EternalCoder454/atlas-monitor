@@ -87,6 +87,7 @@ type Settings struct {
 	AIEnabled      bool   `json:"ai_enabled"`
 	OllamaURL      string `json:"ollama_url"`
 	Model          string `json:"model"`
+	TextRendering  string `json:"text_rendering"`
 	AssistantTitle string `json:"assistant_title"` // page header / chat label; sidebar stays "Assistant"
 	SystemPrompt   string `json:"system_prompt"`
 	UpdateChannel  string `json:"update_channel"` // "main" (Release) or "beta" (newest features/fixes)
@@ -111,7 +112,8 @@ func Defaults() Settings {
 	return Settings{
 		AIEnabled:      true,
 		OllamaURL:      "http://localhost:11434",
-		Model:          "qwen2.5:3b",
+		Model:          "qwen3.5:9b",
+		TextRendering:  gfx.TextSharp,
 		AssistantTitle: "Assistant",
 		SystemPrompt:   DefaultSystemPrompt,
 		UpdateChannel:  "main",
@@ -161,6 +163,7 @@ func Load() Settings {
 		s.UpdateChannel = "main" // default/repair: Release channel
 	}
 	s.RenderMode = gfx.Normalize(s.RenderMode)
+	s.TextRendering = gfx.NormalizeText(s.TextRendering)
 	s.RefreshSeconds = NormalizeRefresh(s.RefreshSeconds)
 	if s.WindowWidth < MinWindowWidth {
 		s.WindowWidth = DefaultWindowWidth
@@ -193,5 +196,35 @@ func Save(s Settings) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path(), b, 0o644)
+	// Write to a sibling and rename over the target, so the settings file is
+	// never observed half-written. Atlas saves on window close, which is exactly
+	// when the process is most likely to be killed mid-write — and a truncated
+	// file reads back as no settings at all, silently resetting the window size,
+	// the last view and the refresh interval.
+	tmp := path() + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	// Flush before the rename: rename only orders the directory entry, so
+	// without this the new name can be visible while its contents are not.
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path()); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }

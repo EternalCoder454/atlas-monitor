@@ -13,6 +13,11 @@ type sidebar struct {
 	assistantRow *adw.ActionRow
 	netExp       *adw.ExpanderRow
 	netRows      map[string]*adw.ActionRow
+
+	// Live readings shown on the right of the hardware rows, so the headline
+	// numbers are visible without opening each page. Nil where the machine has
+	// no such device.
+	cpuVal, memVal, gpuVal *liveLabel
 }
 
 // buildSidebar constructs the fixed 200px navigation panel. onSelect is called
@@ -23,8 +28,9 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, ba
 
 	outer.Append(sectionTitle("HARDWARE"))
 	hw := newSidebarList()
-	appendRow(hw, "CPU", "atlas-cpu-symbolic", "cpu", onSelect)
-	appendRow(hw, "Memory", "atlas-memory-symbolic", "memory", onSelect)
+	sb := &sidebar{}
+	sb.cpuVal = rowValue(appendRow(hw, "CPU", "atlas-cpu-symbolic", "cpu", onSelect))
+	sb.memVal = rowValue(appendRow(hw, "Memory", "atlas-memory-symbolic", "memory", onSelect))
 
 	diskExp := adw.NewExpanderRow()
 	diskExp.SetTitle("Disk")
@@ -44,7 +50,7 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, ba
 	hw.Append(netExp)
 
 	if gpuAvail {
-		appendRow(hw, "GPU", "atlas-gpu-symbolic", "gpu", onSelect)
+		sb.gpuVal = rowValue(appendRow(hw, "GPU", "atlas-gpu-symbolic", "gpu", onSelect))
 	}
 	if batteryAvail {
 		appendRow(hw, "Battery", "battery-symbolic", "power", onSelect)
@@ -70,7 +76,8 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, ba
 	scroll.SetSizeRequest(200, -1)
 	scroll.SetVExpand(true)
 
-	return &sidebar{root: scroll, assistantRow: assistantRow, netExp: netExp, netRows: netRows}
+	sb.root, sb.assistantRow, sb.netExp, sb.netRows = scroll, assistantRow, netExp, netRows
+	return sb
 }
 
 func newSidebarList() *gtk.ListBox {
@@ -90,6 +97,30 @@ func appendRow(lb *gtk.ListBox, title, icon, name string, onSelect func(string))
 	row.ConnectActivated(func() { onSelect(name) })
 	lb.Append(row)
 	return row
+}
+
+// rowValue attaches a live reading to the right-hand end of a sidebar row.
+func rowValue(row *adw.ActionRow) *liveLabel {
+	l := gtk.NewLabel("")
+	l.AddCSSClass("am-sidebar-value")
+	l.SetVAlign(gtk.AlignCenter)
+	row.AddSuffix(l)
+	return newLiveLabel(l)
+}
+
+// update refreshes the readings beside the hardware rows. It runs every tick
+// whatever page is open, which is the point of them, and costs three label
+// comparisons — liveLabel only touches GTK when the text actually changes.
+func (s *sidebar) update(st *stats.Stats) {
+	if s.cpuVal != nil {
+		s.cpuVal.percent(st.CPU.Usage)
+	}
+	if s.memVal != nil && st.Mem.Total > 0 {
+		s.memVal.percent(float64(st.Mem.Used) / float64(st.Mem.Total) * 100)
+	}
+	if s.gpuVal != nil && st.GPU.Available {
+		s.gpuVal.percent(st.GPU.Usage)
+	}
 }
 
 func appendSubRow(exp *adw.ExpanderRow, title, subtitle, name string, onSelect func(string)) *adw.ActionRow {

@@ -623,7 +623,7 @@ func loadAvg1() string {
 }
 
 // modelInstalled reports whether want is among the Ollama tags. An untagged
-// want (e.g. "qwen2.5") matches any of its tags, since Ollama defaults to
+// want (e.g. "qwen3.5") matches any of its tags, since Ollama defaults to
 // ":latest" when pulling without one.
 func modelInstalled(models []string, want string) bool {
 	want = strings.TrimSpace(want)

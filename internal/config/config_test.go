@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"atlas-monitor/internal/gfx"
@@ -50,6 +51,7 @@ func TestLoadRepairsBadValues(t *testing.T) {
 		"window_width":    12,
 		"window_height":   -400,
 		"render_mode":     "holographic",
+		"text_rendering":  "crispy",
 		"update_channel":  "nightly",
 		"ollama_url":      "",
 		"model":           "",
@@ -75,6 +77,9 @@ func TestLoadRepairsBadValues(t *testing.T) {
 	}
 	if s.RenderMode != gfx.ModeSoftware {
 		t.Errorf("RenderMode = %q, want repaired to %q", s.RenderMode, gfx.ModeSoftware)
+	}
+	if s.TextRendering != gfx.TextSharp {
+		t.Errorf("TextRendering = %q, want repaired to %q", s.TextRendering, gfx.TextSharp)
 	}
 	if s.UpdateChannel != "main" {
 		t.Errorf("UpdateChannel = %q, want repaired to main", s.UpdateChannel)
@@ -117,4 +122,160 @@ func TestLoadWithNoFile(t *testing.T) {
 	if s.RefreshSeconds == 0 || s.WindowWidth == 0 || s.RenderMode == "" {
 		t.Errorf("first run produced unusable settings: %+v", s)
 	}
+}
+
+// TestLoadSurvivesACorruptFile covers a settings file that is not valid JSON at
+// all: a truncated write from a machine that lost power, a file someone edited
+// by hand, or bytes from an entirely different program. None of it may stop
+// Atlas starting — the worst acceptable outcome is falling back to defaults.
+func TestLoadSurvivesACorruptFile(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+	}{
+		{"empty", ""},
+		{"truncated object", `{"refresh_seconds": 2, "window_wid`},
+		{"not json", "this is not json at all\n"},
+		{"binary", "\x00\x01\x02\xff\xfe"},
+		{"json array", `[1, 2, 3]`},
+		{"json string", `"settings"`},
+		{"null", `null`},
+		{"nested garbage", `{"refresh_seconds": {"deeply": ["wrong"]}}`},
+		{"wrong types", `{"refresh_seconds": "fast", "window_width": "wide", "render_mode": 7}`},
+		{"duplicate keys", `{"refresh_seconds": 2, "refresh_seconds": 99}`},
+		{"huge numbers", `{"refresh_seconds": 999999999999999999999, "window_width": 1e400}`},
+		{"only whitespace", "   \n\t  "},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", dir)
+			if err := os.MkdirAll(filepath.Join(dir, "atlas-monitor"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "atlas-monitor", "settings.json"), []byte(c.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			s := Load()
+			// Every field the app reads without checking must be usable.
+			if s.RefreshSeconds != NormalizeRefresh(s.RefreshSeconds) {
+				t.Errorf("RefreshSeconds = %d, not a normalized value", s.RefreshSeconds)
+			}
+			if s.RefreshSeconds < 1 {
+				t.Errorf("RefreshSeconds = %d, would spin the collectors", s.RefreshSeconds)
+			}
+			if s.WindowWidth < MinWindowWidth || s.WindowHeight < MinWindowHeight {
+				t.Errorf("window %dx%d is below the minimum", s.WindowWidth, s.WindowHeight)
+			}
+			if s.RenderMode != gfx.Normalize(s.RenderMode) {
+				t.Errorf("RenderMode = %q, not a value gfx accepts", s.RenderMode)
+			}
+			if s.TextRendering != gfx.NormalizeText(s.TextRendering) {
+				t.Errorf("TextRendering = %q, not a value gfx accepts", s.TextRendering)
+			}
+			if s.UpdateChannel != "main" && s.UpdateChannel != "beta" {
+				t.Errorf("UpdateChannel = %q", s.UpdateChannel)
+			}
+			if s.OllamaURL == "" || s.Model == "" || s.AssistantTitle == "" || s.SystemPrompt == "" {
+				t.Error("a text field the assistant needs came back empty")
+			}
+		})
+	}
+}
+
+// TestLoadWithAnUnreadableFile covers the settings file being a directory, which
+// is what a botched install or a stray mkdir leaves behind.
+func TestLoadWithAnUnreadableFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "atlas-monitor", "settings.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s := Load()
+	if s.RefreshSeconds != DefaultRefreshSeconds {
+		t.Errorf("RefreshSeconds = %d, want the default %d", s.RefreshSeconds, DefaultRefreshSeconds)
+	}
+	if s.RenderMode != gfx.ModeSoftware {
+		t.Errorf("RenderMode = %q, want the default", s.RenderMode)
+	}
+}
+
+// TestSaveIsAtomic checks the settings file is never left half-written. Atlas
+// saves on window close, so an interrupted save is the realistic failure, and a
+// truncated file silently resets the window size and last view.
+func TestSaveIsAtomic(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	want := Defaults()
+	want.RefreshSeconds = 3
+	want.WindowWidth = 1400
+	want.WindowHeight = 900
+	want.LastView = "apps"
+	if err := Save(want); err != nil {
+		t.Fatal(err)
+	}
+
+	// Nothing may be left beside the settings file.
+	entries, err := os.ReadDir(filepath.Join(dir, "atlas-monitor"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "settings.json" {
+			t.Errorf("Save left %q behind", e.Name())
+		}
+	}
+
+	// A save over an existing file must replace it completely, not merge into
+	// whatever bytes were there — a shorter document written in place would
+	// leave the tail of the old one.
+	long := want
+	long.SystemPrompt = strings.Repeat("x", 4096)
+	if err := Save(long); err != nil {
+		t.Fatal(err)
+	}
+	short := want
+	short.SystemPrompt = "short"
+	if err := Save(short); err != nil {
+		t.Fatal(err)
+	}
+	got := Load()
+	if got.SystemPrompt != "short" {
+		t.Errorf("SystemPrompt = %q (%d bytes), want %q — a shorter save did not replace the longer one",
+			truncate(got.SystemPrompt), len(got.SystemPrompt), "short")
+	}
+	if got.RefreshSeconds != 3 || got.WindowWidth != 1400 || got.LastView != "apps" {
+		t.Errorf("round trip lost values: %+v", got)
+	}
+}
+
+// TestSaveOverAReadOnlyDirectoryFails checks Save reports an error rather than
+// pretending to have written, so the caller is not told settings were kept when
+// they were not.
+func TestSaveOverAReadOnlyDirectoryFails(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	cfg := filepath.Join(dir, "atlas-monitor")
+	if err := os.MkdirAll(cfg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(cfg, 0o500); err != nil {
+		t.Skipf("cannot chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(cfg, 0o755) })
+	if err := os.WriteFile(filepath.Join(cfg, "probe"), []byte("x"), 0o644); err == nil {
+		t.Skip("running with privileges that ignore mode bits")
+	}
+	if err := Save(Defaults()); err == nil {
+		t.Error("Save reported success writing into a read-only directory")
+	}
+}
+
+func truncate(s string) string {
+	if len(s) > 40 {
+		return s[:40] + "..."
+	}
+	return s
 }

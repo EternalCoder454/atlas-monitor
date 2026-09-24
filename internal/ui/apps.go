@@ -32,6 +32,18 @@ import (
 type procRow struct {
 	proc process.Proc
 	gen  uint64
+
+	// live is false while the row is vacant: its process has exited and the row
+	// is waiting in the free list to be reused for the next one. A vacant row
+	// stays in the list model and is hidden by the filter — see the free list in
+	// appsView for why rows are recycled rather than removed.
+	live bool
+
+	// shown is what the filter last decided about this row. The two differ only
+	// between a row changing state and GTK being told, which is what makes it
+	// possible to notice that a row retired and reused within one tick never
+	// changed visibility at all.
+	shown bool
 }
 
 // renderFunc appends a cell's text to dst. Working in bytes lets a cell compare
@@ -54,6 +66,15 @@ type procCell struct {
 	buf    []byte   // render scratch
 	cur    []byte   // text currently displayed
 	set    bool
+
+	// dim decides whether this reading is the boring one — a rate of zero, a
+	// process with no GPU handle, a power draw of "Very low". Those are worth
+	// showing, since a blank cell would look like a collector failure, but a
+	// table where nine columns in ten read zero hides the rows that are
+	// actually doing something. dimmed tracks what the label currently wears so
+	// the CSS class is only touched when it changes.
+	dim    func([]byte) bool
+	dimmed bool
 }
 
 // refresh re-renders the cell, touching GTK only when the text really changed.
@@ -68,6 +89,28 @@ func (c *procCell) refresh() {
 	c.cur = append(c.cur[:0], c.buf...)
 	c.set = true
 	c.label.SetText(string(c.buf))
+	if c.dim != nil {
+		if d := c.dim(c.buf); d != c.dimmed {
+			c.dimmed = d
+			if d {
+				c.label.AddCSSClass("am-zero")
+			} else {
+				c.label.RemoveCSSClass("am-zero")
+			}
+		}
+	}
+}
+
+// isIdleReading reports whether a numeric cell shows nothing of interest: no
+// digit above zero anywhere in it. That covers "0 B/s", "0.0%", "0.00 GiB" and
+// the em dash used where a figure does not apply.
+func isIdleReading(b []byte) bool {
+	for _, ch := range b {
+		if ch >= '1' && ch <= '9' {
+			return false
+		}
+	}
+	return true
 }
 
 type appsView struct {
@@ -87,32 +130,51 @@ type appsView struct {
 	order  []*procRow
 	gen    uint64
 
+	// free holds rows whose process has exited. They stay in the list model and
+	// are reused for the next process that appears, so the model's item set only
+	// ever grows to the high-water mark of concurrent processes and never churns.
+	//
+	// This is not an optimisation, it is a leak fix. Attaching any Go callback to
+	// a list model — the search GtkCustomFilter here, the column GtkCustomSorters
+	// below — makes gotk4 take a reference on every item the callback is handed
+	// and never give it back, so an item spliced out of the model is pinned for
+	// the life of the process. On a machine with ordinary process churn that is
+	// around a megabyte a minute, for as long as this page is open. The pinning
+	// is per item rather than per call, so holding the item set steady is what
+	// bounds it; TestAppsRowsAreRecycled and TestRowsAreReleasedWhenSplicedOut
+	// cover both halves of that.
+	free []*procRow
+
 	// cells holds the state of every realised cell, keyed by the native
-	// GtkColumnViewCell pointer (stable for the cell's lifetime).
-	cells map[uintptr]*procCell
+	// GtkColumnViewCell pointer (stable for the cell's lifetime). byLabel is the
+	// same set keyed by the label inside each cell, which is what a click on the
+	// table resolves to.
+	cells   map[uintptr]*procCell
+	byLabel map[uintptr]*procCell
 
 	// Scratch reused across ticks.
 	snap     []process.Proc
 	grouping []process.Proc
 	groups   map[string]int
 	appended []*procRow
+	pending  []int // indices into the snapshot with no row yet
 
 	search      string
 	grouped     bool
 	showKernel  bool
 	needRebuild bool
-	popHasPar   bool
 	targetPID   int
 	targetName  string
 }
 
 func newAppsView(proc *process.Collector) *appsView {
 	v := &appsView{
-		proc:   proc,
-		byPID:  make(map[int]*procRow),
-		byName: make(map[string]*procRow),
-		cells:  make(map[uintptr]*procCell),
-		groups: make(map[string]int),
+		proc:    proc,
+		byPID:   make(map[int]*procRow),
+		byName:  make(map[string]*procRow),
+		cells:   make(map[uintptr]*procCell),
+		byLabel: make(map[uintptr]*procCell),
+		groups:  make(map[string]int),
 	}
 
 	v.root = gtk.NewBox(gtk.OrientationVertical, 8)
@@ -125,6 +187,7 @@ func newAppsView(proc *process.Collector) *appsView {
 	toolbar := gtk.NewBox(gtk.OrientationHorizontal, 8)
 	searchEntry := gtk.NewSearchEntry()
 	searchEntry.SetHExpand(true)
+	searchEntry.SetPlaceholderText("Search by name or PID")
 	searchEntry.ConnectSearchChanged(func() {
 		v.search = lowerASCII(searchEntry.Text())
 		v.filter.Changed(gtk.FilterChangeDifferent)
@@ -185,7 +248,8 @@ func newAppsView(proc *process.Collector) *appsView {
 	// Very low → High rather than alphabetically.
 	cv.AppendColumn(v.textColumn("Power", false, 0,
 		func(dst []byte, p *process.Proc) []byte { return append(dst, p.Impact().String()...) },
-		func(a, b *process.Proc) bool { return a.PowerScore() < b.PowerScore() }))
+		func(a, b *process.Proc) bool { return a.PowerScore() < b.PowerScore() },
+		func(b []byte) bool { return string(b) == process.ImpactVeryLow.String() }))
 	cv.AppendColumn(v.textColumn("Net ≈ In", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendRate(dst, p.NetIn) },
 		func(a, b *process.Proc) bool { return a.NetIn < b.NetIn }))
@@ -247,41 +311,96 @@ func (v *appsView) Update() {
 	if v.grouped {
 		snap = v.groupByName(snap)
 	}
-
-	v.gen++
-	toAppend := v.appended[:0]
-	for i := range snap {
-		p := &snap[i]
-		row := v.lookup(p)
-		if row == nil {
-			row = &procRow{proc: *p}
-			v.register(row)
-			v.order = append(v.order, row)
-			toAppend = append(toAppend, row)
-		} else {
-			row.proc = *p // update values in place
-		}
-		row.gen = v.gen
-	}
-	if len(toAppend) > 0 {
-		v.model.Splice(len(v.order)-len(toAppend), 0, toAppend...)
-	}
-	v.appended = toAppend[:0] // keep the buffer for the next tick
-	// Drop processes that have exited (rows not stamped with this generation).
-	for i := 0; i < len(v.order); {
-		row := v.order[i]
-		if row.gen == v.gen {
-			i++
-			continue
-		}
-		v.model.Remove(i)
-		v.order = append(v.order[:i], v.order[i+1:]...)
-		v.unregister(row)
-	}
+	v.applyRows(snap)
 
 	// Refresh only the currently-visible cells (~rows on screen × columns).
 	for _, c := range v.cells {
 		c.refresh()
+	}
+}
+
+// applyRows merges one snapshot into the table's stable rows: values are updated
+// in place, a process that has appeared takes a recycled row (or a new one if
+// there is none to recycle), and a process that has exited retires its row to
+// the free list. It is split out from Update so the diff can be driven directly
+// by the tests, which have neither a collector nor a display.
+func (v *appsView) applyRows(snap []process.Proc) {
+	v.gen++
+
+	// Three passes, in this order for a reason. Processes that are still here
+	// are stamped first; then rows whose process is gone are retired, which is
+	// what fills the free list; only then are new processes given rows. Adding
+	// before retiring would find the free list empty every tick and leave the
+	// model at twice the high-water mark.
+	pending := v.pending[:0]
+	for i := range snap {
+		p := &snap[i]
+		if row := v.lookup(p); row != nil {
+			row.proc = *p // same process, update values in place
+			row.gen = v.gen
+			continue
+		}
+		pending = append(pending, i)
+	}
+
+	for _, row := range v.order {
+		if row.live && row.gen != v.gen {
+			row.live = false
+			v.unregister(row)
+			v.free = append(v.free, row)
+		}
+	}
+
+	toAppend := v.appended[:0]
+	for _, i := range pending {
+		p := &snap[i]
+		var row *procRow
+		if n := len(v.free); n > 0 {
+			// Reuse a row whose process exited: it is already in the model, so
+			// nothing is spliced and nothing is pinned.
+			row, v.free = v.free[n-1], v.free[:n-1]
+			row.proc = *p
+			row.live = true
+		} else {
+			row = &procRow{proc: *p, live: true}
+			v.order = append(v.order, row)
+			toAppend = append(toAppend, row)
+		}
+		row.gen = v.gen
+		v.register(row)
+	}
+	if len(toAppend) > 0 {
+		v.model.Splice(len(v.order)-len(toAppend), 0, toAppend...)
+	}
+	v.appended = toAppend[:0] // keep the buffers for the next tick
+	v.pending = pending[:0]
+
+	// The filter decides visibility from row.live, which GTK cannot see change,
+	// so a row appearing or retiring has to be announced — but only if the
+	// visible set really is different now. On a machine with busy process churn
+	// most ticks retire a row and immediately reuse it for a new process, which
+	// changes that row's contents but not whether it is shown. Announcing those
+	// ticks anyway made GTK tear down and rebuild the table's cells every
+	// second, which is most of what the page cost and most of what it leaked.
+	var hidden, revealed int
+	for _, row := range v.order {
+		if row.live == row.shown {
+			continue
+		}
+		row.shown = row.live
+		if row.live {
+			revealed++
+		} else {
+			hidden++
+		}
+	}
+	switch {
+	case hidden > 0 && revealed > 0:
+		v.filter.Changed(gtk.FilterChangeDifferent)
+	case hidden > 0:
+		v.filter.Changed(gtk.FilterChangeMoreStrict)
+	case revealed > 0:
+		v.filter.Changed(gtk.FilterChangeLessStrict)
 	}
 }
 
@@ -322,13 +441,28 @@ func (v *appsView) unregister(row *procRow) {
 	}
 }
 
+// clearModel empties the table without emptying the list model. Every row is
+// retired to the free list instead of being spliced out, for the same reason the
+// per-tick diff recycles rows: an item removed from a model that has a Go
+// callback attached is pinned for the life of the process, so toggling "Group by
+// app" a few dozen times would otherwise cost as much as an hour on the page.
 func (v *appsView) clearModel() {
-	if n := v.model.Len(); n > 0 {
-		v.model.Splice(0, n)
-	}
 	clear(v.byPID)
 	clear(v.byName)
-	v.order = v.order[:0]
+	v.free = v.free[:0]
+	hidden := false
+	for _, row := range v.order {
+		if row.live {
+			hidden = true
+		}
+		row.live = false
+		row.shown = false
+		row.gen = 0
+		v.free = append(v.free, row)
+	}
+	if hidden {
+		v.filter.Changed(gtk.FilterChangeMoreStrict)
+	}
 	for _, c := range v.cells {
 		c.row = nil
 		c.set = false
@@ -338,10 +472,18 @@ func (v *appsView) clearModel() {
 // matches implements the search filter. It works directly on the row's fields,
 // with no lower-casing copy or PID-to-string conversion per item.
 func (v *appsView) matches(item *coreglib.Object) bool {
+	return v.matchesRow(gioutil.ObjectValue[*procRow](item))
+}
+
+// matchesRow is the predicate itself, separate from unwrapping the list item so
+// the tests can exercise it without a GObject.
+func (v *appsView) matchesRow(r *procRow) bool {
+	if !r.live {
+		return false // a retired row waiting on the free list
+	}
 	if v.search == "" {
 		return true
 	}
-	r := gioutil.ObjectValue[*procRow](item)
 	if containsFold(r.proc.Name, v.search) {
 		return true
 	}
@@ -349,9 +491,24 @@ func (v *appsView) matches(item *coreglib.Object) bool {
 	return containsBytes(strconv.AppendInt(digits[:0], int64(r.proc.PID), 10), v.search)
 }
 
-// textColumn builds a sortable text column. xalign: 0 left, 1 right.
+// textColumn builds a sortable text column. xalign: 0 left, 1 right. A
+// right-aligned column is a numeric one, which is what decides both the tabular
+// figures and the dimming of idle readings; dimWhen overrides that test for
+// columns whose "nothing happening" value is not a zero.
 func (v *appsView) textColumn(title string, expand bool, xalign float64,
-	render renderFunc, less func(a, b *process.Proc) bool) *gtk.ColumnViewColumn {
+	render renderFunc, less func(a, b *process.Proc) bool,
+	dimWhen ...func([]byte) bool) *gtk.ColumnViewColumn {
+
+	numeric := xalign == 1
+	dim := func([]byte) bool { return false }
+	switch {
+	case len(dimWhen) > 0 && dimWhen[0] != nil:
+		dim = dimWhen[0]
+	case numeric:
+		dim = isIdleReading
+	default:
+		dim = nil
+	}
 
 	factory := gtk.NewSignalListItemFactory()
 	factory.ConnectSetup(func(obj *coreglib.Object) {
@@ -359,10 +516,13 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 		label := gtk.NewLabel("")
 		label.SetXAlign(float32(xalign))
 		label.SetEllipsize(3) // PANGO_ELLIPSIZE_END
+		if numeric {
+			label.AddCSSClass("am-num")
+		}
 		cell.SetChild(label)
-		c := &procCell{label: label, render: render}
+		c := &procCell{label: label, render: render, dim: dim}
 		v.cells[cell.Native()] = c
-		v.attachContextMenu(label, c)
+		v.byLabel[label.Object.Native()] = c
 	})
 	factory.ConnectBind(func(obj *coreglib.Object) {
 		cell := obj.Cast().(*gtk.ColumnViewCell)
@@ -380,7 +540,11 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 		}
 	})
 	factory.ConnectTeardown(func(obj *coreglib.Object) {
-		delete(v.cells, obj.Cast().(*gtk.ColumnViewCell).Native())
+		cell := obj.Cast().(*gtk.ColumnViewCell)
+		if c := v.cells[cell.Native()]; c != nil && c.label != nil {
+			delete(v.byLabel, c.label.Object.Native())
+		}
+		delete(v.cells, cell.Native())
 	})
 
 	col := gtk.NewColumnViewColumn(title, &factory.ListItemFactory)
@@ -439,29 +603,54 @@ func (v *appsView) buildContextMenu(parent gtk.Widgetter) {
 
 	v.popover = gtk.NewPopoverMenuFromModel(menu)
 	v.popover.SetHasArrow(false)
+
+	// One gesture for the whole table, parented once. Anything per-cell here
+	// would be registered for the life of the process — see attachContextMenu.
+	if w, ok := parent.(*gtk.ColumnView); ok {
+		v.attachContextMenu(w)
+	}
 }
 
-// attachContextMenu wires a right-click gesture on a cell to the popover,
-// reading the row the cell is bound to at click time.
-func (v *appsView) attachContextMenu(widget gtk.Widgetter, c *procCell) {
+// attachContextMenu wires one right-click gesture to the whole table, resolving
+// the row under the pointer at click time.
+//
+// It used to be a gesture per cell, connected in the factory's setup handler.
+// That leaks: gotk4 registers every Go callback in a process-wide registry and
+// does not release the entry when the widget goes away — around eleven live
+// objects per gesture, and disconnecting the handler first only halves it (see
+// TestPerWidgetGestureClosuresAreRetained). GTK builds cells constantly, on
+// scrolling as much as on refreshes, so on a machine with busy process churn the
+// Apps page grew by roughly a megabyte a minute for as long as it was open.
+// One gesture for the table costs one registration for the life of the process.
+func (v *appsView) attachContextMenu(cv *gtk.ColumnView) {
+	v.popover.SetParent(cv)
 	click := gtk.NewGestureClick()
 	click.SetButton(3) // secondary / right button
 	click.ConnectPressed(func(_ int, x, y float64) {
-		if c.row == nil {
+		c := v.cellAt(cv, x, y)
+		if c == nil || c.row == nil {
 			return
 		}
 		v.targetPID, v.targetName = c.row.proc.PID, c.row.proc.Name
-
-		if v.popHasPar {
-			v.popover.Unparent()
-		}
-		v.popover.SetParent(widget)
-		v.popHasPar = true
 		rect := gdk.NewRectangle(int(x), int(y), 1, 1)
 		v.popover.SetPointingTo(&rect)
 		v.popover.Popup()
 	})
-	gtk.BaseWidget(widget).AddController(click)
+	cv.AddController(click)
+}
+
+// cellAt finds the cell under a point in the table. Pick returns the deepest
+// widget there, which is the label a cell owns (or something inside it), so the
+// walk goes up a few parents looking for one this view put there.
+func (v *appsView) cellAt(cv *gtk.ColumnView, x, y float64) *procCell {
+	w := cv.Pick(x, y, gtk.PickDefault)
+	for i := 0; w != nil && i < 4; i++ {
+		if c := v.byLabel[gtk.BaseWidget(w).Object.Native()]; c != nil {
+			return c
+		}
+		w = gtk.BaseWidget(w).Parent()
+	}
+	return nil
 }
 
 func (v *appsView) kill(sig syscall.Signal) {

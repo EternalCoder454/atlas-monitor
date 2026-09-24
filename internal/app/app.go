@@ -36,6 +36,7 @@ type App struct {
 	settings config.Settings
 	aiClient *ai.Client
 	content  *ui.Window
+	win      *adw.ApplicationWindow
 }
 
 // New creates the application. css is the embedded stylesheet contents and
@@ -78,8 +79,18 @@ func (a *App) Run(args []string) int {
 }
 
 func (a *App) activate() {
+	// activate fires again every time Atlas is launched while it is already
+	// running: GApplication hands the request to the existing process rather
+	// than starting a second one. Without this guard each launch built another
+	// window and another full set of collectors, overwriting a.col and leaving
+	// the previous one running — around fifty held descriptors and six
+	// goroutines stranded per launch, for the life of the process.
+	if a.win != nil {
+		a.win.Present()
+		return
+	}
 	a.loadCSS()
-
+	applyTextRendering(a.settings.TextRendering)
 	a.aiClient = ai.New(a.settings.OllamaURL, a.settings.Model)
 
 	a.col = stats.New(gpu.NewReader())
@@ -89,6 +100,7 @@ func (a *App) activate() {
 	root := a.content.Build()
 
 	win := adw.NewApplicationWindow(&a.app.Application)
+	a.win = win
 	win.SetTitle("Atlas Monitor")
 	win.SetDefaultSize(a.settings.WindowWidth, a.settings.WindowHeight)
 	win.SetSizeRequest(config.MinWindowWidth, config.MinWindowHeight)
@@ -265,3 +277,33 @@ func (a *App) loadCSS() {
 			display, provider, gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 	}
 }
+
+// applyTextRendering decides whether GTK may trade glyph quality for speed.
+//
+// GTK's own default, gtk-font-rendering "automatic", lets it skip hinting — and
+// when it does, stems land between pixels. On a HiDPI display there are enough
+// pixels that nobody notices; at 1x the same text is visibly soft, which is why
+// Atlas looked worse on a 1080p monitor than on a 4K one beside it. "manual"
+// means GTK rasterises the way the desktop's own font settings ask, which is
+// what every other toolkit on the machine already does.
+//
+// Only the automatic/manual choice is made here. The hint style itself is left
+// alone: that is the user's setting, and Atlas has no business overriding it.
+//
+// Note that gtk-xft-hintstyle and gtk-xft-rgba have no effect while this is
+// "automatic" — GTK ignores them — and that GTK4 does no subpixel antialiasing
+// at all, so gtk-xft-rgba does nothing either way.
+func applyTextRendering(mode string) {
+	if gfx.NormalizeText(mode) != gfx.TextSharp {
+		return // leave GTK's own default in place
+	}
+	settings := gtk.SettingsGetDefault()
+	if settings == nil {
+		return
+	}
+	settings.SetObjectProperty("gtk-font-rendering", fontRenderingManual)
+}
+
+// fontRenderingManual is GTK_FONT_RENDERING_MANUAL. The enum is not bound by
+// gotk4, and the property takes the integer value.
+const fontRenderingManual = 1
