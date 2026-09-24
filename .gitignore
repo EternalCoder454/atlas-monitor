@@ -12,3 +12,6 @@
 *.swp
 *~
 .DS_Store
+
+# Design-review captures, not part of the build
+screenshots/

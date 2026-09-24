@@ -73,6 +73,12 @@ func (a *App) startUpdate(done func(ok bool)) {
 	detail.SetWrapMode(pango.WrapWordChar)
 	detail.SetMaxWidthChars(46)
 	detail.SetSelectable(true) // so it can be pasted into a bug report
+	// ...but not focusable with it. A selectable label selects all of itself
+	// when it takes focus, and as the only focusable thing in the dialog it
+	// took it on open: the failure appeared with the whole log highlighted, as
+	// though the dialog had gone wrong as well as the build. Dragging across it
+	// still selects.
+	detail.SetCanFocus(false)
 	detail.AddCSSClass("monospace")
 	detail.AddCSSClass("caption")
 	detail.SetVisible(false)
@@ -83,6 +89,11 @@ func (a *App) startUpdate(done func(ok bool)) {
 	// still restarts into the new version when it is done.
 	dlg.AddResponse("close", "Close")
 	dlg.SetCloseResponse("close")
+	// Close takes the focus. Without this it lands on the log below, which is
+	// selectable, and a label selects all of itself when focused — the failure
+	// came up with the whole build log highlighted as though something had gone
+	// wrong with the dialog too.
+	dlg.SetDefaultResponse("close")
 	if a.win != nil {
 		dlg.Present(a.win)
 	}
