@@ -1,6 +1,7 @@
 package process
 
 import (
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -245,5 +246,41 @@ func TestRatesNonNegative(t *testing.T) {
 		if p.GPU > 100.1 {
 			t.Errorf("pid=%d %s GPU %.1f%% exceeds 100%%", p.PID, p.Name, p.GPU)
 		}
+	}
+}
+
+// TestStartTimeIdentifiesAProcess covers the guard that stops a signal landing
+// on the wrong process after a PID has been reused.
+func TestStartTimeIdentifiesAProcess(t *testing.T) {
+	// Stable for a given process: two reads must agree.
+	self := os.Getpid()
+	a, ok := StartTime(self)
+	if !ok {
+		t.Fatal("cannot read our own start time")
+	}
+	time.Sleep(50 * time.Millisecond)
+	b, ok := StartTime(self)
+	if !ok || a != b {
+		t.Errorf("start time moved for a live process: %d then %d", a, b)
+	}
+	if a == 0 {
+		t.Error("start time reads as 0, which would make the guard useless")
+	}
+
+	// pid 1 booted before us, so its start time must be lower.
+	if init, ok := StartTime(1); ok && init > a {
+		t.Errorf("pid 1 starts at %d, after us at %d", init, a)
+	}
+
+	// A process that has exited cannot be confirmed.
+	cmd := exec.Command("/bin/true")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot spawn: %v", err)
+	}
+	pid := cmd.Process.Pid
+	_ = cmd.Wait()
+	// The zombie is reaped by Wait, so the entry is gone.
+	if _, ok := StartTime(pid); ok {
+		t.Logf("pid %d still readable just after exit; the guard compares values, so this is harmless", pid)
 	}
 }

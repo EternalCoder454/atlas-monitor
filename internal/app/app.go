@@ -181,19 +181,29 @@ func (a *App) saveWindowState(win *adw.ApplicationWindow) {
 // The helper is detached with setsid so it survives this process exiting; the
 // sleep lets the single-instance lock release before the new instance registers.
 func (a *App) onRestart() {
-	rebuild := ""
+	// The script path and the branch are passed to bash as arguments rather
+	// than pasted into the command it runs. Go's %q is not shell quoting: it
+	// leaves $(...) and backticks intact, and inside double quotes the shell
+	// still expands them, so a checkout path containing either would have been
+	// executed. Positional arguments cannot be re-read as syntax whatever they
+	// contain — which also means a perfectly ordinary path with a '$' in it now
+	// updates instead of breaking.
+	script := ""
 	if src := sourceDir(); src != "" {
-		script := filepath.Join(src, "scripts", "update.sh")
-		if _, err := os.Stat(script); err == nil {
-			branch := a.settings.UpdateChannel
-			if branch != "main" && branch != "beta" {
-				branch = "main"
-			}
-			rebuild = fmt.Sprintf("bash %q %q; ", script, branch)
+		p := filepath.Join(src, "scripts", "update.sh")
+		if _, err := os.Stat(p); err == nil {
+			script = p
 		}
 	}
-	helper := rebuild + fmt.Sprintf("sleep 1; gtk-launch %s", AppID)
-	_ = exec.Command("setsid", "bash", "-c", helper).Start()
+	branch := a.settings.UpdateChannel
+	if branch != "main" && branch != "beta" {
+		branch = "main"
+	}
+
+	// $0 names the shell for errors; $1..$3 are the values.
+	const helper = `if [ -n "$1" ]; then bash "$1" "$2"; fi; sleep 1; gtk-launch "$3"`
+	_ = exec.Command("setsid", "bash", "-c", helper,
+		"atlas-monitor-restart", script, branch, AppID).Start()
 	a.app.Quit()
 }
 
