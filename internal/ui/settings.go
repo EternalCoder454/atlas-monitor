@@ -22,7 +22,7 @@ const modelsURL = "https://ollama.com/library"
 // SettingsHooks are the app-level callbacks the Settings dialog needs.
 type SettingsHooks struct {
 	OnChange    func()                                                        // a setting was saved
-	ApplyUpdate func()                                                        // pull the channel, reinstall, relaunch
+	ApplyUpdate func(done func(ok bool))                                      // pull the channel, reinstall, relaunch; done reports a failure
 	CheckUpdate func(channel string) (available bool, info string, err error) // git fetch + compare (no restart)
 	Version     string
 	Location    string // install / source location, for display
@@ -353,9 +353,20 @@ func newAppPage(s *config.Settings, h SettingsHooks) *appPage {
 					update.SetSensitive(true)
 					status.SetSubtitle("Couldn't check: " + err.Error())
 				case available:
-					// Leave the button disabled — ApplyUpdate quits and relaunches.
+					// The button stays disabled while the install runs: it ends in
+					// a restart, and a dialog of its own shows how it is getting on.
+					// It comes back only if the update did not happen after all.
 					status.SetSubtitle(info + " — updating…")
-					fire(h.ApplyUpdate)
+					if h.ApplyUpdate == nil {
+						update.SetSensitive(true)
+						break
+					}
+					h.ApplyUpdate(func(ok bool) {
+						if !ok {
+							update.SetSensitive(true)
+							status.SetSubtitle("The update didn't finish — see the message for details.")
+						}
+					})
 				default:
 					update.SetSensitive(true)
 					status.SetSubtitle(info)

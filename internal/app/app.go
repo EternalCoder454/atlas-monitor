@@ -4,7 +4,6 @@ package app
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -38,6 +37,8 @@ type App struct {
 	win      *adw.ApplicationWindow
 	// updateOffered keeps the launch prompt to once per run.
 	updateOffered bool
+	// updating is set while an install is building, so a second one cannot start.
+	updating bool
 }
 
 // New creates the application. css is the embedded stylesheet contents and
@@ -178,38 +179,6 @@ func (a *App) saveWindowState(win *adw.ApplicationWindow) {
 	_ = config.Save(a.settings)
 }
 
-// onRestart relaunches a fresh instance and quits this one. If the source
-// checkout is known (recorded by `make install`), it first runs update.sh to
-// pull the selected channel (Release=main / Beta=beta) from GitHub and reinstall.
-// The helper is detached with setsid so it survives this process exiting; the
-// sleep lets the single-instance lock release before the new instance registers.
-func (a *App) onRestart() {
-	// The script path and the branch are passed to bash as arguments rather
-	// than pasted into the command it runs. Go's %q is not shell quoting: it
-	// leaves $(...) and backticks intact, and inside double quotes the shell
-	// still expands them, so a checkout path containing either would have been
-	// executed. Positional arguments cannot be re-read as syntax whatever they
-	// contain — which also means a perfectly ordinary path with a '$' in it now
-	// updates instead of breaking.
-	script := ""
-	if src := sourceDir(); src != "" {
-		p := filepath.Join(src, "scripts", "update.sh")
-		if _, err := os.Stat(p); err == nil {
-			script = p
-		}
-	}
-	branch := a.settings.UpdateChannel
-	if branch != "main" && branch != "beta" {
-		branch = "main"
-	}
-
-	// $0 names the shell for errors; $1..$3 are the values.
-	const helper = `if [ -n "$1" ]; then bash "$1" "$2"; fi; sleep 1; gtk-launch "$3"`
-	_ = exec.Command("setsid", "bash", "-c", helper,
-		"atlas-monitor-restart", script, branch, AppID).Start()
-	a.app.Quit()
-}
-
 // sourceDir returns the source checkout recorded by `make install`
 // (in $XDG_DATA_HOME/atlas-monitor/source), or "" if it is unknown.
 func sourceDir() string {
@@ -228,7 +197,7 @@ func sourceDir() string {
 func (a *App) settingsHooks() ui.SettingsHooks {
 	return ui.SettingsHooks{
 		OnChange:    a.onSettingsChanged,
-		ApplyUpdate: a.onRestart,
+		ApplyUpdate: a.startUpdate,
 		CheckUpdate: a.checkUpdate,
 		Version:     a.version,
 		Location:    a.location(),
@@ -358,7 +327,7 @@ func (a *App) offerUpdate(win *adw.ApplicationWindow, info UpdateInfo) {
 	dlg.SetCloseResponse("later")
 	dlg.ConnectResponse(func(response string) {
 		if response == "now" {
-			a.onRestart()
+			a.startUpdate(nil)
 		}
 	})
 	dlg.Present(win)
