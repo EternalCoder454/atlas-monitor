@@ -26,6 +26,48 @@ func TestNormalize(t *testing.T) {
 	}
 }
 
+func TestNormalizeText(t *testing.T) {
+	for _, mode := range []string{TextSharp, TextAuto} {
+		if got := NormalizeText(mode); got != mode {
+			t.Errorf("NormalizeText(%q) = %q, want it unchanged", mode, got)
+		}
+	}
+	for _, bad := range []string{"", "manual", "hinted", "SHARP", "auto"} {
+		if got := NormalizeText(bad); got != TextSharp {
+			t.Errorf("NormalizeText(%q) = %q, want the %q default", bad, got, TextSharp)
+		}
+	}
+}
+
+// TestTextModesListedForSettings mirrors the renderer check: every selectable
+// text mode must survive NormalizeText and carry the text Settings renders.
+func TestTextModesListedForSettings(t *testing.T) {
+	if len(TextModes) == 0 {
+		t.Fatal("no text modes listed")
+	}
+	seen := map[string]bool{}
+	for _, m := range TextModes {
+		if NormalizeText(m.Value) != m.Value {
+			t.Errorf("text mode %q is not a value NormalizeText accepts", m.Value)
+		}
+		if m.Label == "" || m.Detail == "" {
+			t.Errorf("text mode %q has an empty label or detail", m.Value)
+		}
+		if seen[m.Value] {
+			t.Errorf("text mode %q listed twice", m.Value)
+		}
+		seen[m.Value] = true
+	}
+	for _, want := range []string{TextSharp, TextAuto} {
+		if !seen[want] {
+			t.Errorf("text mode %q is selectable but not listed in Settings", want)
+		}
+	}
+	if TextModes[0].Value != TextSharp {
+		t.Errorf("Settings lists %q first; the sharp default should lead", TextModes[0].Value)
+	}
+}
+
 // TestModesListedForSettings checks every selectable mode survives Normalize and
 // carries the text the Settings dialog renders.
 func TestModesListedForSettings(t *testing.T) {

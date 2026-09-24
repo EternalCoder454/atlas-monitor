@@ -51,6 +51,7 @@ func TestLoadRepairsBadValues(t *testing.T) {
 		"window_width":    12,
 		"window_height":   -400,
 		"render_mode":     "holographic",
+		"text_rendering":  "crispy",
 		"update_channel":  "nightly",
 		"ollama_url":      "",
 		"model":           "",
@@ -76,6 +77,9 @@ func TestLoadRepairsBadValues(t *testing.T) {
 	}
 	if s.RenderMode != gfx.ModeSoftware {
 		t.Errorf("RenderMode = %q, want repaired to %q", s.RenderMode, gfx.ModeSoftware)
+	}
+	if s.TextRendering != gfx.TextSharp {
+		t.Errorf("TextRendering = %q, want repaired to %q", s.TextRendering, gfx.TextSharp)
 	}
 	if s.UpdateChannel != "main" {
 		t.Errorf("UpdateChannel = %q, want repaired to main", s.UpdateChannel)
@@ -166,6 +170,9 @@ func TestLoadSurvivesACorruptFile(t *testing.T) {
 			}
 			if s.RenderMode != gfx.Normalize(s.RenderMode) {
 				t.Errorf("RenderMode = %q, not a value gfx accepts", s.RenderMode)
+			}
+			if s.TextRendering != gfx.NormalizeText(s.TextRendering) {
+				t.Errorf("TextRendering = %q, not a value gfx accepts", s.TextRendering)
 			}
 			if s.UpdateChannel != "main" && s.UpdateChannel != "beta" {
 				t.Errorf("UpdateChannel = %q", s.UpdateChannel)

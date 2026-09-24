@@ -42,6 +42,35 @@ var Modes = []struct{ Value, Label, Detail string }{
 	{ModeSystem, "System default", "Whatever GTK picks. Use this if something looks wrong."},
 }
 
+// Text rendering modes, as stored in settings.
+const (
+	// TextSharp tells GTK to rasterise glyphs the way the desktop asks —
+	// hinted, snapped to the pixel grid. This is the default.
+	TextSharp = "sharp"
+
+	// TextAuto leaves GTK to decide, which is its own default. GTK then treats
+	// hinting as something it may trade away, and on a 1x display that shows:
+	// stems land between pixels and the text looks soft.
+	TextAuto = "automatic"
+)
+
+// TextModes lists the selectable text-rendering modes with their labels, in the
+// order the Settings dialog shows them.
+var TextModes = []struct{ Value, Label, Detail string }{
+	{TextSharp, "Sharp (hinted)", "Follows your desktop's font settings. Crisper on 1080p displays."},
+	{TextAuto, "Automatic", "Lets GTK choose. Softer text at 1x, no difference worth seeing on HiDPI."},
+}
+
+// NormalizeText maps an unknown or empty text mode onto the default.
+func NormalizeText(mode string) string {
+	switch mode {
+	case TextSharp, TextAuto:
+		return mode
+	default:
+		return TextSharp
+	}
+}
+
 // Normalize maps an unknown or empty mode onto the default.
 func Normalize(mode string) string {
 	switch mode {
