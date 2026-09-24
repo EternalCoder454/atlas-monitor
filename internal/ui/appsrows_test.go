@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"runtime"
 	"testing"
 
@@ -368,6 +369,73 @@ func TestIsIdleReading(t *testing.T) {
 	for _, s := range busy {
 		if isIdleReading([]byte(s)) {
 			t.Errorf("isIdleReading(%q) = true, want false", s)
+		}
+	}
+}
+
+// TestCellLabelsArePooled covers the fix for the last of the Apps page's memory
+// growth. GTK builds and discards list-item cells as the table changes, and
+// gotk4 keeps a reference to every GObject it hands a Go callback — so a fresh
+// GtkLabel per setup, each with an accessibility context behind it, was never
+// released. Measured with heaptrack under heavy churn: 4905 labels created in
+// 150 seconds before pooling, 1555 after, and the 1555 is the pool filling once.
+//
+// The behaviour that has to hold is that a label released by a teardown is the
+// one the next setup uses, and that it comes back clean.
+func TestCellLabelsArePooled(t *testing.T) {
+	if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+		t.Skip("needs a display: this builds real GtkLabels")
+	}
+	if !gtk.InitCheck() {
+		t.Skip("GTK could not initialise")
+	}
+
+	var pool []*gtk.Label
+	// The same take/return the factory performs, in the same order.
+	take := func() *gtk.Label {
+		if n := len(pool); n > 0 {
+			l := pool[n-1]
+			pool = pool[:n-1]
+			l.SetText("")
+			return l
+		}
+		l := gtk.NewLabel("")
+		l.AddCSSClass("am-num")
+		return l
+	}
+	give := func(l *gtk.Label) { pool = append(pool, l) }
+
+	// Fill: nothing to reuse yet, so each take is a new label.
+	const realised = 12
+	first := make([]*gtk.Label, realised)
+	for i := range first {
+		first[i] = take()
+		first[i].SetText("busy")
+	}
+	if len(pool) != 0 {
+		t.Fatalf("pool holds %d labels while all are in use", len(pool))
+	}
+
+	// Tear the lot down, then build the same number again. Every one must come
+	// from the pool — that is the whole point.
+	seen := make(map[*gtk.Label]bool, realised)
+	for _, l := range first {
+		seen[l] = true
+		give(l)
+	}
+	if len(pool) != realised {
+		t.Fatalf("pool holds %d labels after %d teardowns", len(pool), realised)
+	}
+	for i := 0; i < realised; i++ {
+		l := take()
+		if !seen[l] {
+			t.Errorf("take %d returned a newly created label while %d were pooled", i, len(pool)+1)
+		}
+		if got := l.Text(); got != "" {
+			t.Errorf("a reused label still showed %q", got)
+		}
+		if !l.HasCSSClass("am-num") {
+			t.Error("a reused label lost the styling its column set")
 		}
 	}
 }

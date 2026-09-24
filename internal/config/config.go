@@ -88,6 +88,7 @@ type Settings struct {
 	OllamaURL      string `json:"ollama_url"`
 	Model          string `json:"model"`
 	TextRendering  string `json:"text_rendering"`
+	UpdateCheck    bool   `json:"update_check"`
 	AssistantTitle string `json:"assistant_title"` // page header / chat label; sidebar stays "Assistant"
 	SystemPrompt   string `json:"system_prompt"`
 	UpdateChannel  string `json:"update_channel"` // "main" (Release) or "beta" (newest features/fixes)
@@ -114,6 +115,7 @@ func Defaults() Settings {
 		OllamaURL:      "http://localhost:11434",
 		Model:          "qwen3.5:9b",
 		TextRendering:  gfx.TextSharp,
+		UpdateCheck:    true,
 		AssistantTitle: "Assistant",
 		SystemPrompt:   DefaultSystemPrompt,
 		UpdateChannel:  "main",
