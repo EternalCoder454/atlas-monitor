@@ -234,13 +234,13 @@ make setup-ai
 
 That installs Ollama (via its official installer — it prompts first if Ollama
 isn't already present), starts the local server, and pulls the default model
-(`qwen2.5:3b`, ~1.9 GB). It is safe to re-run and only does what is missing.
+(`qwen3.5:9b`, ~5.5 GB). It is safe to re-run and only does what is missing.
 
 Prefer to do it by hand? Install Ollama, then pull the model:
 
 ```sh
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen2.5:3b
+ollama pull qwen3.5:9b
 ```
 
 If you open the Assistant before this is done, Atlas shows an in-app panel with
@@ -295,7 +295,7 @@ local changes, so a tree you are editing is never overwritten.
   authentication. Without authorisation the action returns an error shown in the
   view.
 - **AI assistant**: talks to a local [Ollama](https://ollama.com) server
-  (default `http://localhost:11434`, model `qwen2.5:3b`) — see [Setting up the
+  (default `http://localhost:11434`, model `qwen3.5:9b`) — see [Setting up the
   assistant](#setting-up-the-assistant) for the one-command install. Each
   question sends a compact live snapshot — specs, top processes, services — as
   the system prompt; the model runs entirely on your machine. Configure the

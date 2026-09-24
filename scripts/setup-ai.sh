@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-command setup for Atlas Monitor's Assistant: make sure Ollama is installed
 # and running, then pull the model the app is configured to use (default
-# qwen2.5:3b). Safe to re-run — it only does what is missing.
+# qwen3.5:9b). Safe to re-run — it only does what is missing.
 #
 # Usage:
 #   scripts/setup-ai.sh [MODEL]        # or: make setup-ai
@@ -15,7 +15,7 @@ info() { printf '  %s\n' "$*"; }
 
 # --- Pick the model ----------------------------------------------------------
 # Priority: explicit arg > $ATLAS_AI_MODEL > the app's saved settings > default.
-default_model="qwen2.5:3b"
+default_model="qwen3.5:9b"
 settings="${XDG_CONFIG_HOME:-$HOME/.config}/atlas-monitor/settings.json"
 saved_model=""
 if [ -f "$settings" ]; then

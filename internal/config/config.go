@@ -111,7 +111,7 @@ func Defaults() Settings {
 	return Settings{
 		AIEnabled:      true,
 		OllamaURL:      "http://localhost:11434",
-		Model:          "qwen2.5:3b",
+		Model:          "qwen3.5:9b",
 		AssistantTitle: "Assistant",
 		SystemPrompt:   DefaultSystemPrompt,
 		UpdateChannel:  "main",
