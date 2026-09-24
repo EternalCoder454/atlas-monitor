@@ -3,11 +3,12 @@ package stats
 import (
 	"bufio"
 	"bytes"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"atlas-monitor/internal/sysfs"
 )
 
 // cpuTimes holds the idle and total jiffies of one /proc/stat cpu line.
@@ -17,16 +18,17 @@ type cpuTimes struct {
 }
 
 // cpuSample is one parsed /proc/stat cpu line, carried from the lock-free read
-// phase to the locked update phase.
+// phase to the locked update phase. core is -1 for the aggregate "cpu" line.
 type cpuSample struct {
-	name        string
+	core        int
 	idle, total uint64
 }
 
 // cpuPrefix gates the /proc/stat scan to the leading cpu* lines.
 var cpuPrefix = []byte("cpu")
 
-// initCPUStatic fills the unchanging CPU fields and allocates ring buffers.
+// initCPUStatic fills the unchanging CPU fields, allocates ring buffers, and
+// opens the files the per-second sample re-reads.
 func (c *Collector) initCPUStatic() {
 	logical := 0
 	sockets := map[string]struct{}{}
@@ -71,21 +73,22 @@ func (c *Collector) initCPUStatic() {
 		sockets[""] = struct{}{}
 	}
 
-	// Precompute the per-second collectCPU scratch (paths + reusable buffers) so
-	// the hot path allocates nothing per tick.
-	c.cpuFreqPaths = make([]string, logical)
-	for i := range c.cpuFreqPaths {
-		c.cpuFreqPaths[i] = fmt.Sprintf("/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq", i)
+	// Hold open everything the per-second sample touches. Reopening these was a
+	// sixth of the app's CPU time; held descriptors turn four syscalls each into
+	// one. /proc/stat needs room for a line per core.
+	c.procStat = sysfs.OpenSize("/proc/stat", 1024+logical*128)
+	c.cpuFreq = make([]*sysfs.File, 0, logical)
+	for i := 0; i < logical; i++ {
+		c.cpuFreq = append(c.cpuFreq, sysfs.Open(
+			"/sys/devices/system/cpu/cpu"+strconv.Itoa(i)+"/cpufreq/scaling_cur_freq"))
 	}
-	c.cpuStatBuf = make([]byte, 0, 16*1024)
+	c.cpuTemp = sysfs.Open(findCPUTempPath())
+	c.cpuPrevCore = make([]cpuTimes, logical)
 	c.cpuSamples = make([]cpuSample, 0, logical+1)
 
 	temp := -1.0
-	c.tempPath = findCPUTempPath()
-	if c.tempPath != "" {
-		if v, err := readUint(c.tempPath); err == nil {
-			temp = float64(v) / 1000.0
-		}
+	if v, ok := c.cpuTemp.Uint(); ok {
+		temp = float64(v) / 1000.0
 	}
 
 	l1d, l1i, l2, l3 := readCaches()
@@ -106,31 +109,39 @@ func (c *Collector) initCPUStatic() {
 	})
 }
 
-// collectCPU samples /proc/stat, per-core frequencies, and temperature. The
-// /proc/stat parse reuses a buffer and parses bytes directly (no per-line string
-// or field-slice allocation); the cpufreq paths are precomputed in initCPUStatic.
+// closeCPU releases the held descriptors.
+func (c *Collector) closeCPU() {
+	c.procStat.Close()
+	c.cpuTemp.Close()
+	for _, f := range c.cpuFreq {
+		f.Close()
+	}
+	c.cpuFreq = nil
+}
+
+// collectCPU samples /proc/stat, per-core frequencies, and temperature. Every
+// file it touches is already open, the parse works on bytes, and cores are
+// indexed by number rather than keyed by a string — so a tick allocates nothing.
 func (c *Collector) collectCPU() {
-	f, err := os.Open("/proc/stat")
-	if err != nil {
+	data, ok := c.procStat.Bytes()
+	if !ok {
 		return
 	}
 	c.cpuSamples = c.cpuSamples[:0]
-	sc := bufio.NewScanner(f)
-	sc.Buffer(c.cpuStatBuf, 64*1024) // reuse our buffer; do no per-tick allocation
-	for sc.Scan() {
-		line := sc.Bytes()
+	for len(data) > 0 {
+		var line []byte
+		line, data = nextLine(data)
 		if !bytes.HasPrefix(line, cpuPrefix) {
 			break // cpu* lines lead the file; stop before the large intr line
 		}
-		if name, idle, total, ok := parseCPUStatLine(line); ok {
-			c.cpuSamples = append(c.cpuSamples, cpuSample{name: name, idle: idle, total: total})
+		if core, idle, total, ok := parseCPUStatLine(line); ok {
+			c.cpuSamples = append(c.cpuSamples, cpuSample{core: core, idle: idle, total: total})
 		}
 	}
-	f.Close()
 
 	maxFreq := 0.0
-	for _, p := range c.cpuFreqPaths {
-		if v, err := readUint(p); err == nil {
+	for _, f := range c.cpuFreq {
+		if v, ok := f.Uint(); ok {
 			if mhz := float64(v) / 1000.0; mhz > maxFreq {
 				maxFreq = mhz
 			}
@@ -138,30 +149,34 @@ func (c *Collector) collectCPU() {
 	}
 
 	temp := -1.0
-	if c.tempPath != "" {
-		if v, err := readUint(c.tempPath); err == nil {
-			temp = float64(v) / 1000.0
-		}
+	if v, ok := c.cpuTemp.Uint(); ok {
+		temp = float64(v) / 1000.0
 	}
 
 	c.write(func(s *Stats) {
 		for _, sm := range c.cpuSamples {
-			prev := c.cpuPrev[sm.name]
+			prev := &c.cpuPrevAll
+			if sm.core >= 0 {
+				if sm.core >= len(c.cpuPrevCore) {
+					continue
+				}
+				prev = &c.cpuPrevCore[sm.core]
+			}
 			dTotal := float64(sm.total - prev.total)
 			dIdle := float64(sm.idle - prev.idle)
 			usage := 0.0
 			if prev.total != 0 && dTotal > 0 {
 				usage = clamp((1-dIdle/dTotal)*100, 0, 100)
 			}
-			c.cpuPrev[sm.name] = cpuTimes{idle: sm.idle, total: sm.total}
+			*prev = cpuTimes{idle: sm.idle, total: sm.total}
 
-			if sm.name == "cpu" {
+			if sm.core < 0 {
 				s.CPU.Usage = usage
 				if s.CPU.UsageHist != nil {
 					s.CPU.UsageHist.Push(usage)
 				}
-			} else if idx, ok := coreIndex(sm.name); ok && idx < len(s.CPU.Cores) {
-				s.CPU.Cores[idx].Usage = usage
+			} else if sm.core < len(s.CPU.Cores) {
+				s.CPU.Cores[sm.core].Usage = usage
 			}
 		}
 		s.CPU.CurFreq = maxFreq
@@ -173,10 +188,12 @@ func (c *Collector) collectCPU() {
 
 // parseCPUStatLine parses one "cpu..." line of /proc/stat. idle folds in iowait
 // (column 4), matching the historical behaviour; total is the sum of all
-// columns. ok is false if the line is too short to hold an idle figure. The
-// returned name (e.g. "cpu", "cpu0") is the only allocation, used as a map key.
-func parseCPUStatLine(line []byte) (name string, idle, total uint64, ok bool) {
+// columns. core is -1 for the aggregate line and the core number otherwise, so
+// nothing has to be turned into a string. ok is false if the line is too short
+// to hold an idle figure.
+func parseCPUStatLine(line []byte) (core int, idle, total uint64, ok bool) {
 	field := 0
+	core = -1
 	for i := 0; i < len(line); {
 		for i < len(line) && line[i] == ' ' {
 			i++
@@ -189,7 +206,17 @@ func parseCPUStatLine(line []byte) (name string, idle, total uint64, ok bool) {
 			break
 		}
 		if field == 0 {
-			name = string(line[start:i])
+			name := line[start:i]
+			if !bytes.HasPrefix(name, cpuPrefix) {
+				return -1, 0, 0, false
+			}
+			if rest := name[len(cpuPrefix):]; len(rest) > 0 {
+				n, valid := sysfs.ParseUint(rest)
+				if !valid {
+					return -1, 0, 0, false
+				}
+				core = int(n)
+			}
 		} else {
 			v := parseUintBytes(line[start:i])
 			total += v
@@ -199,18 +226,7 @@ func parseCPUStatLine(line []byte) (name string, idle, total uint64, ok bool) {
 		}
 		field++
 	}
-	return name, idle, total, field >= 5
-}
-
-func coreIndex(name string) (int, bool) {
-	if !strings.HasPrefix(name, "cpu") {
-		return 0, false
-	}
-	n, err := strconv.Atoi(name[3:])
-	if err != nil {
-		return 0, false
-	}
-	return n, true
+	return core, idle, total, field >= 5
 }
 
 func splitKV(line string) (key, val string, ok bool) {
@@ -225,10 +241,7 @@ func splitKV(line string) (key, val string, ok bool) {
 func findCPUTempPath() string {
 	names, _ := filepath.Glob("/sys/class/hwmon/hwmon*/name")
 	for _, nf := range names {
-		n, err := readString(nf)
-		if err != nil {
-			continue
-		}
+		n := sysfs.ReadString(nf)
 		if n == "coretemp" || n == "k10temp" {
 			dir := filepath.Dir(nf)
 			// Prefer the package/Tctl input; temp1_input is the usual first.
@@ -242,7 +255,7 @@ func findCPUTempPath() string {
 
 // readBaseFreq returns the rated base clock in MHz, or 0 if unknown.
 func readBaseFreq() float64 {
-	if v, err := readUint("/sys/devices/system/cpu/cpu0/cpufreq/base_frequency"); err == nil {
+	if v, ok := sysfs.ReadUint("/sys/devices/system/cpu/cpu0/cpufreq/base_frequency"); ok {
 		return float64(v) / 1000.0
 	}
 	return 0
@@ -252,9 +265,9 @@ func readBaseFreq() float64 {
 func readCaches() (l1d, l1i, l2, l3 string) {
 	idxs, _ := filepath.Glob("/sys/devices/system/cpu/cpu0/cache/index*")
 	for _, idx := range idxs {
-		level, _ := readString(filepath.Join(idx, "level"))
-		ctype, _ := readString(filepath.Join(idx, "type"))
-		size, _ := readString(filepath.Join(idx, "size"))
+		level := sysfs.ReadString(filepath.Join(idx, "level"))
+		ctype := sysfs.ReadString(filepath.Join(idx, "type"))
+		size := sysfs.ReadString(filepath.Join(idx, "size"))
 		switch {
 		case level == "1" && ctype == "Data":
 			l1d = size

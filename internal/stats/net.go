@@ -8,11 +8,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"atlas-monitor/internal/sysfs"
 )
 
 // discoverNets enumerates interfaces from /proc/net/dev and reads their static
 // attributes (MAC, link speed, addresses).
 func (c *Collector) discoverNets() {
+	c.netDev = sysfs.OpenSize("/proc/net/dev", 4096)
+	c.netRoute = sysfs.OpenSize("/proc/net/route", 4096)
 	counters := c.readNetDev()
 	var nets []*NetStats
 	for name := range counters {
@@ -22,10 +26,10 @@ func (c *Collector) discoverNets() {
 			DownHist:  NewRingBuffer(),
 			UpHist:    NewRingBuffer(),
 		}
-		if mac, err := readString(filepath.Join("/sys/class/net", name, "address")); err == nil {
-			n.MAC = mac
-		}
-		if sp, err := readInt(filepath.Join("/sys/class/net", name, "speed")); err == nil {
+		n.MAC = sysfs.ReadString(filepath.Join("/sys/class/net", name, "address"))
+		// speed is absent on virtual interfaces and reads as -1 on a link that
+		// is down, so a parse failure simply leaves it unknown.
+		if sp, err := strconv.Atoi(sysfs.ReadString(filepath.Join("/sys/class/net", name, "speed"))); err == nil {
 			n.SpeedMbit = sp
 		}
 		n.Display = friendlyNetName(name)
@@ -87,9 +91,8 @@ func (c *Collector) collectNets() {
 // defaultRouteIface returns the interface carrying the default route. Called by
 // the net collector goroutine so the UI never parses /proc/net/route itself.
 func (c *Collector) defaultRouteIface() string {
-	data, keep, err := readInto("/proc/net/route", c.routeBuf)
-	c.routeBuf = keep
-	if err != nil {
+	data, ok := c.netRoute.Bytes()
+	if !ok {
 		return ""
 	}
 	return parseDefaultRoute(data)
@@ -128,9 +131,8 @@ func parseDefaultRoute(data []byte) string {
 func (c *Collector) readNetDev() map[string][2]uint64 {
 	out := c.netCounters
 	clear(out)
-	data, keep, err := readInto("/proc/net/dev", c.netBuf)
-	c.netBuf = keep
-	if err != nil {
+	data, ok := c.netDev.Bytes()
+	if !ok {
 		return out
 	}
 	for len(data) > 0 {

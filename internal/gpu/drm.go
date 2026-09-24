@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"atlas-monitor/internal/sysfs"
 )
 
 // drmBackend is the vendor-neutral fallback: Intel (i915 and xe), nouveau, and
@@ -19,14 +21,12 @@ import (
 // descriptors, which is expensive, so the set of GPU clients is only rediscovered
 // every few seconds and the known ones are re-read each tick.
 type drmBackend struct {
-	name  string
-	card  string // /sys/class/drm/cardN
-	dev   string // .../device
-	hwmon string
+	name string
 
-	freqPaths []string // candidate "current engine clock" files, first hit wins
-	vramUsed  []string
-	vramTotal []string
+	hw        hwmon
+	freq      *sysfs.File // "current engine clock", wherever this driver puts it
+	vramUsed  *sysfs.File
+	vramTotal *sysfs.File
 
 	// Per-client engine accounting.
 	clients     map[int]bool      // pids known to hold a /dev/dri handle
@@ -60,56 +60,48 @@ func newDRMBackend() backend {
 	card := filepath.Join("/sys/class/drm", best.card)
 	b := &drmBackend{
 		name:        gpuName(best),
-		card:        card,
-		dev:         best.dev,
-		hwmon:       hwmonDir(best.dev, ""),
+		hw:          openHwmon(hwmonDir(best.dev, "")),
 		clients:     make(map[int]bool),
 		prevEngine:  make(map[string]uint64),
 		curEngine:   make(map[string]uint64),
 		seenClients: make(map[uint64]bool),
 		buf:         make([]byte, 4096),
 		linkBuf:     make([]byte, 256),
-		freqPaths: []string{
+
+		// Each driver puts the engine clock somewhere different; hold open
+		// whichever one this card has.
+		freq: sysfs.OpenFirst(
 			filepath.Join(card, "gt_cur_freq_mhz"),                       // i915
 			filepath.Join(best.dev, "tile0", "gt0", "freq0", "cur_freq"), // xe
 			filepath.Join(best.dev, "gpu_clock"),                         // misc
-		},
-		vramUsed: []string{
-			filepath.Join(best.dev, "mem_info_vram_used"),
-		},
-		vramTotal: []string{
+		),
+		vramUsed: sysfs.Open(filepath.Join(best.dev, "mem_info_vram_used")),
+		vramTotal: sysfs.OpenFirst(
 			filepath.Join(best.dev, "mem_info_vram_total"),
 			filepath.Join(best.dev, "tile0", "physical_vram_size_bytes"), // xe discrete
-		},
+		),
 	}
 	return b
 }
 
 func (b *drmBackend) label() string { return b.name }
-func (b *drmBackend) close()        {}
+
+func (b *drmBackend) close() {
+	b.hw.close()
+	b.freq.Close()
+	b.vramUsed.Close()
+	b.vramTotal.Close()
+}
 
 func (b *drmBackend) sample(s *Sample) {
-	readHwmon(b.hwmon, s)
+	b.hw.read(s)
 	if s.SclkMHz == 0 {
-		for _, p := range b.freqPaths {
-			if v, ok := readU(p); ok && v > 0 {
-				s.SclkMHz = float64(v)
-				break
-			}
+		if v, ok := b.freq.Uint(); ok {
+			s.SclkMHz = float64(v) // these report MHz directly
 		}
 	}
-	for _, p := range b.vramUsed {
-		if v, ok := readU(p); ok {
-			s.VramUsed = v
-			break
-		}
-	}
-	for _, p := range b.vramTotal {
-		if v, ok := readU(p); ok {
-			s.VramTotal = v
-			break
-		}
-	}
+	s.VramUsed, _ = b.vramUsed.Uint()
+	s.VramTotal, _ = b.vramTotal.Uint()
 	s.UsagePct = b.engineBusy()
 }
 
