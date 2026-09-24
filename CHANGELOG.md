@@ -3,6 +3,14 @@
 Written for the people who use Atlas Monitor rather than the people who build
 it. One short line per change, no jargon — this is what the update prompt shows.
 
+## 0.8.3
+
+- The Apps list now reorders as you watch, so whatever is busiest stays at the top
+- Programs using a lot of processor are highlighted in the list
+- New icons throughout
+- The sidebar now highlights the page you are actually on
+- Speed graphs show their highest recent reading, so the scale means something
+
 ## 0.8.2
 
 - Atlas now tells you when an update is available, with a list of what changed

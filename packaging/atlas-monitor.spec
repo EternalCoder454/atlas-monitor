@@ -2,7 +2,7 @@
 # for the Go module cache, so enable it on the COPR project
 # (`copr-cli modify --enable-net on`) or run rpmbuild with modules pre-fetched.
 Name:           atlas-monitor
-Version:        %{?_version}%{!?_version:0.8.2}
+Version:        %{?_version}%{!?_version:0.8.3}
 Release:        1%{?dist}
 Summary:        Lightweight system monitor for GNOME — CPU, memory, disk, network, GPU
 
@@ -66,6 +66,13 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/com.atlas.Monitor.des
 %{_datadir}/icons/hicolor/scalable/actions/atlas-*-symbolic.svg
 
 %changelog
+* Thu Sep 24 2026 EternalHell <77252745+EternalCoder454@users.noreply.github.com> - 0.8.3-1
+- The Apps list reorders live so the busiest program stays at the top
+- Heavy processor users are highlighted in the list
+- A new icon set throughout, drawn from Material Symbols
+- The sidebar highlights the page that is actually open
+- Speed graphs show their highest recent reading
+
 * Thu Sep 24 2026 EternalHell <77252745+EternalCoder454@users.noreply.github.com> - 0.8.2-1
 - Atlas now tells you when an update is available, with a list of what changed
 - A new Settings switch turns that check off
