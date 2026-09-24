@@ -15,4 +15,12 @@ if [ -x "$bin" ] && [ -z "$(find . -path ./bin -prune -o \
     exit 0
 fi
 
-make install >/tmp/atlas-monitor-reinstall.log 2>&1
+# Keep the log in the user's own state directory: a predictable name in a shared
+# world-writable /tmp can be squatted by another user on a multi-user machine.
+reinstall_log() {
+    d="${XDG_STATE_HOME:-$HOME/.local/state}/atlas-monitor"
+    mkdir -p "$d" 2>/dev/null || d="$(mktemp -d)"
+    printf '%s/reinstall.log' "$d"
+}
+
+make install >"$(reinstall_log)" 2>&1

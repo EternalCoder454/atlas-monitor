@@ -285,3 +285,34 @@ func timeoutContext(ctx context.Context, d time.Duration) (context.Context, cont
 	}
 	return context.WithTimeout(ctx, d)
 }
+
+// IsLocal reports whether the configured endpoint is on this machine.
+//
+// It matters because the assistant sends a live system snapshot — hostname,
+// username, the running processes, the enabled services — as the system prompt,
+// and this client speaks plaintext HTTP only: parseEndpoint rejects https
+// outright. Pointed at localhost, which is what Atlas ships with and is built
+// for, none of that leaves the machine. Pointed anywhere else, all of it crosses
+// the network in the clear, and the person deserves to be told.
+//
+// Anything that is not recognisably a loopback address counts as remote. No name
+// is resolved: this is called from the Settings dialog on the UI thread, and a
+// DNS lookup there could block the interface.
+func IsLocal(raw string) bool {
+	ep, err := parseEndpoint(raw)
+	if err != nil {
+		return true // unusable anyway; nothing will be sent
+	}
+	host := ep.host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}

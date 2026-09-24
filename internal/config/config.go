@@ -201,8 +201,11 @@ func Save(s Settings) error {
 	// when the process is most likely to be killed mid-write — and a truncated
 	// file reads back as no settings at all, silently resetting the window size,
 	// the last view and the refresh interval.
+	// 0600: nothing else needs to read this, and it carries the assistant's
+	// endpoint and system prompt. There is no reason for it to be world
+	// readable on a shared machine.
 	tmp := path() + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}

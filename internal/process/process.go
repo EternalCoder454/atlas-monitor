@@ -712,3 +712,26 @@ func deltaRate(cur, prev uint64, dt float64) float64 {
 	}
 	return float64(cur-prev) / dt
 }
+
+// StartTime returns the process's start time in clock ticks since boot, from
+// field 22 of /proc/[pid]/stat, and whether it could be read.
+//
+// This is the only reliable way to tell one use of a PID from another. PIDs are
+// reused: the kernel wraps at /proc/sys/kernel/pid_max, which is 32768 on plenty
+// of systems, and a busy machine can get back round to a given number in
+// minutes. Anything that acts on a PID it was handed earlier — sending a signal,
+// say — has to check that the pair (pid, start time) is still the same process,
+// or it will eventually act on an innocent one.
+func StartTime(pid int) (uint64, bool) {
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return 0, false
+	}
+	// comm is parenthesised and may contain spaces; the numbered fields resume
+	// after the last ')'. rest begins at field 3, so field 22 is index 19.
+	rp := bytes.LastIndexByte(b, ')')
+	if rp < 0 || rp+2 > len(b) {
+		return 0, false
+	}
+	return fieldUint(b[rp+2:], 19), true
+}

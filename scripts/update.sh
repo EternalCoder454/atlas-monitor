@@ -12,7 +12,13 @@ set -uo pipefail
 branch="${1:-main}"
 cd "$(dirname "$(readlink -f "$0")")/.." || exit 1   # repo root, relative to this script
 
-log=/tmp/atlas-monitor-update.log
+# The log goes under the user's own state directory rather than a predictable
+# name in /tmp. A shared world-writable path can be squatted by another user on
+# a multi-user machine, and because a failed redirect at exec is fatal to the
+# shell, that would stop updates from running at all.
+state="${XDG_STATE_HOME:-$HOME/.local/state}/atlas-monitor"
+mkdir -p "$state" 2>/dev/null || state="$(mktemp -d)"
+log="$state/update.log"
 exec >"$log" 2>&1
 echo "Atlas Monitor update — channel '$branch' — $(date)"
 

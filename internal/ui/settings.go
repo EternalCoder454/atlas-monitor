@@ -10,6 +10,7 @@ import (
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
+	"atlas-monitor/internal/ai"
 	"atlas-monitor/internal/config"
 	"atlas-monitor/internal/format"
 	"atlas-monitor/internal/gfx"
@@ -168,12 +169,36 @@ func newModelPromptPage(s *config.Settings, h SettingsHooks) *modelPromptPage {
 	models.AddSuffix(link)
 	aiGroup.Add(models)
 
+	// A warning that appears only when the endpoint is off this machine. The
+	// assistant's system prompt carries the hostname, the username, the running
+	// processes and the enabled services, and the client speaks plaintext HTTP
+	// only — https is refused — so a remote Ollama means all of that crosses the
+	// network in the clear. Local is the default and the intended use; this just
+	// makes the other case visible instead of silent.
+	egress := gtk.NewLabel("")
+	egress.SetWrap(true)
+	egress.SetXAlign(0)
+	egress.AddCSSClass("am-warning")
+	showEgress := func(url string) {
+		if ai.IsLocal(url) {
+			egress.SetVisible(false)
+			return
+		}
+		egress.SetText("This Ollama server is not on this machine. Each question sends a snapshot of " +
+			"this system — hostname, user, running processes and services — to it over plain HTTP, " +
+			"unencrypted.")
+		egress.SetVisible(true)
+	}
+
 	p.url = newApplyRow("Ollama URL", s.OllamaURL, func(text string) {
 		s.OllamaURL = text
 		_ = config.Save(*s)
+		showEgress(text)
 		fire(h.OnChange)
 	})
 	aiGroup.Add(p.url)
+	showEgress(s.OllamaURL)
+	aiGroup.Add(egressRow(egress))
 	p.page.Add(aiGroup)
 
 	promptGroup := adw.NewPreferencesGroup()
@@ -522,4 +547,20 @@ func nonEmpty(s, fallback string) string {
 		return fallback
 	}
 	return s
+}
+
+// egressRow puts the remote-endpoint warning inside the preferences group, so
+// it sits with the setting it is about rather than floating under it.
+func egressRow(lbl *gtk.Label) *adw.ActionRow {
+	row := adw.NewActionRow()
+	row.SetActivatable(false)
+	row.SetChild(lbl)
+	lbl.SetMarginTop(6)
+	lbl.SetMarginBottom(6)
+	lbl.SetMarginStart(12)
+	lbl.SetMarginEnd(12)
+	// The row follows the label: invisible until there is something to say.
+	lbl.NotifyProperty("visible", func() { row.SetVisible(lbl.Visible()) })
+	row.SetVisible(lbl.Visible())
+	return row
 }

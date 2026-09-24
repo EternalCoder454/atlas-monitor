@@ -165,6 +165,11 @@ type appsView struct {
 	needRebuild bool
 	targetPID   int
 	targetName  string
+	// targetStart is the start time of the process the context menu was opened
+	// on. PIDs are reused, and the menu acts some seconds after it was opened,
+	// so the signal is only sent if this still matches — otherwise Atlas would
+	// eventually kill a process that merely inherited the number.
+	targetStart uint64
 }
 
 func newAppsView(proc *process.Collector) *appsView {
@@ -632,6 +637,7 @@ func (v *appsView) attachContextMenu(cv *gtk.ColumnView) {
 			return
 		}
 		v.targetPID, v.targetName = c.row.proc.PID, c.row.proc.Name
+		v.targetStart, _ = process.StartTime(v.targetPID)
 		rect := gdk.NewRectangle(int(x), int(y), 1, 1)
 		v.popover.SetPointingTo(&rect)
 		v.popover.Popup()
@@ -654,13 +660,32 @@ func (v *appsView) cellAt(cv *gtk.ColumnView, x, y float64) *procCell {
 }
 
 func (v *appsView) kill(sig syscall.Signal) {
-	if v.targetPID > 0 {
-		_ = syscall.Kill(v.targetPID, sig)
+	if !v.targetIsStillTheSameProcess() {
+		return
 	}
+	_ = syscall.Kill(v.targetPID, sig)
+}
+
+// targetIsStillTheSameProcess re-checks that the PID the context menu was opened
+// on is the same run of the same process now that the menu item has been
+// chosen. Without this, a process that exits in the seconds between the two —
+// and a machine that gets back round to its number — would put the signal on
+// something innocent.
+func (v *appsView) targetIsStillTheSameProcess() bool {
+	if v.targetPID <= 0 {
+		return false
+	}
+	now, ok := process.StartTime(v.targetPID)
+	if !ok {
+		return false // gone: nothing to signal
+	}
+	// A start time of zero means the field could not be read, on either side;
+	// refuse rather than guess.
+	return v.targetStart != 0 && now == v.targetStart
 }
 
 func (v *appsView) openLocation() {
-	if v.targetPID <= 0 {
+	if !v.targetIsStillTheSameProcess() {
 		return
 	}
 	exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", v.targetPID))

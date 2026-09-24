@@ -52,8 +52,12 @@ if ! reachable; then
         sudo systemctl enable --now ollama 2>/dev/null || true
     fi
     if ! reachable; then
-        info "Launching 'ollama serve' in the background (log: /tmp/atlas-ollama-serve.log)…"
-        nohup ollama serve >/tmp/atlas-ollama-serve.log 2>&1 &
+        # Under the user's own state directory rather than a predictable name in
+        # a shared /tmp, which another user on the machine could squat.
+        state="${XDG_STATE_HOME:-$HOME/.local/state}/atlas-monitor"
+        mkdir -p "$state" 2>/dev/null || state="$(mktemp -d)"
+        info "Launching 'ollama serve' in the background (log: $state/ollama-serve.log)…"
+        nohup ollama serve >"$state/ollama-serve.log" 2>&1 &
     fi
     for _ in $(seq 1 30); do            # wait up to ~15s for the API to come up
         reachable && break
