@@ -18,6 +18,14 @@ type sidebar struct {
 	// numbers are visible without opening each page. Nil where the machine has
 	// no such device.
 	cpuVal, memVal, gpuVal *liveLabel
+
+	// rows maps a view name to its row, and owner to the list that row sits in.
+	// The sidebar is two separate GtkListBoxes — hardware and system — and a
+	// selection in one says nothing about the other, so following the open page
+	// means clearing both and then selecting in the right one.
+	rows  map[string]*adw.ActionRow
+	owner map[string]*gtk.ListBox
+	lists []*gtk.ListBox
 }
 
 // buildSidebar constructs the fixed 200px navigation panel. onSelect is called
@@ -28,9 +36,17 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, ba
 
 	outer.Append(sectionTitle("HARDWARE"))
 	hw := newSidebarList()
-	sb := &sidebar{}
-	sb.cpuVal = rowValue(appendRow(hw, "CPU", "atlas-cpu-symbolic", "cpu", onSelect))
-	sb.memVal = rowValue(appendRow(hw, "Memory", "atlas-memory-symbolic", "memory", onSelect))
+	sb := &sidebar{
+		rows:  make(map[string]*adw.ActionRow),
+		owner: make(map[string]*gtk.ListBox),
+	}
+	// track records a row so the sidebar can follow the page that is open.
+	track := func(name string, lb *gtk.ListBox, row *adw.ActionRow) *adw.ActionRow {
+		sb.rows[name], sb.owner[name] = row, lb
+		return row
+	}
+	sb.cpuVal = rowValue(track("cpu", hw, appendRow(hw, "CPU", "atlas-cpu-symbolic", "cpu", onSelect)))
+	sb.memVal = rowValue(track("memory", hw, appendRow(hw, "Memory", "atlas-memory-symbolic", "memory", onSelect)))
 
 	diskExp := adw.NewExpanderRow()
 	diskExp.SetTitle("Disk")
@@ -50,10 +66,10 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, ba
 	hw.Append(netExp)
 
 	if gpuAvail {
-		sb.gpuVal = rowValue(appendRow(hw, "GPU", "atlas-gpu-symbolic", "gpu", onSelect))
+		sb.gpuVal = rowValue(track("gpu", hw, appendRow(hw, "GPU", "atlas-gpu-symbolic", "gpu", onSelect)))
 	}
 	if batteryAvail {
-		appendRow(hw, "Battery", "atlas-battery-symbolic", "power", onSelect)
+		track("power", hw, appendRow(hw, "Battery", "atlas-battery-symbolic", "power", onSelect))
 	}
 	outer.Append(hw)
 
@@ -61,14 +77,13 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, ba
 	sys := newSidebarList()
 	var assistantRow *adw.ActionRow
 	if withAI {
-		assistantRow = appendRow(sys, "Assistant", "atlas-assistant-symbolic", "assistant", onSelect)
+		assistantRow = track("assistant", sys, appendRow(sys, "Assistant", "atlas-assistant-symbolic", "assistant", onSelect))
 	}
-	appendRow(sys, "Apps", "atlas-apps-symbolic", "apps", onSelect)
-	appendRow(sys, "Services", "atlas-services-symbolic", "services", onSelect)
+	track("apps", sys, appendRow(sys, "Apps", "atlas-apps-symbolic", "apps", onSelect))
+	track("services", sys, appendRow(sys, "Services", "atlas-services-symbolic", "services", onSelect))
 	outer.Append(sys)
 
-	// Default highlight on CPU.
-	hw.SelectRow(hw.RowAtIndex(0))
+	sb.lists = []*gtk.ListBox{hw, sys}
 
 	scroll := gtk.NewScrolledWindow()
 	scroll.SetChild(outer)
@@ -106,6 +121,29 @@ func rowValue(row *adw.ActionRow) *liveLabel {
 	l.SetVAlign(gtk.AlignCenter)
 	row.AddSuffix(l)
 	return newLiveLabel(l)
+}
+
+// selectView moves the highlight to the row for the open page.
+//
+// It is called for every page change, including the one at startup: Atlas
+// reopens on whichever page was last used, and without this the highlight sat
+// on CPU while the content showed something else. Both lists are cleared first
+// because a GtkListBox only knows about its own rows — selecting Apps in the
+// system list would otherwise leave CPU selected in the hardware list, and two
+// rows would look active at once.
+//
+// Disk and Network pages live in expander rows, whose children belong to a list
+// of their own; there is nothing to select at this level, so the highlight is
+// simply cleared rather than left pointing at the wrong page.
+func (s *sidebar) selectView(name string) {
+	for _, lb := range s.lists {
+		lb.UnselectAll()
+	}
+	if row, ok := s.rows[name]; ok {
+		if lb := s.owner[name]; lb != nil {
+			lb.SelectRow(&row.ListBoxRow)
+		}
+	}
 }
 
 // update refreshes the readings beside the hardware rows. It runs every tick
