@@ -25,7 +25,8 @@ jobs:
         run: |
           dnf install -y --setopt=install_weak_deps=False \
             golang gtk4-devel libadwaita-devel glib2-devel \
-            gcc pkgconf-pkg-config git tar gzip
+            gcc pkgconf-pkg-config git tar gzip \
+            gh # the runner host has it, the container does not
 
       - uses: actions/checkout@v5
         with:
@@ -35,6 +36,13 @@ jobs:
       # the VCS stamping `go build` does.
       - name: Trust the checkout
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # The tag this build is for. On a tag push that is the ref; on a manual
+      # re-run it is the input. github.ref is the branch for a dispatch, which
+      # is why the attach step below must not look at it.
+      - name: Resolve the tag
+        id: tag
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       - name: Build
         id: build
@@ -71,12 +79,23 @@ jobs:
       # pushing a tag. Without one the tarball is still produced above and kept
       # as a workflow artifact.
       - name: Attach to the release, if there is one
-        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
+          # gh works out the repository from the git remote, which it cannot do
+          # reliably inside the container, so name it outright.
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          tag="${GITHUB_REF_NAME}"
-          if gh release view "$tag" >/dev/null 2>&1; then
+          tag="$TAG"
+          case "$tag" in
+            v*) ;;
+            *) echo "Not a version tag ($tag); nothing to attach to."; exit 0 ;;
+          esac
+          # Anything other than "the release is not there yet" is a real
+          # failure and should stop the job, not be reported as an absent
+          # release — which is how a missing gh looked the first time.
+          command -v gh >/dev/null || { echo "gh is not installed in this image"; exit 1; }
+          if gh release view "$tag" >/dev/null; then
             gh release upload "$tag" dist/*.tar.gz dist/*.tar.gz.sha256 --clobber
             echo "Attached the tarball to release $tag."
           else

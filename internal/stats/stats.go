@@ -10,6 +10,7 @@ import (
 
 	"atlas-monitor/internal/gpu"
 	"atlas-monitor/internal/power"
+	"atlas-monitor/internal/sysfs"
 )
 
 // CoreStat holds one logical CPU core's usage.
@@ -162,25 +163,33 @@ type Collector struct {
 	started bool
 
 	// Per-collector previous samples / timestamps.
-	cpuPrev  map[string]cpuTimes
-	diskLast time.Time
-	netLast  time.Time
-	tempPath string
+	cpuPrevAll  cpuTimes   // the aggregate "cpu" line
+	cpuPrevCore []cpuTimes // indexed by core number
+	diskLast    time.Time
+	netLast     time.Time
 
 	netTick int // collectNets tick counter; throttles the per-interface address refresh
 
 	// Per-collector scratch. Each of these belongs to exactly one goroutine, so
 	// none of it needs locking; reusing the buffers keeps the once-a-second
 	// sampling free of allocation.
-	cpuFreqPaths []string    // precomputed /sys cpufreq paths, one per logical core
-	cpuStatBuf   []byte      // reused /proc/stat scan buffer (avoids per-tick line allocs)
-	cpuSamples   []cpuSample // reused /proc/stat parse results
-	memBuf       []byte      // reused /proc/meminfo read buffer
-	diskBuf      []byte      // reused /proc/diskstats read buffer
-	diskStats    map[string][2]uint64
-	netBuf       []byte // reused /proc/net/dev read buffer
-	netCounters  map[string][2]uint64
-	routeBuf     []byte // reused /proc/net/route read buffer
+	// Files held open across ticks: procfs and sysfs regenerate their contents
+	// on each read, so re-reading a descriptor costs one syscall where
+	// reopening cost four. See internal/sysfs.
+	procStat *sysfs.File
+	cpuFreq  []*sysfs.File // one per logical core
+	cpuTemp  *sysfs.File
+	memInfo  *sysfs.File
+	diskStat *sysfs.File
+	netDev   *sysfs.File
+	netRoute *sysfs.File
+
+	cpuSamples  []cpuSample // reused /proc/stat parse results
+	diskStats   map[string][2]uint64
+	disks       []*DiskStats // the collector's own handle, for lock-free statfs
+	diskSpace   [][2]uint64  // used/free per disk, measured outside the lock
+	diskTick    int
+	netCounters map[string][2]uint64
 }
 
 // New creates a Collector. gpuReader may report Available()==false.
@@ -191,7 +200,6 @@ func New(gpuReader *gpu.Reader) *Collector {
 		pwr:         power.New(),
 		gate:        newGate(),
 		stopCh:      make(chan struct{}),
-		cpuPrev:     make(map[string]cpuTimes),
 		diskStats:   make(map[string][2]uint64),
 		netCounters: make(map[string][2]uint64),
 	}
@@ -265,6 +273,11 @@ func (c *Collector) Stop() {
 	if c.gpu != nil {
 		c.gpu.Close()
 	}
+	c.closeCPU()
+	c.memInfo.Close()
+	c.diskStat.Close()
+	c.netDev.Close()
+	c.netRoute.Close()
 }
 
 // Pause stops sampling. Goroutines block until Resume.

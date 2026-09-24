@@ -4,6 +4,10 @@
 # Local Claude Code session config (personal hooks, absolute paths)
 /.claude/
 
+# Test binaries left behind by `go test -memprofile` and friends
+*.test
+*.prof
+
 # Editor / OS cruft
 *.swp
 *~

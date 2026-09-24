@@ -144,6 +144,10 @@ func newAppsView(proc *process.Collector) *appsView {
 	kernelBtn.SetTooltipText("Show kernel worker threads (kworker, ksoftirqd, …)")
 	kernelBtn.ConnectToggled(func() {
 		v.showKernel = kernelBtn.Active()
+		// Tell the collector too: with them hidden it can drop a kernel thread
+		// the moment the stat line identifies one, and skip the rest of the
+		// files it would otherwise open for it.
+		v.proc.SetIncludeKernel(v.showKernel)
 		v.needRebuild = true
 		v.Update()
 	})

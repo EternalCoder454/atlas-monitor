@@ -93,6 +93,39 @@ on the same machine. Proportional set size — Atlas's actual share of physical
 RAM once pages shared with other apps are divided up — went from 104 MiB to
 80 MiB after touring every page.
 
+CPU and I/O, measured the same way over a 30-second steady-state window:
+
+| | 0.6.1 | now |
+|---|---|---|
+| idle page — CPU | 5.2 ms/s | **2.4 ms/s** |
+| idle page — read syscalls | 93/s | **47/s** |
+| Apps page — CPU | 22.4 ms/s | **14.8 ms/s** |
+| Apps page — read syscalls | 2606/s | **862/s** |
+
+Profiling said 90% of the app's CPU was syscalls, not computation, so that is
+what the work went after:
+
+- **Kernel files are held open.** `/proc/stat`, `/proc/meminfo`, the per-core
+  frequencies, the GPU's counters — all of them are re-read from a descriptor
+  that stays open, because procfs and sysfs regenerate a file's contents on each
+  read. That is one syscall where `os.ReadFile` was four, and 20× faster per
+  attribute with no allocation (`internal/sysfs`).
+- **The process scan opens far less.** Per-process files are opened with
+  `openat` against a descriptor held on `/proc`, read once rather than twice —
+  procfs returns a whole file in one read, so looping until EOF doubled the
+  syscalls — and kernel threads are dropped the moment the stat line identifies
+  one, before anything else is opened for them.
+- **One walk of each process's descriptors**, not two. The socket count and the
+  per-process GPU counters both come from `/proc/<pid>/fd`; they used to walk it
+  separately. New processes are checked for GPU handles immediately, so a game
+  shows its load on the first tick after it launches, and the full sweep of
+  every process became a rare safety net instead of a five-second cycle.
+- **statfs runs outside the lock.** Measuring free space can block for as long
+  as the filesystem takes to answer — indefinitely on a network mount whose
+  server has gone — and it used to do that while holding the lock every reader
+  needs, which meant the whole window. It is also only re-measured every fifth
+  tick; capacity does not move like throughput does.
+
 Where the rest comes from:
 
 - **The window is drawn on the CPU by default.** GTK's GPU renderers load the
@@ -317,5 +350,6 @@ internal/sysmem/       C allocator tuning and returning idle memory to the OS
 internal/config/       persisted user settings (~/.config/atlas-monitor)
 internal/graph/        reusable Cairo graph widget
 internal/format/       byte/rate/clock formatting helpers
+internal/sysfs/        /proc and /sys files held open and re-read with pread
 assets/style.css       theme-aware styling
 ```

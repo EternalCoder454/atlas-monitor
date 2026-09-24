@@ -1,9 +1,14 @@
 package stats
 
-import "bytes"
+import (
+	"bytes"
 
-// initMem allocates the memory ring buffers.
+	"atlas-monitor/internal/sysfs"
+)
+
+// initMem allocates the memory ring buffers and holds /proc/meminfo open.
 func (c *Collector) initMem() {
+	c.memInfo = sysfs.OpenSize("/proc/meminfo", 4096)
 	c.write(func(s *Stats) {
 		s.Mem.UsageHist = NewRingBuffer()
 		s.Mem.SwapHist = NewRingBuffer()
@@ -14,9 +19,8 @@ func (c *Collector) initMem() {
 // The file is read into a reused buffer and scanned as bytes: at one sample a
 // second, a map and fifty per-line field slices are not worth allocating.
 func (c *Collector) collectMem() {
-	data, keep, err := readInto("/proc/meminfo", c.memBuf)
-	c.memBuf = keep
-	if err != nil {
+	data, ok := c.memInfo.Bytes()
+	if !ok {
 		return
 	}
 
@@ -24,8 +28,8 @@ func (c *Collector) collectMem() {
 	for len(data) > 0 {
 		var line []byte
 		line, data = nextLine(data)
-		key, kb, ok := meminfoLine(line)
-		if !ok {
+		key, kb, valid := meminfoLine(line)
+		if !valid {
 			continue
 		}
 		// Values in /proc/meminfo are in kB.
