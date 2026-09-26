@@ -41,6 +41,7 @@ map=(
     trash:trash
     reset:reset
     warning:warning
+    power-saving:energy
 )
 
 fail=0

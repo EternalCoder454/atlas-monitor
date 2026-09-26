@@ -135,6 +135,7 @@ func (w *Window) Build() gtk.Widgetter {
 	}
 
 	w.addView("apps", func() View { return newAppsView(w.proc, gpuAvail, w.settings) })
+	w.addView("energy", func() View { return newEnergyView(w.proc) })
 	w.addView("startup", func() View { return newStartupView() })
 	w.addView("services", func() View { return newServicesView() })
 
@@ -344,11 +345,11 @@ func (w *Window) selectView(name string) {
 	w.tickActive()
 }
 
-// needsProcs reports whether a view consumes the per-process collector. Only
-// the Apps table does; everywhere else it is stopped, which is most of what
-// keeps an idle Atlas cheap.
+// needsProcs reports whether a view consumes the per-process collector. The
+// Apps table and Energy Saver do; everywhere else it is stopped, which is most
+// of what keeps an idle Atlas cheap.
 func needsProcs(name string) bool {
-	return name == "apps"
+	return name == "apps" || name == "energy"
 }
 
 func (w *Window) tickActive() {

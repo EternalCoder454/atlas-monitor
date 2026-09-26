@@ -30,6 +30,7 @@ var atlasIcons = []string{
 	"atlas-menu-symbolic",
 	"atlas-warning-symbolic",
 	"atlas-startup-symbolic",
+	"atlas-energy-symbolic",
 }
 
 // TestIconThemeResolvesEveryIcon checks GTK can actually find the icons by name

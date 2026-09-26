@@ -10,7 +10,7 @@ ICONACT := $(PREFIX)/share/icons/hicolor/scalable/actions
 # Atlas's own symbolic icons, installed into the actions icon directory. They
 # are all atlas-prefixed on purpose: icon lookup falls back to hicolor last, so
 # a generic name here would lose to the system theme and never be used.
-ICONS   := cpu memory disk gpu network wifi battery apps services settings update trash reset menu warning startup
+ICONS   := cpu memory disk gpu network wifi battery apps services settings update trash reset menu warning startup energy
 
 # TAGS is passed to the Go build. Nothing here needs one; it is kept so an
 # in-app update rebuilds with whatever the install was built with.
