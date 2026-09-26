@@ -22,11 +22,27 @@ jobs:
     # project targets.
     container: fedora:latest
     steps:
+      # Split in two so the package cache can be restored between them: the
+      # cache action needs tar and zstd, which is why those come first, and the
+      # expensive half (gtk4-devel and its dependencies) then comes out of the
+      # cache instead of the network.
+      - name: Install the cache tools
+        run: |
+          echo "keepcache=1" >> /etc/dnf/dnf.conf
+          dnf install -y --setopt=install_weak_deps=False --nodocs tar zstd
+
+      - name: Cache dnf packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/dnf
+          key: dnf-fedora-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: dnf-fedora-
+
       - name: Install build dependencies
         run: |
-          dnf install -y --setopt=install_weak_deps=False \
+          dnf install -y --setopt=install_weak_deps=False --nodocs \
             golang gtk4-devel libadwaita-devel glib2-devel \
-            gcc pkgconf-pkg-config git make tar zstd
+            gcc pkgconf-pkg-config git make
 
       - uses: actions/checkout@v5
 
@@ -78,19 +94,40 @@ jobs:
       - name: Test
         run: go test -count=1 ./...
 
+      # Only the packages the tag can reach. "noai" exists in internal/ui alone,
+      # and internal/app is the only thing that imports it, so running the whole
+      # suite a second time re-tested a dozen packages the tag cannot change —
+      # a minute of CI to prove that /proc parsing is unaffected by whether the
+      # assistant is compiled in.
       - name: Test (lean, -tags noai)
-        run: go test -count=1 -tags noai ./...
+        run: go test -count=1 -tags noai ./internal/ui/ ./internal/app/ .
 
   race:
     name: race detector
     runs-on: ubuntu-latest
     container: fedora:latest
     steps:
+      # Split in two so the package cache can be restored between them: the
+      # cache action needs tar and zstd, which is why those come first, and the
+      # expensive half (gtk4-devel and its dependencies) then comes out of the
+      # cache instead of the network.
+      - name: Install the cache tools
+        run: |
+          echo "keepcache=1" >> /etc/dnf/dnf.conf
+          dnf install -y --setopt=install_weak_deps=False --nodocs tar zstd
+
+      - name: Cache dnf packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/dnf
+          key: dnf-fedora-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: dnf-fedora-
+
       - name: Install build dependencies
         run: |
-          dnf install -y --setopt=install_weak_deps=False \
+          dnf install -y --setopt=install_weak_deps=False --nodocs \
             golang gtk4-devel libadwaita-devel glib2-devel \
-            gcc pkgconf-pkg-config git make tar zstd
+            gcc pkgconf-pkg-config git make
 
       - uses: actions/checkout@v5
 
