@@ -6,8 +6,19 @@
 // libgallium plus libLLVM, and the Vulkan loader additionally dlopens *every*
 // installed ICD — including lavapipe, which drags in another copy of LLVM's
 // code paths, and dzn, which is a Direct3D translation layer that can never be
-// used on Linux. Together they account for roughly 60 MiB of resident memory in
-// a process whose own working set is a few megabytes of numbers.
+// used on Linux.
+//
+// Measured on this project's development machine (Radeon RX 7900 XTX, Mesa
+// RADV), resident set on the CPU page after settling:
+//
+//	software   81 MiB    no graphics driver mapped at all
+//	gpu       108 MiB    Vulkan, restricted to the one ICD the card needs
+//	system    144 MiB    whatever GTK picks, every installed ICD loaded
+//
+// So the driver stack costs about 27 MiB when it is pinned to one card and
+// about 63 MiB when it is left to load everything — in a process whose own
+// working set is a few megabytes of numbers. Both figures move with the
+// driver: an Intel or NVIDIA box will not match an AMD one.
 package gfx
 
 import (
@@ -37,9 +48,14 @@ const (
 // Modes lists the selectable rendering modes with their labels, in the order
 // the Settings dialog shows them.
 var Modes = []struct{ Value, Label, Detail string }{
-	{ModeSoftware, "Software (lowest memory)", "Cairo. Skips the GPU driver stack entirely — around 60 MiB lighter."},
-	{ModeGPU, "GPU", "Vulkan, limited to your GPU's driver. Smoother resizing, more memory."},
-	{ModeSystem, "System default", "Whatever GTK picks. Use this if something looks wrong."},
+	// Labels and details both stay short. A combo row lays its value out beside
+	// the subtitle, and a subtitle long enough to fill the row on one line takes
+	// the width the value needed — which is how "Sharp (hinted)" came to be
+	// displayed as "Shar…" in the font-rendering row. The full explanation is in
+	// the group description above these rows, where it has room.
+	{ModeSoftware, "Software", "Cairo. No graphics driver loaded."},
+	{ModeGPU, "GPU", "One driver via Vulkan. ~27 MiB more."},
+	{ModeSystem, "System default", "Every driver GTK finds. ~63 MiB more."},
 }
 
 // Text rendering modes, as stored in settings.

@@ -399,9 +399,11 @@ func newAppPage(s *config.Settings, h SettingsHooks) *appPage {
 func perfGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 	g := adw.NewPreferencesGroup()
 	g.SetTitle("Performance")
-	g.SetDescription("Atlas draws its charts on the CPU by default. That keeps the GPU driver stack — Mesa, " +
-		"the Vulkan loader and LLVM, around 60 MiB of it — out of the process entirely. Switch to GPU if you " +
-		"want smoother window resizing on a high-refresh display.")
+	g.SetDescription("Atlas draws its charts on the CPU by default, which keeps the graphics driver stack — " +
+		"Mesa, the Vulkan loader and LLVM — out of the process entirely. Loading it costs memory: on the " +
+		"machine this was measured on, about 27 MiB pinned to one card, or about 63 MiB if GTK is left to " +
+		"load every driver installed. Switch to GPU if you want smoother window resizing on a high-refresh " +
+		"display.")
 
 	labels := make([]string, len(gfx.Modes))
 	selected := 0
