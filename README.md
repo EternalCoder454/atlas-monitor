@@ -142,10 +142,14 @@ Where the rest comes from:
 - **The window is drawn on the CPU by default.** GTK's GPU renderers load the
   whole Mesa stack — on an AMD box that is `libgallium` plus a 150 MB
   `libLLVM`, and the Vulkan loader additionally opens *every* installed driver,
-  including lavapipe and the Direct3D translation layer. That is ~60 MiB of
-  resident memory to draw a few line charts once a second. **Settings → App →
-  Rendering** switches to GPU (Vulkan, restricted to your card's driver) if you
-  prefer smoother resizing on a high-refresh display.
+  including lavapipe and the Direct3D translation layer. Measured here (Radeon
+  RX 7900 XTX, Mesa RADV), resident set on the CPU page: **81 MiB** drawing on
+  the CPU, **108 MiB** with Vulkan pinned to the one driver the card needs, and
+  **144 MiB** letting GTK load everything. So the driver stack costs ~27 MiB
+  restricted and ~63 MiB unrestricted, to draw a few line charts once a second.
+  **Settings → App → Rendering** switches to GPU if you prefer smoother resizing
+  on a high-refresh display. Both figures move with the driver — an Intel or
+  NVIDIA box will not match an AMD one.
 - **Pages are built the first time you open them.** A machine with three disks
   and three interfaces has a dozen pages; Atlas builds the one you are looking
   at.
