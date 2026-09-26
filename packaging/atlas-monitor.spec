@@ -2,7 +2,7 @@
 # for the Go module cache, so enable it on the COPR project
 # (`copr-cli modify --enable-net on`) or run rpmbuild with modules pre-fetched.
 Name:           atlas-monitor
-Version:        %{?_version}%{!?_version:0.8.3}
+Version:        %{?_version}%{!?_version:0.10.0}
 Release:        1%{?dist}
 Summary:        Lightweight system monitor for GNOME — CPU, memory, disk, network, GPU
 
