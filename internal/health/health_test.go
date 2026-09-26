@@ -51,7 +51,10 @@ func TestEachProblemIsReportedOnce(t *testing.T) {
 		{"hot gpu", func(s *stats.Stats) { s.GPU.Available, s.GPU.Temp = true, 90 }, "Graphics card is running hot", Critical},
 		{"little memory left", func(s *stats.Stats) { s.Mem.Available = 1 << 30 }, "Running out of memory", Warning},
 		{"most memory used", func(s *stats.Stats) { s.Mem.Used = 31 << 30 }, "Running out of memory", Warning},
-		{"swapping", func(s *stats.Stats) { s.Mem.SwapTotal, s.Mem.SwapUsed = 8<<30, 4<<30 }, "Swapping heavily", Warning},
+		{"swapping under pressure", func(s *stats.Stats) {
+			s.Mem.SwapTotal, s.Mem.SwapUsed = 8<<30, 4<<30
+			s.Mem.Available = 4 << 30 // and nowhere left to put things
+		}, "Swapping heavily", Warning},
 		{"full disk", func(s *stats.Stats) { s.Disks[0].Free = 1 << 30 }, "Disk nearly full", Warning},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -159,5 +162,18 @@ func TestUnmountedDiskIsNotNearlyFull(t *testing.T) {
 	s.Disks[1].Used, s.Disks[1].Free = 999<<30, 1<<30
 	if got := Check(s, nil); len(got) != 1 {
 		t.Errorf("a full mounted disk gave %d alerts, want 1: %s", len(got), titles(got))
+	}
+}
+
+// TestZramInUseIsNotAProblem is the Fedora default: swap is compressed RAM,
+// the system is built to use it, and a third of it being occupied says nothing
+// about whether the machine is struggling. This warned that a machine with
+// 23 GiB of 31 free would "feel slow".
+func TestZramInUseIsNotAProblem(t *testing.T) {
+	s := healthy()
+	s.Mem.SwapTotal, s.Mem.SwapUsed = 8<<30, 2400<<20 // 29% of swap in use
+	s.Mem.Available = 23 << 30                        // ...and plenty of room
+	if got := Check(s, nil); len(got) != 0 {
+		t.Errorf("a healthy machine using zram produced %s", titles(got))
 	}
 }

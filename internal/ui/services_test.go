@@ -156,3 +156,53 @@ func TestStartupLabel(t *testing.T) {
 			"the comment above no longer describes the trade being made", got)
 	}
 }
+
+// TestProblemsOnlyFilter covers the toggle that answers the question people
+// open this page with. It is a plain predicate, so it is tested without GTK.
+func TestProblemsOnlyFilter(t *testing.T) {
+	rows := []services.Service{
+		{Name: "nginx.service", Description: "Web server", Status: services.Failed},
+		{Name: "cups.service", Description: "Printing", Status: services.Running},
+		{Name: "atd.service", Description: "Deferred jobs", Status: services.Stopped},
+	}
+	keep := func(problemsOnly bool, search string, s services.Service) bool {
+		if problemsOnly && s.Status != services.Failed {
+			return false
+		}
+		if search == "" {
+			return true
+		}
+		return containsFold(s.Name, search) || containsFold(s.Description, search)
+	}
+
+	var shown []string
+	for _, s := range rows {
+		if keep(true, "", s) {
+			shown = append(shown, s.Name)
+		}
+	}
+	if len(shown) != 1 || shown[0] != "nginx.service" {
+		t.Errorf("problems-only showed %v, want just the failed unit", shown)
+	}
+
+	// It stacks with the search rather than replacing it.
+	shown = nil
+	for _, s := range rows {
+		if keep(true, "cups", s) {
+			shown = append(shown, s.Name)
+		}
+	}
+	if len(shown) != 0 {
+		t.Errorf("a search for a healthy unit with problems-only on showed %v", shown)
+	}
+
+	shown = nil
+	for _, s := range rows {
+		if keep(false, "", s) {
+			shown = append(shown, s.Name)
+		}
+	}
+	if len(shown) != 3 {
+		t.Errorf("with the toggle off, %d of 3 rows showed", len(shown))
+	}
+}

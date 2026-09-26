@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
+	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
 	"github.com/diamondburned/gotk4/pkg/core/gioutil"
 	coreglib "github.com/diamondburned/gotk4/pkg/core/glib"
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
@@ -88,9 +90,11 @@ type servicesView struct {
 	order []*svcRow
 	cells map[uintptr]svcCell
 
-	search       string
-	servicesOnly bool
-	loaded       bool
+	search         string
+	problemsOnly   bool
+	problemsToggle *gtk.ToggleButton
+	servicesOnly   bool
+	loaded         bool
 }
 
 func newServicesView() *servicesView {
@@ -136,8 +140,15 @@ func newServicesView() *servicesView {
 	return v
 }
 
-func (v *servicesView) buildToolbar() *gtk.Box {
-	bar := gtk.NewBox(gtk.OrientationHorizontal, 6)
+func (v *servicesView) buildToolbar() *adw.WrapBox {
+	// A wrapping row rather than a fixed one. Six action buttons, two filters
+	// and a search box do not fit a 1100px window beside the sidebar: adding
+	// the problems filter pushed the search off the right-hand edge entirely.
+	// They fold onto a second line instead, which also means the page survives
+	// the narrow layout rather than losing its controls off the side.
+	bar := adw.NewWrapBox()
+	bar.SetChildSpacing(6)
+	bar.SetLineSpacing(6)
 
 	mkBtn := func(label string, fn func(string) error) *gtk.Button {
 		b := gtk.NewButtonWithLabel(label)
@@ -155,9 +166,15 @@ func (v *servicesView) buildToolbar() *gtk.Box {
 	refresh.ConnectClicked(func() { v.refresh() })
 	bar.Append(refresh)
 
-	spacer := gtk.NewBox(gtk.OrientationHorizontal, 0)
-	spacer.SetHExpand(true)
-	bar.Append(spacer)
+	problemsToggle := gtk.NewToggleButton()
+	problemsToggle.SetLabel("Problems only")
+	problemsToggle.SetTooltipText("Show only services that have failed")
+	problemsToggle.ConnectToggled(func() {
+		v.problemsOnly = problemsToggle.Active()
+		v.filter.Changed(gtk.FilterChangeDifferent)
+		v.updateProblemCount()
+	})
+	v.problemsToggle = problemsToggle
 
 	allToggle := gtk.NewToggleButton()
 	allToggle.SetLabel("All unit types")
@@ -166,6 +183,7 @@ func (v *servicesView) buildToolbar() *gtk.Box {
 		v.refresh()
 	})
 	bar.Append(allToggle)
+	bar.Append(problemsToggle)
 
 	search := gtk.NewSearchEntry()
 	search.SetHExpand(true) // take the slack, rather than sitting as a sliver
@@ -202,6 +220,7 @@ func (v *servicesView) refresh() {
 			}
 			v.setBanner("")
 			v.apply(svcs)
+			v.updateProblemCount()
 		})
 	}()
 }
@@ -266,10 +285,17 @@ func (v *servicesView) doAction(fn func(string) error) {
 }
 
 func (v *servicesView) matches(item *coreglib.Object) bool {
+	s := gioutil.ObjectValue[*svcRow](item).svc
+	// "Problems only" is the question people actually open this page with —
+	// systemctl --failed is the first thing anyone runs — and there was no way
+	// to ask it: a failed unit looked like any other row, in a list of two
+	// hundred, distinguished by the colour of one dot.
+	if v.problemsOnly && s.Status != services.Failed {
+		return false
+	}
 	if v.search == "" {
 		return true
 	}
-	s := gioutil.ObjectValue[*svcRow](item).svc
 	return containsFold(s.Name, v.search) || containsFold(s.Description, v.search)
 }
 
@@ -395,5 +421,29 @@ func startupLabel(state string) string {
 		// Anything systemd grows later shows through unchanged rather than
 		// being swallowed by a label that does not fit it.
 		return state
+	}
+}
+
+// updateProblemCount keeps the toggle honest about whether there is anything to
+// show, so nobody clicks it and gets an empty table with no explanation.
+func (v *servicesView) updateProblemCount() {
+	if v.problemsToggle == nil {
+		return
+	}
+	failed := 0
+	for _, r := range v.order {
+		if r.svc.Status == services.Failed {
+			failed++
+		}
+	}
+	switch {
+	case failed == 0:
+		v.problemsToggle.SetLabel("Problems only")
+		v.problemsToggle.SetSensitive(false)
+		v.problemsToggle.SetTooltipText("Nothing has failed")
+	default:
+		v.problemsToggle.SetLabel(fmt.Sprintf("Problems only (%d)", failed))
+		v.problemsToggle.SetSensitive(true)
+		v.problemsToggle.SetTooltipText("Show only services that have failed")
 	}
 }
