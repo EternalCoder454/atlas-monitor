@@ -19,7 +19,13 @@ const (
 )
 
 // DefaultRefreshSeconds is the sampling interval when nothing is configured.
-const DefaultRefreshSeconds = 1
+//
+// Two seconds rather than one, because this is the build for machines that
+// cannot spare the difference. Measured on the CPU page: 9.7 ms/s of processor
+// at 1s, 5.0 ms/s at 2s, 3.2 ms/s at 3s — the work is simply proportional to
+// the tick rate. A second of resolution is not worth halving a laptop's idle
+// cost for, and anyone who wants it back has the setting.
+const DefaultRefreshSeconds = 2
 
 // RefreshChoices are the intervals offered in Settings, in seconds.
 var RefreshChoices = []int{1, 2, 3, 5, 10}
