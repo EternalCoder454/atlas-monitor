@@ -60,12 +60,14 @@ type Window struct {
 	// The alert badge, and what it is reporting. failedSvc is refreshed on a
 	// timer of its own because it costs a D-Bus round trip, unlike everything
 	// else here which is already in the snapshot.
-	alertBtn   *gtk.MenuButton
-	alertList  *gtk.Box
-	alertShown string
-	failedSvc  []string
-	lastSvc    time.Time
-	svc        *services.Client
+	alertBtn    *gtk.MenuButton
+	alertList   *gtk.Box
+	alertShown  string
+	failedSvc   []string
+	driveHealth []health.Drive
+	diskNames   map[string]string // kernel name -> the label a person reads
+	lastSvc     time.Time
+	svc         *services.Client
 
 	active   string
 	visible  bool
@@ -118,7 +120,11 @@ func (w *Window) Build() gtk.Widgetter {
 		}
 		activeNet = s.ActiveNet
 	})
+	w.diskNames = map[string]string{}
 	for _, d := range disks {
+		if !d.IsSwap {
+			w.diskNames[d.Name] = d.Label()
+		}
 		w.addView("disk:"+d.Name, func() View { return newDiskView(col, d) })
 	}
 	for _, n := range nets {
@@ -467,20 +473,43 @@ func (w *Window) refreshAlerts() {
 	if w.alertBtn == nil {
 		return
 	}
-	if w.svc != nil && time.Since(w.lastSvc) >= alertPoll {
+	if time.Since(w.lastSvc) >= alertPoll {
 		w.lastSvc = time.Now()
-		svc := w.svc
+		svc, disks := w.svc, w.diskNames
 		go func() {
-			failed, err := svc.Failed()
-			if err != nil {
-				return
+			// Both of these are D-Bus round trips, so they happen together on
+			// the slow timer rather than on the tick.
+			var failed []string
+			if svc != nil {
+				if f, err := svc.Failed(); err == nil {
+					failed = f
+				}
 			}
-			glib.IdleAdd(func() { w.failedSvc = failed })
+			var drives []health.Drive
+			for name, label := range disks {
+				h, ok := diskHealth.Read(name)
+				if !ok {
+					continue
+				}
+				drives = append(drives, health.Drive{
+					Name:     label,
+					Failing:  h.Failing,
+					SpareLow: h.SpareLow,
+					Wear:     h.Wear,
+					HasWear:  h.HasWear,
+				})
+			}
+			glib.IdleAdd(func() {
+				if svc != nil {
+					w.failedSvc = failed
+				}
+				w.driveHealth = drives
+			})
 		}()
 	}
 
 	var alerts []health.Alert
-	w.col.Read(func(s *stats.Stats) { alerts = health.Check(s, w.failedSvc) })
+	w.col.Read(func(s *stats.Stats) { alerts = health.Check(s, w.failedSvc, w.driveHealth...) })
 
 	if len(alerts) == 0 {
 		w.alertBtn.SetVisible(false)
