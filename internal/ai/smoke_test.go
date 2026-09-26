@@ -15,6 +15,25 @@ func TestOllamaSmoke(t *testing.T) {
 	if !c.Available(ctx) {
 		t.Skip("Ollama not reachable")
 	}
+	// Reachable is not the same as ready. A machine can be running Ollama with
+	// entirely different models pulled, and asking it for one it does not have
+	// is a 404 — which is the server behaving correctly, not this package
+	// failing. Skip unless the model this test wants is actually installed.
+	tags, err := c.Tags(ctx)
+	if err != nil {
+		t.Skipf("Ollama reachable but its model list could not be read: %v", err)
+	}
+	installed := false
+	for _, tag := range tags {
+		if tag == c.Model() {
+			installed = true
+			break
+		}
+	}
+	if !installed {
+		t.Skipf("Ollama is running but %q is not pulled (it has %d other model(s)); "+
+			"run `ollama pull %s` to exercise this test", c.Model(), len(tags), c.Model())
+	}
 
 	var tokens int
 	full, stats, err := c.Chat(ctx, []Message{
