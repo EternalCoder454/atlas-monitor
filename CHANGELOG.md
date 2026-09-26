@@ -3,6 +3,16 @@
 Written for the people who use Atlas Monitor rather than the people who build
 it. One short line per change, no jargon — this is what the update prompt shows.
 
+## 0.10.0
+
+- The window works at small sizes: the sidebar slides over the content, with a
+  button to bring it back
+- Right-click a column heading to hide it; the Columns button brings it back
+- Hiding a column stops Atlas gathering that figure at all
+- Page sections fold away, and a folded section is not updated either
+- Service startup now reads On, Off or As needed
+- Sidebar icons are larger
+
 ## 0.9.0
 
 - Laptops with two batteries get a page for each, so you can see which one is

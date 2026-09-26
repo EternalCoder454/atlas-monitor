@@ -11,7 +11,7 @@
 # off here.
 
 pkgname=atlas-monitor
-pkgver=0.9.0
+pkgver=0.10.0
 pkgrel=1
 pkgdesc="Lightweight system monitor — CPU, memory, disk, network, GPU, processes and services"
 arch=('x86_64' 'aarch64')
