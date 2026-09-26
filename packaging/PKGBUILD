@@ -5,13 +5,19 @@
 #   makepkg -si          build and install with pacman
 #   pacman -R atlas-monitor   remove it again
 #
-# Updates come from pacman, not from the app: the in-app updater needs a source
-# checkout to pull and rebuild, and a packaged install has none. It notices that
-# on its own and says so rather than half-working, so there is nothing to switch
-# off here.
+# Updates come from pacman, not from the app. Atlas notices that it was installed
+# by a package manager — it asks pacman who owns its own binary — and its Update
+# button then checks the channel for a newer version and hands over the command
+# that installs it, rather than writing over /usr/bin behind pacman's back and
+# leaving its database describing a file that is no longer there.
+#
+# So there is nothing to switch off here. If this package is published to the AUR,
+# an AUR helper upgrades it in the ordinary way and Atlas will suggest exactly
+# that; without one it suggests rebuilding from the newer PKGBUILD, which is the
+# only thing that actually works for a locally built package.
 
 pkgname=atlas-monitor
-pkgver=0.11.0
+pkgver=0.11.1
 pkgrel=1
 pkgdesc="Lightweight system monitor — CPU, memory, disk, network, GPU, processes and services"
 arch=('x86_64' 'aarch64')

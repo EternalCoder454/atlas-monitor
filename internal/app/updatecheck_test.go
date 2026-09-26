@@ -134,35 +134,58 @@ func TestCheckUpdateSaysNothingWhenCurrent(t *testing.T) {
 	}
 }
 
-// TestCheckUpdateWithoutACheckout covers an install from the release tarball.
-// There is nothing to pull, so the check has to fail quietly rather than
-// pestering someone who cannot act on it.
+// TestCheckUpdateWithoutACheckout covers an install from a package or a release
+// tarball. It used to be an error — "install with `make install`" — which is how
+// an Arch user ended up being told their working install was broken. There is no
+// checkout to compare commits in, so it falls back to asking the channel what
+// version it is on, and that has to work.
 func TestCheckUpdateWithoutACheckout(t *testing.T) {
-	requireGit(t)
 	t.Setenv("XDG_DATA_HOME", t.TempDir()) // no source file at all
+	serveChannel(t, "main", "1.4.0", "# What's new\n\n## 1.4.0\n\n- A thing worth having\n")
 
-	var a App
+	a := App{version: "1.3.0"}
 	info, err := a.CheckUpdate("main")
-	if err == nil {
-		t.Error("expected an error when the source location is unknown")
+	if err != nil {
+		t.Fatalf("a packaged install could not check for updates: %v", err)
 	}
-	if info.Available {
-		t.Error("an update was offered with no checkout to update")
+	if !info.Available {
+		t.Fatal("1.3.0 was told it was current with 1.4.0 on the channel")
+	}
+	if info.Version != "1.4.0" {
+		t.Errorf("Version = %q, want 1.4.0", info.Version)
+	}
+	if len(info.Changes) == 0 {
+		t.Error("the changelog was not carried through")
+	}
+	// Nothing in the message may point at `make install`: following that advice
+	// on a packaged install leaves a second, unmanaged copy that wins on PATH.
+	if strings.Contains(info.Summary, "make install") {
+		t.Errorf("Summary = %q, which tells a packaged install to run make install", info.Summary)
 	}
 }
 
-// TestCheckUpdateOnSomethingThatIsNotARepository covers a source path that
-// exists but was, say, unpacked from a zip.
+// TestCheckUpdateOnSomethingThatIsNotARepository covers a recorded source path
+// that exists but was, say, unpacked from a zip. It cannot be pulled, so the
+// version check answers instead of the whole thing failing.
 func TestCheckUpdateOnSomethingThatIsNotARepository(t *testing.T) {
-	requireGit(t)
-	pointSourceAt(t, t.TempDir())
+	dir := t.TempDir()
+	// A Makefile makes it look like a source tree, which is what an unpacked zip
+	// would be: recorded, present, and not a checkout.
+	if err := os.WriteFile(filepath.Join(dir, "Makefile"), []byte("all:\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pointSourceAt(t, dir)
+	serveChannel(t, "main", "2.0.0", "")
 
-	var a App
+	a := App{version: "2.0.0"}
 	info, err := a.CheckUpdate("main")
-	if err == nil {
-		t.Error("expected an error for a source directory that is not a checkout")
+	if err != nil {
+		t.Fatalf("a non-repository source could not check for updates: %v", err)
 	}
 	if info.Available {
-		t.Error("an update was offered from a non-repository")
+		t.Error("an update was offered when the versions match")
+	}
+	if !strings.Contains(info.Summary, "Up to date") {
+		t.Errorf("Summary = %q, want it to say up to date", info.Summary)
 	}
 }

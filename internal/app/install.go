@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,10 +34,6 @@ const restartPause = 700
 // last thing make said that matters, not the whole run.
 const maxLogTail = 360
 
-// errNoCheckout is the honest answer for a copy that was unpacked rather than
-// installed from source: there is nothing to pull and nothing to build.
-var errNoCheckout = errors.New("this copy of Atlas wasn't installed from a source checkout, so it can't update itself")
-
 // startUpdate installs the waiting version and restarts into it, reporting
 // progress in a dialog of its own.
 //
@@ -47,6 +44,19 @@ func (a *App) startUpdate(done func(ok bool)) {
 	if a.updating {
 		return // one at a time — two builds in the same checkout would fight
 	}
+
+	// A packaged copy is not ours to overwrite, and one installed somewhere this
+	// user cannot write is not ours to try. Both get the command that does work
+	// instead of a build that would fail — or, worse, a build that succeeds into
+	// the wrong prefix and leaves two Atlases on PATH.
+	if in := a.install(); !in.SelfUpdatable() {
+		a.showManagedUpdate(in)
+		if done != nil {
+			done(false)
+		}
+		return
+	}
+
 	a.updating = true
 
 	dlg := adw.NewAlertDialog("Updating Atlas Monitor", "")
@@ -123,8 +133,12 @@ func (a *App) startUpdate(done func(ok bool)) {
 			spinner.Stop()
 			a.updating = false
 			if err != nil {
-				if errors.Is(err, errNoCheckout) {
-					status.SetText(err.Error() + "\nDownload the newer version from the project page instead.")
+				var setup *setupError
+				if errors.As(err, &setup) {
+					// Something the user has to install first, named along with
+					// the command that installs it. This is not a build failure
+					// and has no log worth showing.
+					status.SetText(setup.Error())
 				} else {
 					status.SetText("The update couldn't be installed.\nAtlas Monitor is still on v" +
 						a.version + " and running normally.")
@@ -152,31 +166,47 @@ func (a *App) startUpdate(done func(ok bool)) {
 // called exactly once, with the error or nil, when it is over. Both run on the
 // main loop.
 func (a *App) installUpdate(status func(string), finished func(error)) {
-	script := ""
-	if src := sourceDir(); src != "" {
-		p := filepath.Join(src, "scripts", "update.sh")
-		if _, err := os.Stat(p); err == nil {
-			script = p
-		}
-	}
-	if script == "" {
-		finished(errNoCheckout)
-		return
-	}
+	in := a.install()
 	branch := a.settings.UpdateChannel
 	if branch != "main" && branch != "beta" {
 		branch = "main"
 	}
+	// The new version installs back over the one that is running, whatever
+	// prefix that is under. Left to the Makefile's default a copy installed in
+	// /usr/local would be rebuilt into ~/.local, and which of the two launched
+	// afterwards would come down to the order of PATH.
+	prefix := in.Prefix()
 
 	status("Downloading and building the new version…\nThis takes a minute or two.")
 
 	go func() {
-		// The script path and the branch are arguments to bash, never text
-		// pasted into a command for a shell to re-read. An argument cannot
-		// become syntax whatever it contains, so a checkout path holding
+		fail := func(err error) { glib.IdleAdd(func() { finished(err) }) }
+		say := func(text string) { glib.IdleAdd(func() { status(text) }) }
+
+		src := in.Source
+		if src == "" {
+			// Unpacked rather than built: fetch the source once, and this copy
+			// updates itself like any other from here on.
+			var err error
+			if src, err = bootstrapSource(branch, say); err != nil {
+				fail(err)
+				return
+			}
+			say("Building the new version…\nThis takes a minute or two.")
+		}
+
+		script := filepath.Join(src, "scripts", "update.sh")
+		if _, err := os.Stat(script); err != nil {
+			fail(fmt.Errorf("the update script is missing from %s", src))
+			return
+		}
+
+		// The script path, the branch and the prefix are arguments to bash,
+		// never text pasted into a command for a shell to re-read. An argument
+		// cannot become syntax whatever it contains, so a checkout path holding
 		// $(...), a backtick, or just a '$' is data — see
 		// TestUpdateTreatsPathsAsData.
-		err := exec.Command("bash", script, branch).Run()
+		err := exec.Command("bash", script, branch, prefix).Run()
 		glib.IdleAdd(func() { finished(err) })
 	}()
 }
