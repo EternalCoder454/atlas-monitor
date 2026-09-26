@@ -38,8 +38,7 @@ sha256sums=('SKIP')
 # back to hicolor last, so a generic name here would lose to whatever icon theme
 # is installed and never be used. Keep in step with ICONS in the Makefile —
 # TestPackagingListsAgree checks that every installer agrees.
-_icons=(cpu memory disk gpu network wifi battery apps services settings
-        update trash reset menu warning)
+_icons=(cpu memory disk gpu network wifi battery apps services settings update trash reset menu warning startup)
 
 pkgver() {
     cd "$_pkgname"

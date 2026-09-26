@@ -33,5 +33,6 @@ and a black fill, and annotated. The artwork itself is unchanged. The source
 downloads are kept beside them under their plain names, and
 scripts/import-icons.sh performs the conversion.
 
-assets/icon.svg — the application icon itself — and assets/icons/atlas-menu-symbolic.svg
+assets/icon.svg — the application icon itself — and the hand-drawn icons
+assets/icons/atlas-menu-symbolic.svg and assets/icons/atlas-startup-symbolic.svg
 are original work and are covered by LICENSE, not by the above.

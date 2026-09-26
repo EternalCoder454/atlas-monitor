@@ -43,7 +43,7 @@ go build -trimpath -ldflags="-s -w" -o %{name} .
 install -Dm755 %{name}                       %{buildroot}%{_bindir}/%{name}
 install -Dm644 assets/style.css              %{buildroot}%{_datadir}/%{name}/style.css
 install -Dm644 assets/icon.svg               %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/com.atlas.Monitor.svg
-for icon in cpu memory disk gpu network wifi battery apps services settings update trash reset menu warning; do
+for icon in cpu memory disk gpu network wifi battery apps services settings update trash reset menu warning startup; do
     install -Dm644 assets/icons/atlas-$icon-symbolic.svg \
         %{buildroot}%{_datadir}/icons/hicolor/scalable/actions/atlas-$icon-symbolic.svg
 done
