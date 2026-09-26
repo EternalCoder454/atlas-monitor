@@ -122,3 +122,37 @@ func TestServicesApplyKeepsModelInSyncWithOrder(t *testing.T) {
 		}
 	}
 }
+
+// TestStartupLabel covers the states this machine actually reports, and the
+// promise that an unknown one is shown rather than hidden.
+func TestStartupLabel(t *testing.T) {
+	for state, want := range map[string]string{
+		"enabled":         "On",
+		"disabled":        "Off",
+		"static":          "As needed",
+		"enabled-runtime": "On until reboot",
+		"masked":          "Blocked",
+		"indirect":        "Indirect",
+		"alias":           "Alias",
+		"transient":       "Temporary",
+		"":                "—",
+		"some-new-state":  "some-new-state",
+	} {
+		if got := startupLabel(state); got != want {
+			t.Errorf("startupLabel(%q) = %q, want %q", state, got, want)
+		}
+	}
+	// The two states people actually read as on-or-off get shorter.
+	for _, state := range []string{"enabled", "disabled"} {
+		if len(startupLabel(state)) >= len(state) {
+			t.Errorf("%q became %q, which is no shorter", state, startupLabel(state))
+		}
+	}
+	// "static" is the exception and deliberately so: "As needed" is longer than
+	// the word it replaces, and it is the only one of the three whose systemd
+	// name tells the reader nothing. Clarity is what it is buying, not width.
+	if got := startupLabel("static"); len(got) <= len("static") {
+		t.Errorf("startupLabel(\"static\") = %q; if it has become shorter, "+
+			"the comment above no longer describes the trade being made", got)
+	}
+}

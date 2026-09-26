@@ -122,7 +122,7 @@ func newServicesView() *servicesView {
 	cv.AppendColumn(v.statusColumn())
 	cv.AppendColumn(v.textColumn("Service", true, func(s services.Service) string { return s.Name }))
 	cv.AppendColumn(v.textColumn("Description", true, func(s services.Service) string { return s.Description }))
-	cv.AppendColumn(v.textColumn("Startup", false, func(s services.Service) string { return s.Enabled }))
+	cv.AppendColumn(v.textColumn("Startup", false, func(s services.Service) string { return startupLabel(s.Enabled) }))
 
 	scroller := gtk.NewScrolledWindow()
 	scroller.SetChild(cv)
@@ -355,4 +355,45 @@ func rowOfService(cell *gtk.ColumnViewCell) *svcRow {
 		return nil
 	}
 	return gioutil.ObjectValue[*svcRow](item)
+}
+
+// startupLabel turns a systemd unit-file state into something a person who does
+// not run systemd can read.
+//
+// The words were systemd's own, and they are both longer and less informative
+// than they look. "static" is the single most common value — 212 of about 400
+// units on the machine this was written on — and it does not mean the service
+// is off, or fixed, or anything else a reader would guess: it means the service
+// cannot be turned on or off directly and runs when something else needs it.
+// "enabled" and "disabled" at least mean what they say, but they say it in
+// eight letters where two will do.
+func startupLabel(state string) string {
+	switch state {
+	case "enabled":
+		return "On"
+	case "disabled":
+		return "Off"
+	case "static":
+		return "As needed"
+	case "enabled-runtime":
+		return "On until reboot"
+	case "masked", "masked-runtime":
+		return "Blocked"
+	case "indirect":
+		return "Indirect"
+	case "alias":
+		return "Alias"
+	case "generated":
+		return "Generated"
+	case "transient":
+		return "Temporary"
+	case "bad":
+		return "Broken"
+	case "":
+		return "—"
+	default:
+		// Anything systemd grows later shows through unchanged rather than
+		// being swallowed by a label that does not fit it.
+		return state
+	}
 }

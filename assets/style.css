@@ -36,6 +36,14 @@
   border-radius: 9px;
 }
 
+/* The symbolic icons are drawn at a nominal 16px, which is GTK's default and
+   is small on a high-density display — the sidebar reads as labels with specks
+   beside them. 20px is the next step up that still aligns with the row text.
+   The expander arrow stays small on purpose: it is punctuation, not an icon. */
+.am-sidebar row image {
+  -gtk-icon-size: 20px;
+}
+
 .am-sidebar row.expander image.expander-row-arrow {
   -gtk-icon-size: 14px;
   margin-right: 2px;
