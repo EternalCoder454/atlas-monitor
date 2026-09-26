@@ -46,8 +46,17 @@ jobs:
 
       - name: Build
         id: build
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          version="$(cat VERSION)"
+          # Named after the tag rather than VERSION, so two builds of the same
+          # version stay apart. The Minimal branch carries the same VERSION as
+          # the full one on purpose — "Minimal 0.10.0" means the features of
+          # 0.10.0 — which left both releases producing a file called
+          # atlas-monitor-0.10.0-linux-x86_64-fedora42.tar.gz. Downloaded
+          # together, nothing but the directory they landed in told them apart.
+          version="${TAG#v}"
+          [ -n "$version" ] || version="$(cat VERSION)"
           fedora="$(rpm -E %fedora)"
           name="atlas-monitor-${version}-linux-x86_64-fedora${fedora}"
           echo "version=$version"   >> "$GITHUB_OUTPUT"
