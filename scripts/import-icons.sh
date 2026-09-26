@@ -42,6 +42,7 @@ map=(
     update:update
     trash:trash
     reset:reset
+    warning:warning
 )
 
 fail=0

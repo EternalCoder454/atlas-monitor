@@ -10,7 +10,7 @@ ICONACT := $(PREFIX)/share/icons/hicolor/scalable/actions
 # Atlas's own symbolic icons, installed into the actions icon directory. They
 # are all atlas-prefixed on purpose: icon lookup falls back to hicolor last, so
 # a generic name here would lose to the system theme and never be used.
-ICONS   := cpu memory disk gpu assistant network wifi battery apps services settings prompts update trash reset menu
+ICONS   := cpu memory disk gpu assistant network wifi battery apps services settings prompts update trash reset menu warning
 
 # TAGS is passed to the Go build. `noai` drops the Assistant page, the Ollama
 # client and the Markdown renderer — see `make build-lean`.

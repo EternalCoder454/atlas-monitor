@@ -17,6 +17,7 @@ import (
 	"atlas-monitor/internal/ai"
 	"atlas-monitor/internal/config"
 	"atlas-monitor/internal/format"
+	"atlas-monitor/internal/health"
 	"atlas-monitor/internal/process"
 	"atlas-monitor/internal/services"
 	"atlas-monitor/internal/stats"
@@ -478,28 +479,17 @@ func (v *assistantView) buildContext() string {
 		}
 	}
 
-	// Alerts: computed in Go because a small model can't reliably compare figures
-	// to thresholds across the data blob.
-	const giB = 1 << 30
+	// Alerts: computed in Go because a small model cannot reliably compare
+	// figures to thresholds across the data blob. The checks live in
+	// internal/health so that the badge in the window and the answer the model
+	// gives cannot disagree about whether the machine is healthy — they used to
+	// be here, where nothing but the model could see them.
 	var alerts []string
-	if cpuTemp > 85 {
-		alerts = append(alerts, fmt.Sprintf("CPU %.0f°C", cpuTemp))
-	}
-	if gpuAvail && gpuTemp > 85 {
-		alerts = append(alerts, fmt.Sprintf("GPU %.0f°C", gpuTemp))
-	}
-	if memTotal > 0 && (memAvail < 2*giB || float64(memUsed)/float64(memTotal) > 0.90) {
-		alerts = append(alerts, fmt.Sprintf("low memory (%s available, %s used)", format.GiB(memAvail), pctStr(memUsed, memTotal)))
-	}
-	if swapTotal > 0 && float64(swapUsed)/float64(swapTotal) > 0.25 {
-		alerts = append(alerts, fmt.Sprintf("swap %s used", pctStr(swapUsed, swapTotal)))
-	}
-	for _, d := range fullDisks {
-		alerts = append(alerts, fmt.Sprintf("disk %s nearly full (%s free)", d.label, d.free))
-	}
-	if len(failed) > 0 {
-		alerts = append(alerts, "service failed: "+strings.Join(failed, ", "))
-	}
+	v.col.Read(func(s *stats.Stats) {
+		for _, a := range health.Check(s, failed) {
+			alerts = append(alerts, a.Title+" ("+a.Detail+")")
+		}
+	})
 
 	// [SUMMARY]: pre-extracted overall figures + alerts, so the model reads rather
 	// than parses.

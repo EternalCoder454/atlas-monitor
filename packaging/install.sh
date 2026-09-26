@@ -14,7 +14,7 @@ BINARY=atlas-monitor
 # it still named five icons after the set had grown, so a tarball install came
 # up with broken images where most of the sidebar should be. Keep it in step
 # with ICONS in the Makefile; TestPackagingListsAgree checks that it is.
-ICONS="cpu memory disk gpu assistant network wifi battery apps services settings prompts update trash reset menu"
+ICONS="cpu memory disk gpu assistant network wifi battery apps services settings prompts update trash reset menu warning"
 PREFIX="${PREFIX:-$HOME/.local}"
 action=install
 

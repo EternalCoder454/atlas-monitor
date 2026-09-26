@@ -78,6 +78,27 @@ func (c *Client) Close() {
 	}
 }
 
+// Failed returns the names of units in the failed state, and nothing else.
+//
+// This exists because the alert badge asks the question often and List is far
+// too heavy an answer: List fetches every unit on the machine and then every
+// unit *file* to work out what is enabled, which is hundreds of records to
+// find the handful that are broken. ListUnitsFiltered asks systemd to do the
+// filtering, so the usual answer is an empty array.
+func (c *Client) Failed() ([]string, error) {
+	var units []dbusUnit
+	if err := c.mgr.Call(mgrIf+".ListUnitsFiltered", 0, []string{"failed"}).Store(&units); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(units))
+	for _, u := range units {
+		if strings.HasSuffix(u.Name, ".service") {
+			out = append(out, u.Name)
+		}
+	}
+	return out, nil
+}
+
 // List returns the units. When servicesOnly is true, only *.service units are
 // returned; otherwise all unit types are included.
 func (c *Client) List(servicesOnly bool) ([]Service, error) {

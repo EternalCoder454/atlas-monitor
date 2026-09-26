@@ -206,3 +206,15 @@ columnview header button label {
 .am-dot.failed {
   background-color: @error_color;
 }
+
+/* The alert badge. It only exists when something is wrong, so it is allowed to
+   be a colour: amber for a warning, red when the machine is doing itself harm.
+   Both are the theme's own accent colours rather than hand-picked values, so
+   they stay legible in either light or dark. */
+.am-alert-button {
+  color: @warning_color;
+}
+
+.am-alert-button.am-alert-critical {
+  color: @error_color;
+}
