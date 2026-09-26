@@ -12,8 +12,11 @@ import (
 )
 
 type powerView struct {
-	root      *gtk.ScrolledWindow
-	col       *stats.Collector
+	root *gtk.ScrolledWindow
+	col  *stats.Collector
+	// pack is the kernel name of the one battery this page shows, or "" for the
+	// summed view. A machine with a single pack only ever uses "".
+	pack      string
 	number    *liveLabel
 	caption   *liveLabel
 	capBuf    []byte
@@ -27,8 +30,8 @@ type powerView struct {
 	vCycles, vVoltage, vAdapter *liveLabel
 }
 
-func newPowerView(col *stats.Collector) *powerView {
-	v := &powerView{col: col}
+func newPowerView(col *stats.Collector, pack string) *powerView {
+	v := &powerView{col: col, pack: pack}
 	sw, box := newPage()
 	v.root = sw
 
@@ -39,6 +42,10 @@ func newPowerView(col *stats.Collector) *powerView {
 	var chargeHist, drawHist *stats.RingBuffer
 	var b power.Battery
 	col.Read(func(s *stats.Stats) {
+		if ps, ok := packOf(s, pack); ok {
+			chargeHist, drawHist, b = ps.ChargeHist, ps.DrawHist, ps.Battery
+			return
+		}
 		chargeHist, drawHist = s.Power.ChargeHist, s.Power.DrawHist
 		b = s.Power.Battery
 	})
@@ -82,11 +89,24 @@ func (v *powerView) Update() {
 	var b power.Battery
 	var hasAC, onAC bool
 	v.col.Read(func(s *stats.Stats) {
-		b, hasAC, onAC = s.Power.Battery, s.Power.HasAC, s.Power.OnAC
+		hasAC, onAC = s.Power.HasAC, s.Power.OnAC
+		if ps, ok := packOf(s, v.pack); ok {
+			b = ps.Battery
+			return
+		}
+		b = s.Power.Battery
 	})
 
 	v.number.percent(b.Percent)
-	v.caption.commit(appendBatteryCaption(v.caption.scratch(), b, hasAC, onAC))
+	// On a per-pack page, say which pack. Without it the two pages are the same
+	// shape and the same words, and the only way to tell BAT0 from BAT1 is to
+	// scroll to the model number at the bottom.
+	line := v.caption.scratch()
+	if v.pack != "" {
+		line = append(line, v.pack...)
+		line = append(line, " · "...)
+	}
+	v.caption.commit(appendBatteryCaption(line, b, hasAC, onAC))
 
 	v.vStatus.text(b.Status)
 	if b.PowerW > 0 {
@@ -111,6 +131,21 @@ func (v *powerView) Update() {
 	if show {
 		v.drawGr.Refresh()
 	}
+}
+
+// packOf finds one pack's readings by kernel name. It reports false for the
+// summed view, and for a name that is no longer there — a pack pulled out of a
+// hot-swap bay, whose page is still open.
+func packOf(s *stats.Stats, name string) (stats.PackStats, bool) {
+	if name == "" {
+		return stats.PackStats{}, false
+	}
+	for _, p := range s.Power.Packs {
+		if p.Battery.Name == name {
+			return p, true
+		}
+	}
+	return stats.PackStats{}, false
 }
 
 // appendBatteryCaption is the line under the big percentage: what the battery

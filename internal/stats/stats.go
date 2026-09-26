@@ -118,6 +118,20 @@ type PowerStats struct {
 	OnAC       bool
 	ChargeHist *RingBuffer // charge %
 	DrawHist   *RingBuffer // watts in or out
+
+	// Packs is each battery on its own, with a history per pack, for machines
+	// that have more than one. Empty on a desktop, one entry on an ordinary
+	// laptop. The slice's length and order are fixed at startup: hot-swapping a
+	// pack while Atlas is running does not add a page.
+	Packs []PackStats
+}
+
+// PackStats is one battery pack, with the same two histories the aggregate
+// keeps so a per-pack page can draw the same charts.
+type PackStats struct {
+	Battery    power.Battery
+	ChargeHist *RingBuffer
+	DrawHist   *RingBuffer
 }
 
 // Stats is the shared snapshot. The embedded RWMutex guards all scalar fields.

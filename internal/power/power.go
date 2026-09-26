@@ -55,9 +55,22 @@ func (b Battery) Discharging() bool { return b.Status == "Discharging" }
 
 // State is one reading of the machine's power supplies.
 type State struct {
+	// Battery is every pack summed, which is the figure a laptop's firmware
+	// reports and the one people mean by "battery percentage".
 	Battery Battery
-	HasAC   bool // an AC adapter was found
-	OnAC    bool // …and it is plugged in
+
+	// Packs is each pack on its own, in kernel name order, with its own
+	// percentage, health and time estimate filled in.
+	//
+	// A ThinkPad with an internal pack and a hot-swap one discharges them in
+	// sequence, not together: summed, the machine simply reads 80%, and the
+	// fact that one pack is empty and the other full — or that one has aged
+	// twice as far as the other — is not visible anywhere. This is that detail.
+	// It has one entry on an ordinary laptop and none on a desktop.
+	Packs []Battery
+
+	HasAC bool // an AC adapter was found
+	OnAC  bool // …and it is plugged in
 }
 
 // Reader holds the resolved sysfs paths.
@@ -115,8 +128,11 @@ func (r *Reader) Read() (State, bool) {
 	}
 
 	b := Battery{Packs: len(r.batteries)}
+	st.Packs = make([]Battery, 0, len(r.batteries))
 	for i, dir := range r.batteries {
 		one := readPack(dir)
+		finishPack(&one, dir)
+		st.Packs = append(st.Packs, one)
 		if i == 0 {
 			b.Name, b.Vendor, b.Model = one.Name, one.Vendor, one.Model
 			b.Technology, b.Status = one.Technology, one.Status
@@ -149,6 +165,25 @@ func (r *Reader) Read() (State, bool) {
 
 	st.Battery = b
 	return st, true
+}
+
+// finishPack fills in the figures that are derived rather than read: the
+// percentage, the health and the time estimate. The aggregate computes its own
+// from the summed energies, so this is only for the per-pack view.
+func finishPack(b *Battery, dir string) {
+	b.Packs = 1
+	switch {
+	case b.FullWh > 0:
+		b.Percent = clamp(b.EnergyWh / b.FullWh * 100)
+	default:
+		if v, ok := readUint(filepath.Join(dir, "capacity")); ok {
+			b.Percent = clamp(float64(v))
+		}
+	}
+	if b.DesignWh > 0 && b.FullWh > 0 {
+		b.Health = clamp(b.FullWh / b.DesignWh * 100)
+	}
+	b.TimeLeft = timeLeft(*b)
 }
 
 // readPack reads a single battery directory.
