@@ -89,12 +89,16 @@ func (w *Window) Build() gtk.Widgetter {
 	var disks []*stats.DiskStats
 	var nets []*stats.NetStats
 	var gpuAvail bool
+	var packs []string
 	var activeNet string
 	batteryAvail := w.col.PowerAvailable()
 	w.col.Read(func(s *stats.Stats) {
 		disks = append(disks, s.Disks...)
 		nets = append(nets, s.Nets...)
 		gpuAvail = s.GPU.Available
+		for _, p := range s.Power.Packs {
+			packs = append(packs, p.Battery.Name)
+		}
 		activeNet = s.ActiveNet
 	})
 	for _, d := range disks {
@@ -107,7 +111,15 @@ func (w *Window) Build() gtk.Widgetter {
 		w.addView("gpu", func() View { return newGPUView(col) })
 	}
 	if batteryAvail {
-		w.addView("power", func() View { return newPowerView(col) })
+		w.addView("power", func() View { return newPowerView(col, "") })
+		// A machine with two packs discharges them in sequence, so the summed
+		// figure hides which one is doing the work and how they have aged. One
+		// page each, but only when there is more than one to tell apart.
+		if len(packs) > 1 {
+			for _, name := range packs {
+				w.addView("power:"+name, func() View { return newPowerView(col, name) })
+			}
+		}
 	}
 
 	if aiCompiledIn {
@@ -126,7 +138,7 @@ func (w *Window) Build() gtk.Widgetter {
 	}
 	orderedNets := orderByActive(nets, activeNet)
 
-	sb := buildSidebar(disks, orderedNets, gpuAvail, batteryAvail, aiCompiledIn, w.selectView)
+	sb := buildSidebar(disks, orderedNets, packs, gpuAvail, batteryAvail, aiCompiledIn, w.selectView)
 	w.sidebar = sb
 	w.assistantRow = sb.assistantRow
 	w.netExp = sb.netExp

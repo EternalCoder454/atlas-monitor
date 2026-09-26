@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"strconv"
+
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
@@ -30,7 +32,7 @@ type sidebar struct {
 
 // buildSidebar constructs the fixed 200px navigation panel. onSelect is called
 // with a view name ("cpu", "disk:nvme0n1", ...) whenever a row is activated.
-func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, batteryAvail, withAI bool, onSelect func(string)) *sidebar {
+func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, packs []string, gpuAvail, batteryAvail, withAI bool, onSelect func(string)) *sidebar {
 	outer := gtk.NewBox(gtk.OrientationVertical, 0)
 	outer.AddCSSClass("am-sidebar")
 
@@ -68,7 +70,20 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, ba
 	if gpuAvail {
 		sb.gpuVal = rowValue(track("gpu", hw, appendRow(hw, "GPU", "atlas-gpu-symbolic", "gpu", onSelect)))
 	}
-	if batteryAvail {
+	switch {
+	case batteryAvail && len(packs) > 1:
+		// Two packs, as on a ThinkPad with a hot-swap bay: the summed reading
+		// stays at the top, and each pack gets a row of its own, the same shape
+		// the disks and interfaces already use.
+		batExp := adw.NewExpanderRow()
+		batExp.SetTitle("Battery")
+		batExp.SetIconName("atlas-battery-symbolic")
+		appendSubRow(batExp, "All batteries", "", "power", onSelect)
+		for i, name := range packs {
+			appendSubRow(batExp, "Battery "+strconv.Itoa(i+1), name, "power:"+name, onSelect)
+		}
+		hw.Append(batExp)
+	case batteryAvail:
 		track("power", hw, appendRow(hw, "Battery", "atlas-battery-symbolic", "power", onSelect))
 	}
 	outer.Append(hw)
