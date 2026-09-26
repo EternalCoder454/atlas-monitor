@@ -95,6 +95,7 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, packs []stri
 		assistantRow = track("assistant", sys, appendRow(sys, "Assistant", "atlas-assistant-symbolic", "assistant", onSelect))
 	}
 	track("apps", sys, appendRow(sys, "Apps", "atlas-apps-symbolic", "apps", onSelect))
+	track("energy", sys, appendRow(sys, "Energy Saver", "atlas-energy-symbolic", "energy", onSelect))
 	track("startup", sys, appendRow(sys, "Startup", "atlas-startup-symbolic", "startup", onSelect))
 	track("services", sys, appendRow(sys, "Services", "atlas-services-symbolic", "services", onSelect))
 	outer.Append(sys)

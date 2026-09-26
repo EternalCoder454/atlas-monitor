@@ -147,6 +147,7 @@ func (w *Window) Build() gtk.Widgetter {
 		})
 	}
 	w.addView("apps", func() View { return newAppsView(w.proc, gpuAvail, w.settings) })
+	w.addView("energy", func() View { return newEnergyView(w.proc) })
 	w.addView("startup", func() View { return newStartupView() })
 	w.addView("services", func() View { return newServicesView() })
 
@@ -384,7 +385,7 @@ func (w *Window) selectView(name string) {
 
 // needsProcs reports whether a view consumes the per-process collector.
 func needsProcs(name string) bool {
-	return name == "apps" || name == "assistant"
+	return name == "apps" || name == "energy" || name == "assistant"
 }
 
 func (w *Window) tickActive() {
