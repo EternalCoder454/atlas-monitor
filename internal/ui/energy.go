@@ -36,11 +36,6 @@ type energyView struct {
 	eased map[procIdent]bool
 }
 
-type procIdent struct {
-	pid   int
-	start uint64
-}
-
 // energyCandidates is how many programs the page will argue with at once.
 const energyCandidates = 8
 
@@ -75,6 +70,15 @@ func newEnergyView(proc *process.Collector) *energyView {
 }
 
 func (v *energyView) Root() gtk.Widgetter { return v.root }
+
+// applyWants asks for everything the impact score is made of. Ranking programs
+// by what they cost is the whole page, and a term missing because a column is
+// hidden somewhere else would change the order without saying so.
+func (v *energyView) applyWants() {
+	v.proc.SetWantDiskIO(true)
+	v.proc.SetWantGPU(true)
+	v.proc.SetWantNet(true)
+}
 
 // Update rebuilds the list when what it would say has changed.
 func (v *energyView) Update() {
@@ -121,10 +125,7 @@ func (v *energyView) row(p process.Proc) *adw.ActionRow {
 	row.SetSubtitle(energyReason(p))
 	row.SetSubtitleLines(2)
 
-	ident := procIdent{pid: p.PID}
-	if start, ok := process.StartTime(p.PID); ok {
-		ident.start = start
-	}
+	ident := identOf(p.PID)
 
 	btn := gtk.NewButtonWithLabel("Ease off")
 	btn.SetVAlign(gtk.AlignCenter)

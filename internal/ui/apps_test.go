@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"testing"
 
 	"atlas-monitor/internal/process"
@@ -97,5 +98,34 @@ func TestAppendGPUColumn(t *testing.T) {
 	}
 	if got := string(appendGPU(nil, &process.Proc{GPU: 37.6})); got != "38%" {
 		t.Errorf("busy GPU client = %q, want 38%%", got)
+	}
+}
+
+// TestProcIdentRefusesAReusedPid is the guard behind the context menu's signals
+// and the Energy Saver page's memory of what it has eased off. Both hold a pid
+// across time, and Linux hands pids out again.
+func TestProcIdentRefusesAReusedPid(t *testing.T) {
+	// Our own process is the one thing guaranteed to still be itself.
+	self := identOf(os.Getpid())
+	if self.start == 0 {
+		t.Skip("cannot read our own start time")
+	}
+	if !self.same() {
+		t.Error("our own process did not recognise itself")
+	}
+
+	// A pid that never existed.
+	if (procIdent{pid: 1 << 30, start: 12345}).same() {
+		t.Error("a pid that does not exist matched")
+	}
+	// The same pid, a different start time — which is exactly what a reused pid
+	// looks like, and the case that would otherwise kill the wrong program.
+	impostor := procIdent{pid: self.pid, start: self.start + 1}
+	if impostor.same() {
+		t.Error("a different start time on the same pid was accepted")
+	}
+	// An unreadable start time refuses rather than guessing.
+	if (procIdent{pid: self.pid, start: 0}).same() {
+		t.Error("a zero start time was treated as a match")
 	}
 }

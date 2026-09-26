@@ -344,6 +344,10 @@ func (w *Window) selectView(name string) {
 	// The per-process collector is expensive, so only run it where it is used:
 	// the Apps table.
 	if needsProcs(name) {
+		// The page that is on screen says what the scan should gather.
+		if want, ok := lv.view.(wanter); ok {
+			want.applyWants()
+		}
 		w.proc.Start()
 	} else {
 		w.proc.Stop()
