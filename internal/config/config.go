@@ -18,6 +18,11 @@ const (
 	MinWindowHeight     = 600
 )
 
+// MinimalChannel is the only branch this build updates from. The full
+// application lives on main and beta; pulling either of those into a minimal
+// install would quietly turn it back into the full one.
+const MinimalChannel = "minimal"
+
 // DefaultRefreshSeconds is the sampling interval when nothing is configured.
 //
 // Two seconds rather than one, because this is the build for machines that
@@ -45,7 +50,7 @@ type Settings struct {
 	TextRendering string `json:"text_rendering"`
 	UpdateCheck   bool   `json:"update_check"`
 	ShowIOColumns bool   `json:"show_io_columns"`
-	UpdateChannel string `json:"update_channel"` // "main" (Release) or "beta" (newest features/fixes)
+	UpdateChannel string `json:"update_channel"` // always MinimalChannel in this build; see UpdateChannel handling
 	RenderMode    string `json:"render_mode"`    // see gfx: "software" (default), "gpu", "system"
 
 	// RefreshSeconds is how often every collector samples and the visible page
@@ -65,7 +70,7 @@ func Defaults() Settings {
 	return Settings{
 		TextRendering:  gfx.TextSharp,
 		UpdateCheck:    true,
-		UpdateChannel:  "main",
+		UpdateChannel:  MinimalChannel,
 		RenderMode:     gfx.ModeSoftware,
 		RefreshSeconds: DefaultRefreshSeconds,
 		WindowWidth:    DefaultWindowWidth,
@@ -89,8 +94,13 @@ func Load() Settings {
 	if b, err := os.ReadFile(path()); err == nil {
 		_ = json.Unmarshal(b, &s)
 	}
-	if s.UpdateChannel != "main" && s.UpdateChannel != "beta" {
-		s.UpdateChannel = "main" // default/repair: Release channel
+	// This build tracks one branch and no other. A settings file carried over
+	// from a full install will name main or beta, and honouring that would pull
+	// the full application over the top of this one on the next update — the
+	// assistant back, from a build that was installed to be without it. Anything
+	// that is not the minimal channel is repaired to it.
+	if s.UpdateChannel != MinimalChannel {
+		s.UpdateChannel = MinimalChannel
 	}
 	s.RenderMode = gfx.Normalize(s.RenderMode)
 	s.TextRendering = gfx.NormalizeText(s.TextRendering)

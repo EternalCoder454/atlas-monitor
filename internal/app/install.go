@@ -12,6 +12,8 @@ import (
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 	"github.com/diamondburned/gotk4/pkg/pango"
+
+	"atlas-monitor/internal/config"
 )
 
 // Installing an update.
@@ -163,10 +165,9 @@ func (a *App) installUpdate(status func(string), finished func(error)) {
 		finished(errNoCheckout)
 		return
 	}
-	branch := a.settings.UpdateChannel
-	if branch != "main" && branch != "beta" {
-		branch = "main"
-	}
+	// Fixed, not chosen: see config.MinimalChannel. Pulling main or beta here
+	// would rebuild this install as the full application.
+	branch := config.MinimalChannel
 
 	status("Downloading and building the new version…\nThis takes a minute or two.")
 

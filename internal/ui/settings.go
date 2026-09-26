@@ -69,33 +69,22 @@ func newAppPage(s *config.Settings, h SettingsHooks) *appPage {
 
 	updGroup := adw.NewPreferencesGroup()
 	updGroup.SetTitle("Updates")
-	updGroup.SetDescription("Atlas updates by pulling the selected channel from GitHub and reinstalling. " +
+	updGroup.SetDescription("Atlas updates by pulling its branch from GitHub and reinstalling. " +
 		"Update checks first and only restarts if there is something newer.")
 
-	channelIDs := []string{"main", "beta"}
-	channel := adw.NewComboRow()
+	// No channel picker. The full application lives on main and beta, and
+	// offering either here would let someone who installed the build without an
+	// assistant update their way back into the one with it — silently, since an
+	// update just pulls a branch and rebuilds. This build follows its own branch
+	// and says so.
+	channel := adw.NewActionRow()
 	channel.SetTitle("Channel")
-	channel.SetSubtitle("Release is the stable main branch; Beta has the newest features and fixes")
-	channel.SetModel(gtk.NewStringList([]string{"Release (main)", "Beta (beta)"}))
-	if s.UpdateChannel == "beta" {
-		channel.SetSelected(1)
-	} else {
-		channel.SetSelected(0)
-	}
+	channel.SetSubtitle("Minimal — this build follows the branch it was made from")
 
 	status := adw.NewActionRow()
 	status.SetTitle("Status")
 	status.SetSubtitle(fmt.Sprintf("On %s · version %s", channelName(s.UpdateChannel), version))
 	status.SetSubtitleSelectable(true)
-
-	channel.NotifyProperty("selected", func() {
-		if idx := int(channel.Selected()); idx >= 0 && idx < len(channelIDs) {
-			s.UpdateChannel = channelIDs[idx]
-			_ = config.Save(*s)
-			status.SetSubtitle(fmt.Sprintf("On %s · version %s", channelName(s.UpdateChannel), version))
-			fire(h.OnChange)
-		}
-	})
 	// Checking on launch is on by default: an update nobody hears about is not
 	// much use. It is one switch to stop, and stopping it leaves the manual
 	// Update button below working exactly as before.
@@ -320,12 +309,7 @@ func selfMemory() string {
 	return format.Bytes(pages*uint64(os.Getpagesize())) + " resident"
 }
 
-func channelName(ch string) string {
-	if ch == "beta" {
-		return "Beta"
-	}
-	return "Release"
-}
+func channelName(string) string { return "Minimal" }
 
 // --- shared helpers ---------------------------------------------------------
 

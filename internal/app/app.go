@@ -274,10 +274,7 @@ func (a *App) startUpdateCheck(win *adw.ApplicationWindow) {
 	if !a.settings.UpdateCheck || a.updateOffered {
 		return
 	}
-	channel := a.settings.UpdateChannel
-	if channel != "main" && channel != "beta" {
-		channel = "main"
-	}
+	channel := config.MinimalChannel
 	glib.TimeoutAdd(1500, func() bool {
 		go func() {
 			info, err := a.CheckUpdate(channel)

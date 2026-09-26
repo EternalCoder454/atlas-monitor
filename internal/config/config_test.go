@@ -77,8 +77,8 @@ func TestLoadRepairsBadValues(t *testing.T) {
 	if s.TextRendering != gfx.TextSharp {
 		t.Errorf("TextRendering = %q, want repaired to %q", s.TextRendering, gfx.TextSharp)
 	}
-	if s.UpdateChannel != "main" {
-		t.Errorf("UpdateChannel = %q, want repaired to main", s.UpdateChannel)
+	if s.UpdateChannel != MinimalChannel {
+		t.Errorf("UpdateChannel = %q, want repaired to %q", s.UpdateChannel, MinimalChannel)
 	}
 }
 
@@ -167,8 +167,8 @@ func TestLoadSurvivesACorruptFile(t *testing.T) {
 			if s.TextRendering != gfx.NormalizeText(s.TextRendering) {
 				t.Errorf("TextRendering = %q, not a value gfx accepts", s.TextRendering)
 			}
-			if s.UpdateChannel != "main" && s.UpdateChannel != "beta" {
-				t.Errorf("UpdateChannel = %q", s.UpdateChannel)
+			if s.UpdateChannel != MinimalChannel {
+				t.Errorf("UpdateChannel = %q, want %q", s.UpdateChannel, MinimalChannel)
 			}
 		})
 	}
@@ -328,5 +328,27 @@ func TestUpdateCheckDefaultsOn(t *testing.T) {
 	}
 	if Load().UpdateCheck {
 		t.Error("an explicit update_check=false was ignored")
+	}
+}
+
+// TestSettingsFromAFullInstallCannotRetargetTheUpdate is the guard on the one
+// way this build could turn itself back into the one it was made to not be.
+//
+// An update pulls a branch and rebuilds from it. The full application lives on
+// main and beta, so a settings file naming either — carried over from a full
+// install, or edited by hand — would quietly reinstall the assistant over the
+// top of a build somebody chose for not having one. Load repairs it.
+func TestSettingsFromAFullInstallCannotRetargetTheUpdate(t *testing.T) {
+	for _, channel := range []string{"main", "beta", "", "MINIMAL", "../../etc"} {
+		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+		want := Defaults()
+		want.UpdateChannel = channel
+		if err := Save(want); err != nil {
+			t.Fatal(err)
+		}
+		if got := Load().UpdateChannel; got != MinimalChannel {
+			t.Errorf("a settings file asking for %q loaded as %q, want %q",
+				channel, got, MinimalChannel)
+		}
 	}
 }

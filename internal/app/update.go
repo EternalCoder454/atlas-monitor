@@ -45,10 +45,7 @@ func (a *App) CheckUpdate(channel string) (UpdateInfo, error) {
 
 	local, _ := git("rev-parse", "--short", "HEAD")
 	remote, _ := git("rev-parse", "--short", "origin/"+channel)
-	name := "Release"
-	if channel == "beta" {
-		name = "Beta"
-	}
+	const name = "Minimal"
 
 	// Up to date when origin/<channel> is already contained in HEAD.
 	if exec.Command("git", "-C", src, "merge-base", "--is-ancestor", "origin/"+channel, "HEAD").Run() == nil {
