@@ -3,6 +3,7 @@ package ui
 import (
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
+	"atlas-monitor/internal/config"
 	"atlas-monitor/internal/graph"
 	"atlas-monitor/internal/stats"
 )
@@ -11,20 +12,21 @@ import (
 const cpuColumns = 8
 
 type cpuView struct {
-	root    *gtk.ScrolledWindow
-	col     *stats.Collector
-	number  *liveLabel
-	caption *liveLabel
-	usage   *graph.Graph
-	cores   *coreGrid
-	nCores  int
-	coreBuf []float64 // reused each Update; avoids a per-tick alloc on the GTK thread
+	root         *gtk.ScrolledWindow
+	col          *stats.Collector
+	number       *liveLabel
+	caption      *liveLabel
+	usage        *graph.Graph
+	cores        *coreGrid
+	coresSection *section
+	nCores       int
+	coreBuf      []float64 // reused each Update; avoids a per-tick alloc on the GTK thread
 
 	vBase, vCur, vSockets, vCores, vLogical *liveLabel
 	vL1d, vL1i, vL2, vL3, vTemp             *liveLabel
 }
 
-func newCPUView(col *stats.Collector) *cpuView {
+func newCPUView(col *stats.Collector, settings *config.Settings) *cpuView {
 	v := &cpuView{col: col}
 	sw, box := newPage()
 	v.root = sw
@@ -42,12 +44,14 @@ func newCPUView(col *stats.Collector) *cpuView {
 	v.usage = graph.New("CPU", graph.ColorCPU, hist, graph.Percent, 160)
 	box.Append(v.usage)
 
-	// Per-core usage bars, drawn in a single Cairo pass.
-	box.Append(sectionTitle("CORES"))
+	// Per-core usage bars, drawn in a single Cairo pass. On a 32-thread machine
+	// this is the largest and most expensive thing on the page, so it folds —
+	// and folded, Update stops feeding it as well.
 	v.nCores = logical
 	v.coreBuf = make([]float64, logical)
 	v.cores = newCoreGrid(logical)
-	box.Append(v.cores)
+	v.coresSection = newSection("CORES", v.cores, settings)
+	box.Append(v.coresSection.widget())
 
 	// Stats grid.
 	box.Append(sectionTitle("DETAILS"))
@@ -95,6 +99,8 @@ func (v *cpuView) Update() {
 	v.number.percent(usage)
 	v.vCur.mhz(cur)
 	v.vTemp.temp(temp)
-	v.cores.set(cores)
+	if v.coresSection.expanded() {
+		v.cores.set(cores)
+	}
 	v.usage.Refresh()
 }

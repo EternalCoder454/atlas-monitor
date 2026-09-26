@@ -74,6 +74,7 @@ type Collector struct {
 	// never says otherwise gets every figure, as before.
 	wantDiskIO atomic.Bool
 	wantGPU    atomic.Bool
+	wantNet    atomic.Bool
 
 	// Scratch reused by collect: the process list under construction and the
 	// per-pid socket counts. Only the sampling goroutine touches them.
@@ -126,6 +127,7 @@ func New() *Collector {
 	c.interval.Store(int64(time.Second))
 	c.wantDiskIO.Store(true)
 	c.wantGPU.Store(true)
+	c.wantNet.Store(true)
 	return c
 }
 
@@ -149,6 +151,12 @@ func (c *Collector) SetWantDiskIO(want bool) { c.wantDiskIO.Store(want) }
 // of the scan after the stat reads; on a machine with no GPU column on screen
 // there is nothing to spend it on.
 func (c *Collector) SetWantGPU(want bool) { c.wantGPU.Store(want) }
+
+// SetWantNet says whether anything is displaying per-process network figures.
+// Attributing traffic to a process means enumerating its open sockets, which is
+// the most expensive thing this scan does; with the columns put away there is
+// nothing to spend it on.
+func (c *Collector) SetWantNet(want bool) { c.wantNet.Store(want) }
 
 // SetInterval changes how often the process list is sampled. It takes effect
 // within one tick of the current period.
@@ -262,7 +270,7 @@ func (c *Collector) collect() {
 	// tick; values are carried forward in between.
 	c.scanCounter++
 	hasTraffic := totalRxRate+totalTxRate > netScanThreshold
-	doScan := hasTraffic && c.scanCounter%3 == 0
+	doScan := c.wantNet.Load() && hasTraffic && c.scanCounter%3 == 0
 
 	// GPU scan. Walking a process's open descriptors is the most expensive
 	// thing here after the stat reads, so it is done for as few processes as

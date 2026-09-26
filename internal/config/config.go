@@ -92,7 +92,6 @@ type Settings struct {
 	Model          string `json:"model"`
 	TextRendering  string `json:"text_rendering"`
 	UpdateCheck    bool   `json:"update_check"`
-	ShowIOColumns  bool   `json:"show_io_columns"`
 	AssistantTitle string `json:"assistant_title"` // page header / chat label; sidebar stays "Assistant"
 	SystemPrompt   string `json:"system_prompt"`
 	UpdateChannel  string `json:"update_channel"` // "main" (Release) or "beta" (newest features/fixes)
@@ -108,6 +107,15 @@ type Settings struct {
 	WindowHeight    int    `json:"window_height"`
 	WindowMaximized bool   `json:"window_maximized"`
 	LastView        string `json:"last_view"`
+
+	// CollapsedSections are the page sections folded shut, by title. A folded
+	// section is not drawn and, where the work is its own, not done either.
+	CollapsedSections []string `json:"collapsed_sections"`
+
+	// HiddenColumns are the Apps table columns put away, by their titles. The
+	// two disk ones start hidden: they count blocks that reach the drive, which
+	// on anything with a page cache is nothing for nearly every process.
+	HiddenColumns []string `json:"hidden_columns"`
 
 	QuickPrompts []QuickPrompt `json:"quick_prompts"` // exactly 3, shown in the assistant dropdown
 }
@@ -127,6 +135,7 @@ func Defaults() Settings {
 		RefreshSeconds: DefaultRefreshSeconds,
 		WindowWidth:    DefaultWindowWidth,
 		WindowHeight:   DefaultWindowHeight,
+		HiddenColumns:  []string{"Disk Read", "Disk Write"},
 		QuickPrompts:   DefaultQuickPrompts(),
 	}
 }
@@ -146,6 +155,15 @@ func Load() Settings {
 	s := Defaults()
 	if b, err := os.ReadFile(path()); err == nil {
 		_ = json.Unmarshal(b, &s)
+		// 0.9.0 had one switch for the pair of disk columns. Anyone who turned
+		// it on meant "show me those", and a rename should not quietly put them
+		// away again.
+		var old struct {
+			ShowIOColumns *bool `json:"show_io_columns"`
+		}
+		if json.Unmarshal(b, &old) == nil && old.ShowIOColumns != nil && *old.ShowIOColumns {
+			s.HiddenColumns = without(s.HiddenColumns, "Disk Read", "Disk Write")
+		}
 	}
 	if s.OllamaURL == "" {
 		s.OllamaURL = Defaults().OllamaURL
@@ -236,4 +254,22 @@ func Save(s Settings) error {
 		return err
 	}
 	return nil
+}
+
+// without returns names minus any of drop, keeping order.
+func without(names []string, drop ...string) []string {
+	out := names[:0:0]
+	for _, n := range names {
+		skip := false
+		for _, d := range drop {
+			if n == d {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			out = append(out, n)
+		}
+	}
+	return out
 }
