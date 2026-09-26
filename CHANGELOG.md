@@ -5,10 +5,11 @@ it. One short line per change, no jargon — this is what the update prompt show
 
 ## 0.9.0
 
-- Laptops with two batteries now get a page for each, so you can see which one
-  is being used and how each has aged
-- The Apps list stops cutting program names short, and hides the two disk
-  columns that read zero on most machines — the Columns button brings them back
+- Laptops with two batteries get a page for each, so you can see which one is
+  being used
+- The Apps list no longer cuts program names short
+- The two disk columns that read zero on most machines are hidden; the Columns
+  button brings them back
 - A drive with nothing mounted says so, instead of showing an empty bar
 - Charts now say what the top of the chart means
 - The Memory page hides the swap section on machines with no swap
