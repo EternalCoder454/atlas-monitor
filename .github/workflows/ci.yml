@@ -22,11 +22,30 @@ jobs:
     # project targets.
     container: fedora:latest
     steps:
+      # Split in two so the package cache can be restored between them: the
+      # cache action needs tar and zstd, which is why those come first, and the
+      # expensive half (gtk4-devel and its dependencies) then comes out of the
+      # cache instead of the network. Fedora is on dnf5, so the cache lives
+      # under libdnf5; naming the old path silently saves nothing.
+      - name: Install the cache tools
+        run: |
+          echo "keepcache=1" >> /etc/dnf/dnf.conf
+          dnf install -y --setopt=install_weak_deps=False --nodocs tar zstd
+
+      - name: Cache dnf packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            /var/cache/libdnf5
+            /var/cache/dnf
+          key: dnf-fedora-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: dnf-fedora-
+
       - name: Install build dependencies
         run: |
-          dnf install -y --setopt=install_weak_deps=False \
+          dnf install -y --setopt=install_weak_deps=False --nodocs \
             golang gtk4-devel libadwaita-devel glib2-devel \
-            gcc pkgconf-pkg-config git make tar zstd
+            gcc pkgconf-pkg-config git make
 
       - uses: actions/checkout@v5
 
@@ -80,11 +99,30 @@ jobs:
     runs-on: ubuntu-latest
     container: fedora:latest
     steps:
+      # Split in two so the package cache can be restored between them: the
+      # cache action needs tar and zstd, which is why those come first, and the
+      # expensive half (gtk4-devel and its dependencies) then comes out of the
+      # cache instead of the network. Fedora is on dnf5, so the cache lives
+      # under libdnf5; naming the old path silently saves nothing.
+      - name: Install the cache tools
+        run: |
+          echo "keepcache=1" >> /etc/dnf/dnf.conf
+          dnf install -y --setopt=install_weak_deps=False --nodocs tar zstd
+
+      - name: Cache dnf packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            /var/cache/libdnf5
+            /var/cache/dnf
+          key: dnf-fedora-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: dnf-fedora-
+
       - name: Install build dependencies
         run: |
-          dnf install -y --setopt=install_weak_deps=False \
+          dnf install -y --setopt=install_weak_deps=False --nodocs \
             golang gtk4-devel libadwaita-devel glib2-devel \
-            gcc pkgconf-pkg-config git make tar zstd
+            gcc pkgconf-pkg-config git make
 
       - uses: actions/checkout@v5
 
