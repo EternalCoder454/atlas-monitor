@@ -26,6 +26,10 @@ type SettingsHooks struct {
 	CheckUpdate func(channel string) (available bool, info string, err error) // git fetch + compare (no restart)
 	Version     string
 	Location    string // install / source location, for display
+	// ManagedBy names the package manager that owns this install, when one does.
+	// The Update button then says so, because "Update" on its own promises
+	// something Atlas is not the one doing.
+	ManagedBy string
 }
 
 // ShowSettings presents the settings dialog over parent: a sidebar with three
@@ -336,6 +340,12 @@ func newAppPage(s *config.Settings, h SettingsHooks) *appPage {
 
 	update := adw.NewButtonRow()
 	update.SetTitle("Update")
+	if h.ManagedBy != "" {
+		// An install pacman owns is not updated from here, and the button should
+		// not imply otherwise: it checks, and then hands over the one command
+		// that does the work.
+		update.SetTitle("Check for updates")
+	}
 	update.SetStartIconName("atlas-update-symbolic")
 	update.AddCSSClass("suggested-action")
 	update.ConnectActivated(func() {
@@ -362,10 +372,20 @@ func newAppPage(s *config.Settings, h SettingsHooks) *appPage {
 						break
 					}
 					h.ApplyUpdate(func(ok bool) {
-						if !ok {
-							update.SetSensitive(true)
-							status.SetSubtitle("The update didn't finish — see the message for details.")
+						if ok {
+							return
 						}
+						update.SetSensitive(true)
+						if h.ManagedBy != "" {
+							// Not a failure. A packaged install is updated by
+							// its package manager, and ApplyUpdate has just
+							// shown the command that does it — so leave the
+							// summary saying what is available rather than
+							// claiming something went wrong.
+							status.SetSubtitle(info)
+							return
+						}
+						status.SetSubtitle("The update didn't finish — see the message for details.")
 					})
 				default:
 					update.SetSensitive(true)
@@ -386,7 +406,7 @@ func newAppPage(s *config.Settings, h SettingsHooks) *appPage {
 	aboutGroup.Add(ver)
 	loc := adw.NewActionRow()
 	loc.SetTitle("Location")
-	loc.SetSubtitle(nonEmpty(h.Location, "unknown (install with `make install`)"))
+	loc.SetSubtitle(nonEmpty(h.Location, "unknown"))
 	loc.SetSubtitleSelectable(true)
 	aboutGroup.Add(loc)
 	p.page.Add(aboutGroup)

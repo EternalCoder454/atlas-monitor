@@ -1,7 +1,6 @@
 package app
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,22 +67,63 @@ func TestUpdateTreatsPathsAsData(t *testing.T) {
 	}
 }
 
-// TestUpdateWithoutACheckoutSaysSo covers the copy that was unpacked rather than
-// installed from source. There is nothing to pull and nothing to build, and the
-// dialog has to say so rather than spin forever on a build that never started.
-func TestUpdateWithoutACheckoutSaysSo(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+// TestUpdateInstallsBackIntoItsOwnPrefix is the two-copies bug. The rebuild used
+// to call `make install` with the Makefile's default prefix, so a copy installed
+// in /usr/local was rebuilt into ~/.local — and which of the two then launched
+// came down to the order of PATH, with the old one still sitting where it was.
+// The prefix the running binary came from is passed through to the script.
+func TestUpdateInstallsBackIntoItsOwnPrefix(t *testing.T) {
+	home := t.TempDir()
+	argsFile := filepath.Join(home, "ARGS")
 
-	var got error
-	called := 0
-	a := &App{}
-	a.installUpdate(func(string) {}, func(err error) { got = err; called++ })
-
-	if called != 1 {
-		t.Fatalf("finished called %d times, want exactly 1", called)
+	src := filepath.Join(home, "checkout")
+	if err := os.MkdirAll(filepath.Join(src, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if !errors.Is(got, errNoCheckout) {
-		t.Errorf("got %v, want errNoCheckout", got)
+	script := "#!/usr/bin/env bash\necho \"$1\" > '" + argsFile + "'\necho \"$2\" >> '" + argsFile + "'\n"
+	if err := os.WriteFile(filepath.Join(src, "scripts", "update.sh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	data := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", data)
+	if err := os.MkdirAll(filepath.Join(data, "atlas-monitor"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(data, "atlas-monitor", "source"), []byte(src+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	a := &App{settings: config.Settings{UpdateChannel: "beta"}}
+	// A packaged-looking prefix, pinned rather than detected so the test does not
+	// depend on where the test binary happens to live.
+	a.pinInstall(Install{Kind: FromSource, Source: src, Binary: "/opt/atlas/bin/atlas-monitor"})
+	a.installUpdate(func(string) {}, func(error) {})
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(argsFile); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the update script never ran")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	got, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(got), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("the script got %d arguments, want the branch and the prefix: %q", len(lines), lines)
+	}
+	if lines[0] != "beta" {
+		t.Errorf("branch = %q, want beta", lines[0])
+	}
+	if lines[1] != "/opt/atlas" {
+		t.Errorf("prefix = %q, want /opt/atlas — the prefix the running copy is installed under", lines[1])
 	}
 }
 
