@@ -37,6 +37,15 @@ sudo dnf install -y golang gtk4-devel libadwaita-devel glib2-devel gcc pkgconf-p
   cd atlas-monitor && make install
 ```
 
+Arch Linux (builds a real package and hands it to pacman — no clone needed,
+`makepkg` fetches the release itself):
+
+```sh
+sudo pacman -S --needed base-devel go gtk4 libadwaita && \
+  curl -O https://raw.githubusercontent.com/EternalCoder454/atlas-monitor/main/packaging/PKGBUILD && \
+  makepkg -si
+```
+
 Then press **Super** and search "Atlas". The first build compiles the gotk4 cgo
 bindings and can take a few minutes; rebuilds are cached and fast.
 
@@ -179,6 +188,13 @@ The binary is dynamically linked, so the tarball is built per Fedora release —
 pick the one matching yours, or build from source below. `install.sh` checks
 what the dynamic linker cannot resolve and says so before installing anything.
 
+Arch Linux has a [`PKGBUILD`](packaging/PKGBUILD). `makepkg -si` from
+`packaging/` builds the released version and installs it through pacman, so
+`pacman -R atlas-monitor` removes it cleanly and updates arrive the same way as
+every other package. The in-app updater stands down for a packaged install —
+it needs a source checkout to pull and rebuild, notices there is none, and says
+so rather than half-working.
+
 An RPM spec lives in [`packaging/`](packaging/atlas-monitor.spec) for COPR or a
 local `rpmbuild`.
 
@@ -188,6 +204,12 @@ Fedora 40+/44:
 
 ```sh
 sudo dnf install golang gtk4-devel libadwaita-devel glib2-devel gcc pkgconf-pkg-config
+```
+
+Arch Linux:
+
+```sh
+sudo pacman -S --needed base-devel go gtk4 libadwaita
 ```
 
 You need Go 1.22 or newer. The first build compiles the gotk4 cgo bindings and

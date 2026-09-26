@@ -166,3 +166,54 @@ func TestPackagingInstallsEveryIcon(t *testing.T) {
 	}
 	t.Logf("%d icons installed by the Makefile", len(listed))
 }
+
+// iconListIn pulls the icon names out of one of the places that installs them.
+// Each packaging format spells the same list its own way, and none of them
+// notices when it falls behind: a missing entry installs nothing and the app
+// draws a broken image where that icon should be.
+func iconListIn(t *testing.T, path, start, end string) []string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Skipf("cannot read %s: %v", path, err)
+	}
+	body := string(b)
+	i := strings.Index(body, start)
+	if i < 0 {
+		t.Fatalf("%s: no %q to read the icon list from", path, start)
+	}
+	body = body[i+len(start):]
+	if j := strings.Index(body, end); j >= 0 {
+		body = body[:j]
+	}
+	var out []string
+	for _, f := range strings.Fields(body) {
+		if f == "\\" { // a line continuation, not an icon
+			continue
+		}
+		out = append(out, f)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TestPackagingListsAgree keeps the three installers in step. The Makefile is
+// the one the project itself uses, so it is treated as the source of truth; the
+// RPM spec and the Arch PKGBUILD have to match it.
+func TestPackagingListsAgree(t *testing.T) {
+	want := iconListIn(t, "Makefile", "ICONS   :=", "\n")
+	if len(want) == 0 {
+		t.Fatal("no ICONS list found in the Makefile")
+	}
+	for _, c := range []struct{ path, start, end string }{
+		{"packaging/atlas-monitor.spec", "for icon in", ";"},
+		{"packaging/PKGBUILD", "_icons=(", ")"},
+	} {
+		got := iconListIn(t, c.path, c.start, c.end)
+		if strings.Join(got, " ") != strings.Join(want, " ") {
+			t.Errorf("%s installs a different set of icons than the Makefile\n  it has:   %s\n  Makefile: %s",
+				c.path, strings.Join(got, " "), strings.Join(want, " "))
+		}
+	}
+	t.Logf("%d icons, listed the same way in all three installers", len(want))
+}
