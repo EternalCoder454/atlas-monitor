@@ -31,7 +31,7 @@ optdepends=(
     'ollama: runs the local model the optional assistant talks to'
 )
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
-sha256sums=('13dd9bec643e00d98dabb9d7be70f7e1fde149db4cdf3e857c3de7a7da201c2f')
+sha256sums=('6ab534137328d99bb1ee4c411a8dd501e9a45273bb3bb59a4b2374ace7166974')
 
 # Atlas's own symbolic icons. All atlas-prefixed on purpose: icon lookup falls
 # back to hicolor last, so a generic name here would lose to whatever icon theme
