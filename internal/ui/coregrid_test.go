@@ -47,3 +47,29 @@ func TestEveryCoreIsLabelledFromTheStart(t *testing.T) {
 		}
 	}
 }
+
+// TestCoreGridReflowsWhenNarrow is the regression for cores printed through
+// their own readings. The grid used a fixed eight columns whatever the width,
+// so a 560px window gave each core 65px for a name and a percentage that need
+// about 108 together, and they overlapped.
+func TestCoreGridReflowsWhenNarrow(t *testing.T) {
+	for _, c := range []struct {
+		width, cores, want int
+		why                string
+	}{
+		{1100, 32, 8, "a wide window keeps the full eight"},
+		{560, 32, 5, "a narrow one takes what fits"},
+		{300, 32, 2, "and never drops below two"},
+		{1100, 4, 4, "a four-thread laptop is not padded out to eight"},
+	} {
+		if got := fitColumns(c.width, c.cores); got != c.want {
+			t.Errorf("fitColumns(%d, %d) = %d, want %d — %s", c.width, c.cores, got, c.want, c.why)
+		}
+	}
+	// Whatever it picks, a cell is wide enough for the text.
+	for w := 300; w <= 2000; w += 7 {
+		if cell := w / fitColumns(w, 32); cell < minCoreCellWidth-1 && fitColumns(w, 32) > 2 {
+			t.Fatalf("width %d: %dpx per cell is too narrow", w, cell)
+		}
+	}
+}

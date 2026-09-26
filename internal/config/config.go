@@ -36,8 +36,11 @@ var obsoletePromptLines = []string{
 const (
 	DefaultWindowWidth  = 1100
 	DefaultWindowHeight = 720
-	MinWindowWidth      = 900
-	MinWindowHeight     = 600
+	// Low enough that the layout's narrow mode is reachable: below 700px the
+	// sidebar collapses into an overlay, and a 900px floor meant nobody could
+	// ever get there. These are the smallest sizes the content still works at.
+	MinWindowWidth  = 360
+	MinWindowHeight = 400
 )
 
 // DefaultRefreshSeconds is the sampling interval when nothing is configured.

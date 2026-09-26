@@ -117,6 +117,12 @@ func (a *App) activate() {
 	}
 	header.SetTitleWidget(adw.NewWindowTitle("Atlas Monitor", subtitle))
 
+	// Sidebar toggle first, where a hamburger belongs. It hides itself whenever
+	// the sidebar is on screen in its own right.
+	if btn := a.content.MenuButton(); btn != nil {
+		header.PackStart(btn)
+	}
+
 	gear := gtk.NewButtonFromIconName("atlas-settings-symbolic")
 	gear.SetTooltipText("Settings")
 	gear.ConnectClicked(func() {

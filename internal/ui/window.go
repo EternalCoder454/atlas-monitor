@@ -50,6 +50,8 @@ type Window struct {
 	asst         assistant
 	sidebar      *sidebar
 	assistantRow *adw.ActionRow
+	split        *adw.OverlaySplitView
+	menuBtn      *gtk.ToggleButton
 	active       string
 	visible      bool
 	tick         glib.SourceHandle
@@ -152,10 +154,52 @@ func (w *Window) Build() gtk.Widgetter {
 	w.col.SetInterval(w.refreshInterval())
 	w.proc.SetInterval(w.refreshInterval())
 
-	hbox := gtk.NewBox(gtk.OrientationHorizontal, 0)
-	hbox.Append(sb.root)
-	hbox.Append(gtk.NewSeparator(gtk.OrientationVertical))
-	hbox.Append(w.stack)
+	// The two panes, and the rule that collapses them.
+	//
+	// Wide enough, this is the fixed two-pane layout it has always been: the
+	// sidebar sits beside the content and never covers it. Below the breakpoint
+	// there is not enough width for both — a 200px sidebar out of 500 is nearly
+	// half the window — so the sidebar becomes an overlay that slides over the
+	// content and closes again once a page is chosen.
+	split := adw.NewOverlaySplitView()
+	split.SetSidebar(sb.root)
+	split.SetContent(w.stack)
+	split.SetMinSidebarWidth(200)
+	split.SetMaxSidebarWidth(240)
+	split.SetSidebarWidthFraction(0.22)
+	w.split = split
+
+	// The button that opens it while it is an overlay. It is hidden the rest of
+	// the time: with the sidebar already on screen there is nothing to toggle.
+	w.menuBtn = gtk.NewToggleButton()
+	w.menuBtn.SetIconName("atlas-menu-symbolic")
+	w.menuBtn.SetTooltipText("Show the sidebar")
+	w.menuBtn.SetVisible(false)
+	w.menuBtn.ConnectToggled(func() { split.SetShowSidebar(w.menuBtn.Active()) })
+	split.NotifyProperty("show-sidebar", func() {
+		if active := split.ShowSidebar(); active != w.menuBtn.Active() {
+			w.menuBtn.SetActive(active)
+		}
+	})
+
+	bin := adw.NewBreakpointBin()
+	bin.SetChild(split)
+	// BreakpointBin refuses to shrink below its own minimum, so it is told one
+	// small enough for the breakpoint to be reachable at all.
+	bin.SetSizeRequest(360, 320)
+
+	bp := adw.NewBreakpoint(adw.NewBreakpointConditionLength(
+		adw.BreakpointConditionMaxWidth, narrowWidth, adw.LengthUnitPx))
+	bp.ConnectApply(func() {
+		split.SetCollapsed(true)
+		w.menuBtn.SetVisible(true)
+	})
+	bp.ConnectUnapply(func() {
+		split.SetCollapsed(false)
+		split.SetShowSidebar(true)
+		w.menuBtn.SetVisible(false)
+	})
+	bin.AddBreakpoint(bp)
 
 	// Reopen on the page the user left, unless ATLAS_VIEW overrides it for
 	// development. A page that no longer exists — a disk that was unplugged —
@@ -181,10 +225,10 @@ func (w *Window) Build() gtk.Widgetter {
 	// which is what anyone reopening Atlas on Apps or Services saw, since it
 	// restores the page you left. Re-asserting from an idle callback runs after
 	// focus has landed, so the content stays the thing that decides.
-	hbox.ConnectMap(func() {
+	bin.ConnectMap(func() {
 		glib.IdleAdd(func() { w.sidebar.selectView(w.active) })
 	})
-	return hbox
+	return bin
 }
 
 // SetAIEnabled shows or hides the Assistant entry. With AI off the page is
@@ -257,6 +301,14 @@ func (w *Window) refreshInterval() time.Duration {
 // ActiveView is the page currently on screen, saved so Atlas reopens on it.
 func (w *Window) ActiveView() string { return w.active }
 
+// MenuButton is the sidebar toggle, for the window's header bar. It shows
+// itself only when the sidebar has collapsed into an overlay.
+func (w *Window) MenuButton() *gtk.ToggleButton { return w.menuBtn }
+
+// narrowWidth is where the sidebar stops fitting beside the content. Below it
+// the window is mostly sidebar, so it becomes an overlay instead.
+const narrowWidth = 700
+
 // SetVisible pauses/resumes collection and refresh based on window visibility.
 func (w *Window) SetVisible(visible bool) {
 	w.visible = visible
@@ -290,6 +342,9 @@ func (w *Window) selectView(name string) {
 	}
 	w.active = name
 	w.stack.SetVisibleChildName(name)
+	if w.split != nil && w.split.Collapsed() {
+		w.split.SetShowSidebar(false)
+	}
 	if w.sidebar != nil {
 		w.sidebar.selectView(name)
 	}

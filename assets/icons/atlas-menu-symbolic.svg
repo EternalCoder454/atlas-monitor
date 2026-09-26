@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Original work, not Material Symbols: three bars is a universal glyph and
+     this one is drawn to sit with the imported set — same 960 coordinate
+     system, same optical weight. Filled rectangles only, so GTK can recolour
+     it. Covered by LICENSE; see NOTICE. -->
+<svg width="16" height="16" fill="#000000" xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960"><path d="M120-240v-72h720v72H120Zm0-204v-72h720v72H120Zm0-204v-72h720v72H120Z"/></svg>
