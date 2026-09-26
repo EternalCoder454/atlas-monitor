@@ -16,6 +16,7 @@ type memView struct {
 	capBuf    []byte // "of N GiB in use", rebuilt without allocating
 	ramGraph  *graph.Graph
 	swapGraph *graph.Graph
+	swapTitle *gtk.Label
 	breakdown *capacityBar
 
 	vTotal, vUsed, vCached, vAvail *liveLabel
@@ -44,7 +45,12 @@ func newMemView(col *stats.Collector) *memView {
 	box.Append(v.breakdown)
 	box.Append(memLegend())
 
-	box.Append(sectionTitle("SWAP"))
+	// Swap is not a given. A machine with none configured was still shown a
+	// SWAP heading, a chart pinned flat at nought and two rows of "0.00 GiB" —
+	// a whole section describing something that is not there. It appears if
+	// swap does, which covers a swapfile being switched on while Atlas runs.
+	v.swapTitle = sectionTitle("SWAP")
+	box.Append(v.swapTitle)
 	v.swapGraph = graph.New("Swap", graph.ColorGPU, swapHist, graph.Percent, 80)
 	box.Append(v.swapGraph)
 
@@ -79,8 +85,16 @@ func (v *memView) Update() {
 	v.vUsed.gib(used)
 	v.vCached.gib(cached)
 	v.vAvail.gib(avail)
-	v.vSwapTotal.gib(swapT)
-	v.vSwapUsed.gib(swapU)
+	hasSwap := swapT > 0
+	v.swapTitle.SetVisible(hasSwap)
+	v.swapGraph.SetVisible(hasSwap)
+	if hasSwap {
+		v.vSwapTotal.gib(swapT)
+		v.vSwapUsed.gib(swapU)
+	} else {
+		v.vSwapTotal.text("—")
+		v.vSwapUsed.text("—")
+	}
 
 	// Breakdown: app-used | cached | free, summing to total. Shades of the one
 	// memory colour rather than red/amber/green — a machine with a quarter of
@@ -95,7 +109,9 @@ func (v *memView) Update() {
 		capSeg{float64(free), graph.ColorFree, 0.14})
 
 	v.ramGraph.Refresh()
-	v.swapGraph.Refresh()
+	if hasSwap {
+		v.swapGraph.Refresh()
+	}
 }
 
 // memLegend builds the swatch-and-label row under the breakdown bar.
