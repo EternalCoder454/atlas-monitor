@@ -177,3 +177,41 @@ func TestZramInUseIsNotAProblem(t *testing.T) {
 		t.Errorf("a healthy machine using zram produced %s", titles(got))
 	}
 }
+
+// TestDriveHealthIsReported covers the three things a drive can say about
+// itself, and that a healthy one says nothing.
+func TestDriveHealthIsReported(t *testing.T) {
+	good := Drive{Name: "Kingston", Wear: 1, HasWear: true}
+	if got := Check(healthy(), nil, good); len(got) != 0 {
+		t.Errorf("a healthy drive produced %s", titles(got))
+	}
+
+	failing := Drive{Name: "Kingston", Failing: true}
+	got := Check(healthy(), nil, failing)
+	if len(got) != 1 || got[0].Level != Critical {
+		t.Fatalf("a failing drive gave %+v", got)
+	}
+	if !strings.Contains(got[0].Title, "Kingston") {
+		t.Errorf("title %q does not name the drive", got[0].Title)
+	}
+
+	worn := Drive{Name: "Samsung", Wear: 95, HasWear: true}
+	if got := Check(healthy(), nil, worn); len(got) != 1 || got[0].Level != Warning {
+		t.Errorf("a worn drive gave %+v", got)
+	}
+	// Ordinary ageing is not news.
+	mid := Drive{Name: "Samsung", Wear: 40, HasWear: true}
+	if got := Check(healthy(), nil, mid); len(got) != 0 {
+		t.Errorf("a drive at 40%% wear produced %s", titles(got))
+	}
+	// A drive out of spare blocks is worth saying even without a wear figure.
+	if got := Check(healthy(), nil, Drive{Name: "Old", SpareLow: true}); len(got) != 1 {
+		t.Errorf("a drive out of spares gave %d alerts", len(got))
+	}
+	// A failing drive outranks a full disk.
+	s := healthy()
+	s.Disks[0].Free = 1 << 30
+	if got := Check(s, nil, failing); len(got) != 2 || got[0].Level != Critical {
+		t.Errorf("failing drive should lead: %+v", got)
+	}
+}

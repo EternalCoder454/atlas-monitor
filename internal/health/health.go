@@ -47,14 +47,27 @@ const (
 	// means anything. Above it the machine has somewhere to put things.
 	swapPressureAvail = 0.25 // available, of total
 	nearlyFullDisk    = 0.05 // free, of total
+	// wornDrive is how much of an SSD's rated life has to be gone before it is
+	// worth mentioning. Below this it is ordinary ageing.
+	wornDrive = 90 // percent of rated life used
 )
+
+// Drive is one disk's own verdict on itself, from the SMART log. It is passed
+// in rather than read here because it comes over D-Bus and is polled slowly.
+type Drive struct {
+	Name     string // the label a person reads, not the kernel name
+	Failing  bool
+	SpareLow bool
+	Wear     int // percentage of rated life used
+	HasWear  bool
+}
 
 // Check reports everything wrong with the machine right now, worst first.
 //
 // It must be called with the snapshot held — from inside a Collector.Read — as
-// it reads the pointer fields. failedServices comes from the systemd client,
-// which is on a different connection and is polled far less often.
-func Check(s *stats.Stats, failedServices []string) []Alert {
+// it reads the pointer fields. failedServices and drives come from elsewhere:
+// both are D-Bus questions, asked on their own slower timers.
+func Check(s *stats.Stats, failedServices []string, drives ...Drive) []Alert {
 	var critical, warning []Alert
 
 	if s.CPU.Temp > hotDegrees {
@@ -115,6 +128,31 @@ func Check(s *stats.Stats, failedServices []string) []Alert {
 				Level:  Warning,
 				Title:  "Disk nearly full: " + d.Label(),
 				Detail: fmt.Sprintf("%s free of %s", format.Bytes(d.Free), format.Bytes(d.SizeBytes)),
+			})
+		}
+	}
+
+	// A drive that says it is failing is the loudest thing here: everything
+	// else is a machine being busy, and this is one that will stop working.
+	for _, d := range drives {
+		switch {
+		case d.Failing:
+			critical = append(critical, Alert{
+				Level:  Critical,
+				Title:  "Drive is failing: " + d.Name,
+				Detail: "The drive reports that it expects to fail. Back up anything on it that matters.",
+			})
+		case d.SpareLow:
+			warning = append(warning, Alert{
+				Level:  Warning,
+				Title:  "Drive is nearly worn out: " + d.Name,
+				Detail: "It has run down its spare blocks, which is how an SSD says it is near the end.",
+			})
+		case d.HasWear && d.Wear >= wornDrive:
+			warning = append(warning, Alert{
+				Level:  Warning,
+				Title:  "Drive is wearing out: " + d.Name,
+				Detail: fmt.Sprintf("%d%% of its rated life is gone", d.Wear),
 			})
 		}
 	}
