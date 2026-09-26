@@ -10,11 +10,15 @@
 // from offset zero is how these are meant to be polled.
 //
 // A File is not safe for concurrent use; each collector goroutine owns its own.
+//
+// The positional read itself is per-platform — see sysfs_unix.go and
+// sysfs_windows.go. Windows has no /proc or /sys, so nothing there opens one of
+// these in practice; it is kept building so that the packages which use it
+// compile for Windows without each of them needing its own exception.
 package sysfs
 
 import (
 	"os"
-	"syscall"
 )
 
 // smallValue is the buffer size for a single attribute — a number or a short
@@ -73,7 +77,7 @@ func (f *File) Bytes() ([]byte, bool) {
 		return nil, false
 	}
 	for {
-		n, err := syscall.Pread(int(f.f.Fd()), f.buf, 0)
+		n, err := f.readAt(f.buf)
 		if err != nil || n < 0 {
 			return nil, false
 		}

@@ -1,0 +1,95 @@
+name: Windows
+
+# Building Atlas for Windows.
+#
+# There is no Windows machine to develop this on, so this workflow is the
+# feedback loop: it is deliberately noisy, printing what it found and what it
+# linked against, because a run of it is the only way to learn whether something
+# works.
+#
+# The toolchain is MSYS2's MINGW64 environment rather than cross-compilation from
+# Linux. Fedora packages mingw64-gtk4 but has no mingw64-libadwaita, and Atlas is
+# libadwaita throughout — the sidebar, every preferences page, every dialog — so
+# cross-compiling would mean building libadwaita and its dependencies by hand.
+# MSYS2 ships both.
+
+on:
+  push:
+    branches: [windows]
+  pull_request:
+    branches: [windows]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: exe
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          # go and gcc from MSYS2 rather than the runner's own: cgo needs the
+          # compiler and the Go toolchain to agree about the C runtime, and the
+          # GTK libraries here are built against this one.
+          install: >-
+            mingw-w64-x86_64-go
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-gtk4
+            mingw-w64-x86_64-libadwaita
+            git
+
+      - name: What we are building against
+        run: |
+          go version
+          gcc --version | head -1
+          pkg-config --modversion gtk4
+          pkg-config --modversion libadwaita-1
+
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$(pwd)"
+
+      # The non-UI packages first. They compile for Windows without cgo, so a
+      # failure here is Atlas's own code and nothing to do with GTK — which makes
+      # it much cheaper to diagnose than a link error.
+      - name: Build the data packages
+        env:
+          CGO_ENABLED: 0
+        run: |
+          go build $(go list ./internal/... | grep -vE '/ui$|/graph$|/app$')
+
+      - name: Vet everything for Windows
+        env:
+          CGO_ENABLED: 1
+        run: go vet ./... || true
+
+      - name: Build the executable
+        env:
+          CGO_ENABLED: 1
+        run: |
+          go build -o atlas-monitor.exe .
+          ls -l atlas-monitor.exe
+
+      # Which DLLs it needs is the next thing that decides whether this ships:
+      # the exe is useless on a machine without them, so this lists them now
+      # rather than after someone downloads it.
+      - name: What it links against
+        run: |
+          ldd atlas-monitor.exe | sort
+          echo "---- count ----"
+          ldd atlas-monitor.exe | grep -c mingw64 || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: atlas-monitor-windows-unpackaged
+          path: atlas-monitor.exe
+          if-no-files-found: error
