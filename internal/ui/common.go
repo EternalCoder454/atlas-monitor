@@ -6,6 +6,7 @@ import (
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
 	"atlas-monitor/internal/config"
+	"atlas-monitor/internal/process"
 )
 
 // View is one page in the content stack. Update refreshes it from the latest
@@ -157,7 +158,7 @@ func (s *section) save() {
 	if s.s == nil {
 		return
 	}
-	s.s.CollapsedSections = withoutSection(s.s.CollapsedSections, s.title)
+	s.s.CollapsedSections = without(s.s.CollapsedSections, s.title)
 	if !s.exp.Expanded() {
 		s.s.CollapsedSections = append(s.s.CollapsedSections, s.title)
 	}
@@ -176,7 +177,10 @@ func sectionCollapsed(s *config.Settings, title string) bool {
 	return false
 }
 
-func withoutSection(names []string, drop string) []string {
+// without returns names minus one entry, keeping order. Both the hidden
+// columns and the folded sections are stored as lists of titles, and both need
+// to take one out.
+func without(names []string, drop string) []string {
 	out := names[:0:0]
 	for _, n := range names {
 		if n != drop {
@@ -184,4 +188,46 @@ func withoutSection(names []string, drop string) []string {
 		}
 	}
 	return out
+}
+
+// procIdent identifies a process across ticks.
+//
+// A pid on its own is not an identity: Linux reuses them, and both the places
+// that hold on to one across time — the context menu that will send a signal,
+// and the Energy Saver page that remembers what it has eased off — would
+// otherwise act on whatever inherited the number. The start time from
+// /proc/[pid]/stat pins it down.
+type procIdent struct {
+	pid   int
+	start uint64
+}
+
+// identOf reads a process's identity now.
+func identOf(pid int) procIdent {
+	id := procIdent{pid: pid}
+	id.start, _ = process.StartTime(pid)
+	return id
+}
+
+// same reports whether the process behind this pid is still the one that was
+// there when the identity was taken. A start time of nought means it could not
+// be read on one side or the other, and it refuses rather than guessing.
+func (id procIdent) same() bool {
+	if id.pid <= 0 || id.start == 0 {
+		return false
+	}
+	now, ok := process.StartTime(id.pid)
+	return ok && now == id.start
+}
+
+// wanter is a view that needs particular per-process figures gathered while it
+// is the one on screen.
+//
+// The scan only collects the expensive figures something is showing, and the
+// Apps table decides that from which of its columns are hidden. Energy Saver
+// scores processors, graphics, disk and network together, so without this it
+// would quietly lose a term whenever a column was put away on a different page
+// — the same list, silently ranked on less.
+type wanter interface {
+	applyWants()
 }

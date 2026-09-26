@@ -238,13 +238,12 @@ type appsView struct {
 	grouped     bool
 	showKernel  bool
 	needRebuild bool
-	targetPID   int
 	targetName  string
-	// targetStart is the start time of the process the context menu was opened
-	// on. PIDs are reused, and the menu acts some seconds after it was opened,
-	// so the signal is only sent if this still matches — otherwise Atlas would
-	// eventually kill a process that merely inherited the number.
-	targetStart uint64
+	// target is the process the context menu was opened on. The menu acts some
+	// seconds after it was opened and pids are reused, so the signal is only
+	// sent while this still names the same process — otherwise Atlas would
+	// eventually kill something that merely inherited the number.
+	target procIdent
 }
 
 func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settings) *appsView {
@@ -818,8 +817,7 @@ func (v *appsView) attachContextMenu(cv *gtk.ColumnView) {
 		if c == nil || c.row == nil {
 			return
 		}
-		v.targetPID, v.targetName = c.row.proc.PID, c.row.proc.Name
-		v.targetStart, _ = process.StartTime(v.targetPID)
+		v.target, v.targetName = identOf(c.row.proc.PID), c.row.proc.Name
 		rect := gdk.NewRectangle(int(x), int(y), 1, 1)
 		v.popover.SetPointingTo(&rect)
 		v.popover.Popup()
@@ -845,7 +843,7 @@ func (v *appsView) kill(sig syscall.Signal) {
 	if !v.targetIsStillTheSameProcess() {
 		return
 	}
-	_ = syscall.Kill(v.targetPID, sig)
+	_ = syscall.Kill(v.target.pid, sig)
 }
 
 // targetIsStillTheSameProcess re-checks that the PID the context menu was opened
@@ -854,23 +852,14 @@ func (v *appsView) kill(sig syscall.Signal) {
 // and a machine that gets back round to its number — would put the signal on
 // something innocent.
 func (v *appsView) targetIsStillTheSameProcess() bool {
-	if v.targetPID <= 0 {
-		return false
-	}
-	now, ok := process.StartTime(v.targetPID)
-	if !ok {
-		return false // gone: nothing to signal
-	}
-	// A start time of zero means the field could not be read, on either side;
-	// refuse rather than guess.
-	return v.targetStart != 0 && now == v.targetStart
+	return v.target.same()
 }
 
 func (v *appsView) openLocation() {
 	if !v.targetIsStillTheSameProcess() {
 		return
 	}
-	exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", v.targetPID))
+	exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", v.target.pid))
 	if err != nil {
 		return
 	}
@@ -995,6 +984,10 @@ func foldByte(c byte) byte {
 	return c
 }
 
+// applyWants is the wanter interface: the table's columns decide what the scan
+// gathers while it is the page on screen.
+func (v *appsView) applyWants() { v.applyHidden() }
+
 // applyHidden puts the saved column choices into effect, and tells the scan
 // which of the expensive figures anything is still showing.
 func (v *appsView) applyHidden() {
@@ -1028,17 +1021,6 @@ func (v *appsView) setColumnHidden(title string, hidden bool) {
 	if v.onColumnsChanged != nil {
 		v.onColumnsChanged()
 	}
-}
-
-// without returns names minus one entry, keeping order.
-func without(names []string, drop string) []string {
-	out := names[:0:0]
-	for _, n := range names {
-		if n != drop {
-			out = append(out, n)
-		}
-	}
-	return out
 }
 
 // buildColumnMenus wires the two ways to put a column away: a right-click on

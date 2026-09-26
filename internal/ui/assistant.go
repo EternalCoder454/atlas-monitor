@@ -411,6 +411,8 @@ func (v *assistantView) buildContext() string {
 	)
 	type diskAlert struct{ label, free string }
 	var fullDisks []diskAlert
+	// Kernel name -> the label a person reads, for the SMART lookup below.
+	driveLabels := map[string]string{}
 
 	v.col.Read(func(s *stats.Stats) {
 		c := s.CPU
@@ -446,6 +448,7 @@ func (v *assistantView) buildContext() string {
 			if d.SizeBytes > 0 && float64(d.Free)/float64(d.SizeBytes) < 0.05 {
 				fullDisks = append(fullDisks, diskAlert{d.Label(), format.Bytes(d.Free)})
 			}
+			driveLabels[d.Name] = d.Label()
 		}
 		for _, n := range s.Nets {
 			if n.IPv4 == "" && n.RxRate == 0 && n.TxRate == 0 {
@@ -484,9 +487,23 @@ func (v *assistantView) buildContext() string {
 	// internal/health so that the badge in the window and the answer the model
 	// gives cannot disagree about whether the machine is healthy — they used to
 	// be here, where nothing but the model could see them.
+	// The same checks the badge in the window runs, with the same inputs. Asking
+	// the drives is a D-Bus round trip, which is fine once per question and is
+	// why it happens here rather than inside the snapshot.
+	var drives []health.Drive
+	for name, label := range driveLabels {
+		h, ok := diskHealth.Read(name)
+		if !ok {
+			continue
+		}
+		drives = append(drives, health.Drive{
+			Name: label, Failing: h.Failing, SpareLow: h.SpareLow,
+			Wear: h.Wear, HasWear: h.HasWear,
+		})
+	}
 	var alerts []string
 	v.col.Read(func(s *stats.Stats) {
-		for _, a := range health.Check(s, failed) {
+		for _, a := range health.Check(s, failed, drives...) {
 			alerts = append(alerts, a.Title+" ("+a.Detail+")")
 		}
 	})
