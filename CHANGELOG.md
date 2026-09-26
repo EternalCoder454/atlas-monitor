@@ -3,6 +3,16 @@
 Written for the people who use Atlas Monitor rather than the people who build
 it. One short line per change, no jargon — this is what the update prompt shows.
 
+## 0.11.0
+
+- Atlas now tells you when something is wrong: a warning appears in the title
+  bar, and says what
+- A new Energy Saver page shows what is working hardest, and can put one
+  program behind the rest
+- A new Startup page shows what launches when you log in, with a switch each
+- Disks now report how worn out they are, like the battery does
+- Services can be filtered to just the ones that have failed
+
 ## 0.10.0
 
 - The window works at small sizes: the sidebar slides over the content, with a
