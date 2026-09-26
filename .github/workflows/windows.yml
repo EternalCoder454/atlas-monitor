@@ -65,7 +65,7 @@ jobs:
         env:
           CGO_ENABLED: 0
         run: |
-          go build $(go list ./internal/... | grep -vE '/ui$|/graph$|/app$')
+          go build $( go list ./internal/... 2>/dev/null | grep -vE '/ui$|/graph$|/app$')
 
       - name: Vet everything for Windows
         env:
