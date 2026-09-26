@@ -1,4 +1,4 @@
-# Atlas Monitor
+# Atlas Monitor — Minimal
 
 [![CI](https://github.com/EternalCoder454/atlas-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/EternalCoder454/atlas-monitor/actions/workflows/ci.yml)
 
@@ -7,13 +7,17 @@ libadwaita. It is a lighter-weight alternative to Mission Center with a fixed
 two-pane layout (the sidebar never overlaps the content) and first-class AMD GPU
 support read straight from sysfs.
 
+**This is the `minimal` branch: the monitor, and nothing else.** The AI
+assistant, its Ollama client, the quick prompts and the Markdown renderer are
+not compiled out here — they are gone, along with the settings that configured
+them and the dependency on `internal/ai`. If you want them, use `main`.
+
 ## Screenshots
 
 ![Atlas Monitor — CPU view](images/cpu.png)
 
 <table>
   <tr>
-    <td width="50%"><img src="images/assistant.png" alt="Assistant view"><br><sub><b>Assistant</b> — a local Ollama model answering from live system context, rendered Markdown with tokens/sec</sub></td>
     <td width="50%"><img src="images/apps.png" alt="Apps / process table"><br><sub><b>Apps</b> — sortable process table with per-process CPU, RAM, GPU, network and disk</sub></td>
   </tr>
   <tr>
@@ -37,14 +41,17 @@ sudo dnf install -y golang gtk4-devel libadwaita-devel glib2-devel gcc pkgconf-p
   cd atlas-monitor && make install
 ```
 
-Arch Linux (builds a real package and hands it to pacman — no clone needed,
-`makepkg` fetches the release itself):
+Arch Linux (builds a real package and hands it to pacman — `makepkg` clones the
+branch itself):
 
 ```sh
-sudo pacman -S --needed base-devel go gtk4 libadwaita && \
-  curl -O https://raw.githubusercontent.com/EternalCoder454/atlas-monitor/main/packaging/PKGBUILD && \
+sudo pacman -S --needed base-devel go gtk4 libadwaita git && \
+  curl -O https://raw.githubusercontent.com/EternalCoder454/atlas-monitor/minimal/packaging/PKGBUILD && \
   makepkg -si
 ```
+
+It installs as `atlas-monitor-minimal` and conflicts with the full
+`atlas-monitor` package, since both provide the same binary.
 
 Then press **Super** and search "Atlas". The first build compiles the gotk4 cgo
 bindings and can take a few minutes; rebuilds are cached and fast.
@@ -76,11 +83,6 @@ bindings and can take a few minutes; rebuilds are cached and fast.
   three quarters of `/proc` — are hidden behind a toggle.
 - **Services** — systemd units over D-Bus with status dots and
   Start/Stop/Restart/Enable/Disable actions (polkit-authenticated).
-- **Assistant** — an optional local AI (via [Ollama](https://ollama.com)) that
-  answers questions about your machine — specs, the top CPU/memory processes,
-  failed services — from a live system snapshot. A dropdown beside the message
-  box offers editable **quick prompts** (Detailed Overview, Top Processes, Quick
-  Check). Toggle it off any time in **Settings** (the gear icon).
 
 ## Performance
 
@@ -146,7 +148,7 @@ Where the rest comes from:
   prefer smoother resizing on a high-refresh display.
 - **Pages are built the first time you open them.** A machine with three disks
   and three interfaces has a dozen pages; Atlas builds the one you are looking
-  at. With the assistant switched off it is never built at all.
+  at.
 - **Nothing is redrawn that has not changed.** Every live value remembers the
   text it last pushed, so a steady reading costs no formatting, no Go→C string
   copy and no Pango relayout. Per-tick allocation in the collectors and the
@@ -154,9 +156,10 @@ Where the rest comes from:
 - **The C heap is kept honest.** glibc is configured for a small long-running
   GUI process (capped arenas, prompt trimming) and idle memory is handed back
   once a minute — and immediately when the window is hidden.
-- **No `net/http`.** The Ollama client speaks HTTP/1.1 on a socket it opens
-  itself, which keeps `crypto/tls`, `crypto/x509` and the FIPS module (a 32 MiB
-  static buffer among them) out of the binary entirely.
+- **No `net/http`, and nothing that pulls it in.** `crypto/tls`, `crypto/x509`
+  and the FIPS module — a 32 MiB static buffer among them — are not in the
+  binary at all. Atlas itself never opens a socket; the optional update check
+  shells out to `git`, which does its own networking and can be switched off.
 - **The process table shows processes.** Kernel worker threads are roughly three
   quarters of `/proc` and there is nothing you can do with them, so they start
   hidden — which also cuts the widgets GTK realises for the table by about the
@@ -167,8 +170,7 @@ Where the rest comes from:
   and that memory is never given back — refreshing the Services list once a
   second used to take the process past 600 MiB in two and a half minutes.
 - Collection **pauses entirely while the window is hidden/minimised** (0% CPU),
-  and the expensive per-process scan only runs while Apps or the Assistant is
-  open.
+  and the expensive per-process scan only runs while the Apps page is open.
 - Graphs use fixed 60-sample ring buffers, pre-allocated at startup. The
   **refresh interval** is configurable (1–10 seconds); a slower rate costs less
   CPU and stretches the same 60 samples over a longer window.
@@ -228,51 +230,6 @@ make clean
 
 `make install` honours `PREFIX` (default `~/.local`).
 
-### A monitor and nothing else
-
-```sh
-make build-lean     # or: make install-lean
-```
-
-Builds with `-tags noai`, which drops the Assistant page, the Ollama client and
-the Markdown renderer from the binary. The Settings dialog loses its assistant
-sections and the sidebar loses the Assistant row; everything else is identical.
-An in-app update remembers which flavour you installed and rebuilds the same
-one.
-
-Turning the assistant off in **Settings** gets you most of the same benefit
-without a rebuild — the page, its Ollama probe and its systemd bus connection
-are then never created.
-
-## Setting up the assistant
-
-The **Assistant** view is optional and runs a model locally through
-[Ollama](https://ollama.com) — nothing leaves your machine. The easiest way to
-set it up is one command from the source folder:
-
-```sh
-make setup-ai
-```
-
-That installs Ollama (via its official installer — it prompts first if Ollama
-isn't already present), starts the local server, and pulls the default model
-(`qwen3.5:9b`, ~5.5 GB). It is safe to re-run and only does what is missing.
-
-Prefer to do it by hand? Install Ollama, then pull the model:
-
-```sh
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen3.5:9b
-```
-
-If you open the Assistant before this is done, Atlas shows an in-app panel with
-the exact commands (and a **Copy** button) and clears it automatically the
-moment Ollama is ready — no need to restart. To use a different model, set it in
-**Settings** (the gear) and run `make setup-ai <model>` (or `ollama pull
-<model>`); GPU acceleration is detected automatically by Ollama's installer. You
-can turn the assistant off entirely in Settings, which hides the view and stops
-all AI activity.
-
 ## Updating
 
 Open **Settings** (the gear) → **Application** and click **Update and restart**.
@@ -316,14 +273,10 @@ local changes, so a tree you are editing is never overwritten.
   over the system bus, which triggers your desktop's polkit agent for
   authentication. Without authorisation the action returns an error shown in the
   view.
-- **AI assistant**: talks to a local [Ollama](https://ollama.com) server
-  (default `http://localhost:11434`, model `qwen3.5:9b`) — see [Setting up the
-  assistant](#setting-up-the-assistant) for the one-command install. Each
-  question sends a compact live snapshot — specs, top processes, services — as
-  the system prompt; the model runs entirely on your machine. Configure the
-  model/endpoint or turn it off completely via the gear → **Settings**. With AI
-  disabled, no network calls are made and the Assistant entry is hidden.
-  Settings persist to `~/.config/atlas-monitor/settings.json`.
+- **Nothing leaves the machine.** There is no network client in this build. The
+  only outbound request Atlas can make at all is the optional update check,
+  which asks GitHub whether a newer version exists and can be turned off in
+  **Settings**. Settings persist to `~/.config/atlas-monitor/settings.json`.
 
 ## Development
 
@@ -335,8 +288,7 @@ local changes, so a tree you are editing is never overwritten.
   `services`, `gpu`, `power`, `memory`, `disk:nvme0n1`, `net:wlp7s0`) — handy
   for testing, and it overrides the remembered page.
 - CI runs build, `vet`, `gofmt`, the tests and the race detector on a Fedora
-  container for both the default and `noai` builds
-  ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+  container ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 
 ## Versioning
 
@@ -366,7 +318,6 @@ internal/process/      per-process /proc/[pid] collection
 internal/gpu/          GPU readers: amdgpu sysfs, NVIDIA NVML, generic DRM
 internal/power/        battery and AC adapter from /sys/class/power_supply
 internal/services/     systemd D-Bus client
-internal/ai/           streaming Ollama client (minimal HTTP/1.1, no net/http)
 internal/gfx/          renderer selection; keeps the GPU driver stack out
 internal/sysmem/       C allocator tuning and returning idle memory to the OS
 internal/config/       persisted user settings (~/.config/atlas-monitor)

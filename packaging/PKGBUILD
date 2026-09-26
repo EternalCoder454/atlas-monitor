@@ -1,41 +1,55 @@
 # Maintainer: EternalCoder454 <77252745+EternalCoder454@users.noreply.github.com>
 #
-# Arch package for Atlas Monitor.
+# Arch package for Atlas Monitor (minimal) — the monitor with no AI assistant.
 #
-#   makepkg -si          build and install with pacman
-#   pacman -R atlas-monitor   remove it again
+#   makepkg -si                build and install with pacman
+#   pacman -R atlas-monitor-minimal   remove it again
+#
+# This tracks the `minimal` branch rather than a release tag, because minimal
+# has no releases of its own yet: the version is derived from the last tag it
+# descends from plus the commit count, which is what a git PKGBUILD normally
+# does. Point `source` at a tag instead once one is cut.
+#
+# It conflicts with the full atlas-monitor package on purpose — both install the
+# same binary, desktop entry and icons.
 #
 # Updates come from pacman, not from the app: the in-app updater needs a source
 # checkout to pull and rebuild, and a packaged install has none. It notices that
-# on its own and says so rather than half-working, so there is nothing to switch
-# off here.
+# on its own and says so rather than half-working.
 
-pkgname=atlas-monitor
+_pkgname=atlas-monitor
+pkgname=atlas-monitor-minimal
 pkgver=0.8.3
 pkgrel=1
-pkgdesc="Lightweight system monitor — CPU, memory, disk, network, GPU, processes and services"
+pkgdesc="Lightweight system monitor — CPU, memory, disk, network, GPU, processes and services (no AI assistant)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/EternalCoder454/atlas-monitor"
 license=('MIT')
 depends=('gtk4' 'libadwaita' 'glib2')
-makedepends=('go>=1.24' 'gcc' 'pkgconf')
+makedepends=('go>=1.24' 'gcc' 'pkgconf' 'git')
 checkdepends=('desktop-file-utils')
-optdepends=(
-    'hwdata: names the detected GPU instead of showing its PCI id'
-    'ollama: runs the local model the optional assistant talks to'
-)
-source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
-sha256sums=('8378ffea5ea238f84164c403e03e4c93d4f3f6ae0f148bb46b4e3c9960e09888')
+optdepends=('hwdata: names the detected GPU instead of showing its PCI id')
+provides=("$_pkgname=$pkgver")
+conflicts=("$_pkgname")
+source=("$_pkgname::git+$url.git#branch=minimal")
+sha256sums=('SKIP')
 
 # Atlas's own symbolic icons. All atlas-prefixed on purpose: icon lookup falls
 # back to hicolor last, so a generic name here would lose to whatever icon theme
 # is installed and never be used. Keep in step with ICONS in the Makefile —
-# TestPackagingInstallsEveryIcon checks that they agree.
-_icons=(cpu memory disk gpu assistant network wifi battery apps services
-        settings prompts update trash reset)
+# TestPackagingListsAgree checks that every installer agrees.
+_icons=(cpu memory disk gpu network wifi battery apps services settings
+        update trash reset)
+
+pkgver() {
+    cd "$_pkgname"
+    git describe --long --tags --abbrev=7 2>/dev/null \
+        | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' \
+        || printf "0.0.0.r%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
 
 build() {
-    cd "$pkgname-$pkgver"
+    cd "$_pkgname"
 
     # cgo is not optional here: the GTK4 bindings are cgo, and so is the
     # malloc_trim call the memory page uses.
@@ -46,22 +60,22 @@ build() {
     export CGO_LDFLAGS="${LDFLAGS}"
     export GOFLAGS="-buildmode=pie -trimpath -mod=readonly -modcacherw -ldflags=-linkmode=external"
 
-    go build -o "$pkgname" .
+    go build -o "$_pkgname" .
 }
 
 check() {
-    cd "$pkgname-$pkgver"
+    cd "$_pkgname"
     # The test suites read the live /proc and /sys of the machine they run on,
     # which a clean build chroot does not have in full, so they are not run
-    # here. The desktop entry is checked because it is generated during package().
+    # here. The desktop entry is checked because package() generates it.
     desktop-file-validate assets/com.atlas.Monitor.desktop
 }
 
 package() {
-    cd "$pkgname-$pkgver"
+    cd "$_pkgname"
 
-    install -Dm755 "$pkgname" "$pkgdir/usr/bin/$pkgname"
-    install -Dm644 assets/style.css "$pkgdir/usr/share/$pkgname/style.css"
+    install -Dm755 "$_pkgname" "$pkgdir/usr/bin/$_pkgname"
+    install -Dm644 assets/style.css "$pkgdir/usr/share/$_pkgname/style.css"
     install -Dm644 assets/icon.svg \
         "$pkgdir/usr/share/icons/hicolor/scalable/apps/com.atlas.Monitor.svg"
 
@@ -73,7 +87,7 @@ package() {
 
     # The desktop file carries a placeholder for wherever the binary landed.
     install -d "$pkgdir/usr/share/applications"
-    sed 's|@BIN@|/usr/bin/'"$pkgname"'|g' assets/com.atlas.Monitor.desktop \
+    sed 's|@BIN@|/usr/bin/'"$_pkgname"'|g' assets/com.atlas.Monitor.desktop \
         > "$pkgdir/usr/share/applications/com.atlas.Monitor.desktop"
     chmod 644 "$pkgdir/usr/share/applications/com.atlas.Monitor.desktop"
 

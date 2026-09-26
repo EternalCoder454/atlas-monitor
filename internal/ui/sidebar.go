@@ -9,10 +9,9 @@ import (
 
 // sidebar holds references the window needs after construction.
 type sidebar struct {
-	root         gtk.Widgetter
-	assistantRow *adw.ActionRow
-	netExp       *adw.ExpanderRow
-	netRows      map[string]*adw.ActionRow
+	root    gtk.Widgetter
+	netExp  *adw.ExpanderRow
+	netRows map[string]*adw.ActionRow
 
 	// Live readings shown on the right of the hardware rows, so the headline
 	// numbers are visible without opening each page. Nil where the machine has
@@ -30,7 +29,7 @@ type sidebar struct {
 
 // buildSidebar constructs the fixed 200px navigation panel. onSelect is called
 // with a view name ("cpu", "disk:nvme0n1", ...) whenever a row is activated.
-func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, batteryAvail, withAI bool, onSelect func(string)) *sidebar {
+func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, batteryAvail bool, onSelect func(string)) *sidebar {
 	outer := gtk.NewBox(gtk.OrientationVertical, 0)
 	outer.AddCSSClass("am-sidebar")
 
@@ -75,10 +74,6 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, ba
 
 	outer.Append(sectionTitle("SYSTEM"))
 	sys := newSidebarList()
-	var assistantRow *adw.ActionRow
-	if withAI {
-		assistantRow = track("assistant", sys, appendRow(sys, "Assistant", "atlas-assistant-symbolic", "assistant", onSelect))
-	}
 	track("apps", sys, appendRow(sys, "Apps", "atlas-apps-symbolic", "apps", onSelect))
 	track("services", sys, appendRow(sys, "Services", "atlas-services-symbolic", "services", onSelect))
 	outer.Append(sys)
@@ -91,7 +86,7 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, gpuAvail, ba
 	scroll.SetSizeRequest(200, -1)
 	scroll.SetVExpand(true)
 
-	sb.root, sb.assistantRow, sb.netExp, sb.netRows = scroll, assistantRow, netExp, netRows
+	sb.root, sb.netExp, sb.netRows = scroll, netExp, netRows
 	return sb
 }
 

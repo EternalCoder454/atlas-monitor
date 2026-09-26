@@ -14,7 +14,6 @@ import (
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
-	"atlas-monitor/internal/ai"
 	"atlas-monitor/internal/config"
 	"atlas-monitor/internal/gfx"
 	"atlas-monitor/internal/gpu"
@@ -32,7 +31,6 @@ type App struct {
 	version  string
 	col      *stats.Collector
 	settings config.Settings
-	aiClient *ai.Client
 	content  *ui.Window
 	win      *adw.ApplicationWindow
 	// updateOffered keeps the launch prompt to once per run.
@@ -93,12 +91,11 @@ func (a *App) activate() {
 	}
 	a.loadCSS()
 	applyTextRendering(a.settings.TextRendering)
-	a.aiClient = ai.New(a.settings.OllamaURL, a.settings.Model)
 
 	a.col = stats.New(gpu.NewReader())
 	a.col.Start()
 
-	a.content = ui.NewWindow(a.col, a.aiClient, &a.settings)
+	a.content = ui.NewWindow(a.col, &a.settings)
 	root := a.content.Build()
 
 	win := adw.NewApplicationWindow(&a.app.Application)
@@ -156,9 +153,6 @@ func (a *App) activate() {
 
 // onSettingsChanged applies saved settings to the running app.
 func (a *App) onSettingsChanged() {
-	a.aiClient.SetConfig(a.settings.OllamaURL, a.settings.Model)
-	a.content.SetAIEnabled(a.settings.AIEnabled)
-	a.content.RefreshQuickPrompts()
 	a.content.SetRefreshInterval(
 		time.Duration(config.NormalizeRefresh(a.settings.RefreshSeconds)) * time.Second)
 }

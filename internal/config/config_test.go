@@ -22,9 +22,6 @@ func TestDefaultsAreValid(t *testing.T) {
 	if gfx.Normalize(d.RenderMode) != d.RenderMode {
 		t.Errorf("default RenderMode %q is not a valid mode", d.RenderMode)
 	}
-	if len(d.QuickPrompts) != 3 {
-		t.Errorf("got %d quick prompts, want 3", len(d.QuickPrompts))
-	}
 }
 
 func TestNormalizeRefresh(t *testing.T) {
@@ -53,7 +50,6 @@ func TestLoadRepairsBadValues(t *testing.T) {
 		"render_mode":     "holographic",
 		"text_rendering":  "crispy",
 		"update_channel":  "nightly",
-		"ollama_url":      "",
 		"model":           "",
 	}
 	raw, err := json.Marshal(bad)
@@ -83,9 +79,6 @@ func TestLoadRepairsBadValues(t *testing.T) {
 	}
 	if s.UpdateChannel != "main" {
 		t.Errorf("UpdateChannel = %q, want repaired to main", s.UpdateChannel)
-	}
-	if s.OllamaURL == "" || s.Model == "" {
-		t.Error("empty Ollama URL/model were not repaired")
 	}
 }
 
@@ -177,9 +170,6 @@ func TestLoadSurvivesACorruptFile(t *testing.T) {
 			if s.UpdateChannel != "main" && s.UpdateChannel != "beta" {
 				t.Errorf("UpdateChannel = %q", s.UpdateChannel)
 			}
-			if s.OllamaURL == "" || s.Model == "" || s.AssistantTitle == "" || s.SystemPrompt == "" {
-				t.Error("a text field the assistant needs came back empty")
-			}
 		})
 	}
 }
@@ -232,21 +222,21 @@ func TestSaveIsAtomic(t *testing.T) {
 	// whatever bytes were there — a shorter document written in place would
 	// leave the tail of the old one.
 	long := want
-	long.SystemPrompt = strings.Repeat("x", 4096)
+	long.LastView = strings.Repeat("x", 4096)
 	if err := Save(long); err != nil {
 		t.Fatal(err)
 	}
 	short := want
-	short.SystemPrompt = "short"
+	short.LastView = "short"
 	if err := Save(short); err != nil {
 		t.Fatal(err)
 	}
 	got := Load()
-	if got.SystemPrompt != "short" {
-		t.Errorf("SystemPrompt = %q (%d bytes), want %q — a shorter save did not replace the longer one",
-			truncate(got.SystemPrompt), len(got.SystemPrompt), "short")
+	if got.LastView != "short" {
+		t.Errorf("LastView = %q (%d bytes), want %q — a shorter save did not replace the longer one",
+			truncate(got.LastView), len(got.LastView), "short")
 	}
-	if got.RefreshSeconds != 3 || got.WindowWidth != 1400 || got.LastView != "apps" {
+	if got.RefreshSeconds != 3 || got.WindowWidth != 1400 {
 		t.Errorf("round trip lost values: %+v", got)
 	}
 }

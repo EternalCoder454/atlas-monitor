@@ -182,7 +182,7 @@ func TestConcurrentReconfiguration(t *testing.T) {
 
 // TestStartStopCyclesReleaseEverything checks the descriptors and the goroutine
 // are given back each time. The collector is started and stopped whenever the
-// Apps or Assistant page is shown or hidden, so a few descriptors kept per cycle
+// Apps page is shown or hidden, so a few descriptors kept per cycle
 // would exhaust the process over a long session.
 func TestStartStopCyclesReleaseEverything(t *testing.T) {
 	c := New()

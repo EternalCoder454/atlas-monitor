@@ -21,8 +21,6 @@ Requires:       gtk4
 Requires:       libadwaita >= 1.6
 # hwdata supplies /usr/share/hwdata/pci.ids, which names the detected GPU.
 Recommends:     hwdata
-# The optional assistant talks to a local Ollama server; it is not packaged here.
-Suggests:       ollama
 
 %description
 A native system monitor for GNOME and Fedora written in Go with GTK4 and
@@ -45,7 +43,7 @@ go build -trimpath -ldflags="-s -w" -o %{name} .
 install -Dm755 %{name}                       %{buildroot}%{_bindir}/%{name}
 install -Dm644 assets/style.css              %{buildroot}%{_datadir}/%{name}/style.css
 install -Dm644 assets/icon.svg               %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/com.atlas.Monitor.svg
-for icon in cpu memory disk gpu assistant network wifi battery apps services settings prompts update trash reset; do
+for icon in cpu memory disk gpu network wifi battery apps services settings update trash reset; do
     install -Dm644 assets/icons/atlas-$icon-symbolic.svg \
         %{buildroot}%{_datadir}/icons/hicolor/scalable/actions/atlas-$icon-symbolic.svg
 done

@@ -22,7 +22,7 @@ log="$state/update.log"
 exec >"$log" 2>&1
 echo "Atlas Monitor update — channel '$branch' — $(date)"
 
-# Rebuild with the same flavour the user installed (see `make build-lean`).
+# Rebuild with the same build tags the install was made with.
 tagfile="${XDG_DATA_HOME:-$HOME/.local/share}/atlas-monitor/buildtags"
 tags=""
 [ -f "$tagfile" ] && tags="$(cat "$tagfile")"

@@ -10,22 +10,15 @@ ICONACT := $(PREFIX)/share/icons/hicolor/scalable/actions
 # Atlas's own symbolic icons, installed into the actions icon directory. They
 # are all atlas-prefixed on purpose: icon lookup falls back to hicolor last, so
 # a generic name here would lose to the system theme and never be used.
-ICONS   := cpu memory disk gpu assistant network wifi battery apps services settings prompts update trash reset
+ICONS   := cpu memory disk gpu network wifi battery apps services settings update trash reset
 
-# TAGS is passed to the Go build. `noai` drops the Assistant page, the Ollama
-# client and the Markdown renderer — see `make build-lean`.
+# TAGS is passed to the Go build. Nothing here needs one; it is kept so an
+# in-app update rebuilds with whatever the install was built with.
 TAGS    ?=
-.PHONY: build build-lean run install install-lean uninstall clean vet test test-race setup-ai
+.PHONY: build run install uninstall clean vet test test-race
 
 build:
 	go build -tags "$(TAGS)" -trimpath -ldflags="-s -w" -o $(BINDIR)/$(BINARY) .
-
-# A monitor and nothing else: no assistant, no Ollama client, no Markdown.
-build-lean:
-	$(MAKE) build TAGS=noai
-
-install-lean:
-	$(MAKE) install TAGS=noai
 
 run: build
 	./$(BINDIR)/$(BINARY)
@@ -41,11 +34,8 @@ test:
 # gotk4's weak-reference dependency rather than on anything here. The race
 # detector is kept for it; only that pointer check is switched off.
 test-race:
-	go test -race -count=1 ./internal/stats/ ./internal/process/ ./internal/ai/ ./internal/gpu/ ./internal/power/
+	go test -race -count=1 ./internal/stats/ ./internal/process/ ./internal/gpu/ ./internal/power/
 	go test -race -count=1 -gcflags=all=-d=checkptr=0 ./internal/ui/
-
-setup-ai:
-	bash scripts/setup-ai.sh
 
 install: build
 	install -Dm755 $(BINDIR)/$(BINARY) $(PREFIX)/bin/$(BINARY)

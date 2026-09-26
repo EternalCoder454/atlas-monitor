@@ -8,7 +8,6 @@ import (
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
-	"atlas-monitor/internal/ai"
 	"atlas-monitor/internal/config"
 	"atlas-monitor/internal/process"
 	"atlas-monitor/internal/stats"
@@ -41,19 +40,16 @@ const trimInterval = time.Minute
 
 // Window owns the content stack, the per-view map, and the refresh tick.
 type Window struct {
-	col          *stats.Collector
-	proc         *process.Collector
-	ai           *ai.Client
-	settings     *config.Settings
-	stack        *gtk.Stack
-	views        map[string]*lazyView
-	asst         assistant
-	sidebar      *sidebar
-	assistantRow *adw.ActionRow
-	active       string
-	visible      bool
-	tick         glib.SourceHandle
-	lastTrim     time.Time
+	col      *stats.Collector
+	proc     *process.Collector
+	settings *config.Settings
+	stack    *gtk.Stack
+	views    map[string]*lazyView
+	sidebar  *sidebar
+	active   string
+	visible  bool
+	tick     glib.SourceHandle
+	lastTrim time.Time
 
 	// Network rows are reordered live so the active interface stays first.
 	netExp     *adw.ExpanderRow
@@ -63,11 +59,10 @@ type Window struct {
 }
 
 // NewWindow creates the content controller around a started collector.
-func NewWindow(col *stats.Collector, client *ai.Client, settings *config.Settings) *Window {
+func NewWindow(col *stats.Collector, settings *config.Settings) *Window {
 	return &Window{
 		col:      col,
 		proc:     process.New(),
-		ai:       client,
 		settings: settings,
 		views:    map[string]*lazyView{},
 		visible:  true,
@@ -110,13 +105,6 @@ func (w *Window) Build() gtk.Widgetter {
 		w.addView("power", func() View { return newPowerView(col) })
 	}
 
-	if aiCompiledIn {
-		w.addView("assistant", func() View {
-			a := newAssistant(col, w.proc, w.ai, w.settings)
-			w.asst = a
-			return a
-		})
-	}
 	w.addView("apps", func() View { return newAppsView(w.proc, gpuAvail, w.settings) })
 	w.addView("services", func() View { return newServicesView() })
 
@@ -126,9 +114,8 @@ func (w *Window) Build() gtk.Widgetter {
 	}
 	orderedNets := orderByActive(nets, activeNet)
 
-	sb := buildSidebar(disks, orderedNets, gpuAvail, batteryAvail, aiCompiledIn, w.selectView)
+	sb := buildSidebar(disks, orderedNets, gpuAvail, batteryAvail, w.selectView)
 	w.sidebar = sb
-	w.assistantRow = sb.assistantRow
 	w.netExp = sb.netExp
 	w.netRows = sb.netRows
 	w.netCurrent = make([]string, len(orderedNets))
@@ -136,7 +123,6 @@ func (w *Window) Build() gtk.Widgetter {
 		w.netCurrent[i] = n.Name
 	}
 	w.updateNetIcon(activeNet)
-	w.SetAIEnabled(w.settings.AIEnabled)
 	w.col.SetInterval(w.refreshInterval())
 	w.proc.SetInterval(w.refreshInterval())
 
@@ -157,9 +143,6 @@ func (w *Window) Build() gtk.Widgetter {
 			initial = name
 		}
 	}
-	if initial == "assistant" && !w.settings.AIEnabled {
-		initial = "cpu"
-	}
 	w.selectView(initial)
 
 	// And again once the window is on screen. GTK gives initial focus to the
@@ -173,27 +156,6 @@ func (w *Window) Build() gtk.Widgetter {
 		glib.IdleAdd(func() { w.sidebar.selectView(w.active) })
 	})
 	return hbox
-}
-
-// SetAIEnabled shows or hides the Assistant entry. With AI off the page is
-// never built at all — no widgets, no Ollama probe, no systemd bus connection —
-// which is what makes turning the assistant off a real saving rather than a
-// hidden row.
-func (w *Window) SetAIEnabled(enabled bool) {
-	if w.assistantRow != nil {
-		w.assistantRow.SetVisible(enabled)
-	}
-	if !enabled && w.active == "assistant" {
-		w.selectView("cpu")
-	}
-}
-
-// RefreshQuickPrompts rebuilds the assistant's quick-prompt dropdown after the
-// prompts are edited in Settings.
-func (w *Window) RefreshQuickPrompts() {
-	if w.asst != nil {
-		w.asst.RefreshQuickPrompts()
-	}
 }
 
 // StartRefresh installs the UI tick that updates the active view, at whatever
@@ -282,7 +244,7 @@ func (w *Window) selectView(name string) {
 		w.sidebar.selectView(name)
 	}
 	// The per-process collector is expensive, so only run it where it is used:
-	// the Apps table and the Assistant (which reports top processes).
+	// the Apps table.
 	if needsProcs(name) {
 		w.proc.Start()
 	} else {
@@ -291,9 +253,11 @@ func (w *Window) selectView(name string) {
 	w.tickActive()
 }
 
-// needsProcs reports whether a view consumes the per-process collector.
+// needsProcs reports whether a view consumes the per-process collector. Only
+// the Apps table does; everywhere else it is stopped, which is most of what
+// keeps an idle Atlas cheap.
 func needsProcs(name string) bool {
-	return name == "apps" || name == "assistant"
+	return name == "apps"
 }
 
 func (w *Window) tickActive() {

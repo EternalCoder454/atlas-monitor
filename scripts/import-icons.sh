@@ -31,14 +31,12 @@ map=(
     memory:memory
     disk:disk
     gpu:gpu
-    assistant:assistant
     ethernet:network
     wifi:wifi
     battery:battery
     apps:apps
     services:services
     settings:settings
-    quick-prompts:prompts
     update:update
     trash:trash
     reset:reset

@@ -9,6 +9,12 @@ set -euo pipefail
 
 APPID=com.atlas.Monitor
 BINARY=atlas-monitor
+
+# Every symbolic icon the app asks GTK for. This list went stale once already —
+# it still named five icons after the set had grown, so a tarball install came
+# up with broken images where most of the sidebar should be. Keep it in step
+# with ICONS in the Makefile; TestPackagingListsAgree checks that it is.
+ICONS="cpu memory disk gpu network wifi battery apps services settings update trash reset"
 PREFIX="${PREFIX:-$HOME/.local}"
 action=install
 
@@ -35,7 +41,7 @@ refresh_caches() {
 
 if [ "$action" = uninstall ]; then
     rm -f "$PREFIX/bin/$BINARY" "$APPDIR/$APPID.desktop" "$ICONDIR/$APPID.svg"
-    rm -f "$ICONACT"/atlas-{cpu,memory,disk,gpu,assistant}-symbolic.svg
+    for icon in $ICONS; do rm -f "$ICONACT/atlas-$icon-symbolic.svg"; done
     rm -rf "$DATADIR"
     refresh_caches
     echo "Removed Atlas Monitor from $PREFIX."
@@ -64,7 +70,7 @@ fi
 install -Dm755 "$here/$BINARY"            "$PREFIX/bin/$BINARY"
 install -Dm644 "$here/assets/style.css"   "$DATADIR/style.css"
 install -Dm644 "$here/assets/icon.svg"    "$ICONDIR/$APPID.svg"
-for icon in cpu memory disk gpu assistant; do
+for icon in $ICONS; do
     install -Dm644 "$here/assets/icons/atlas-$icon-symbolic.svg" "$ICONACT/atlas-$icon-symbolic.svg"
 done
 install -d "$APPDIR"

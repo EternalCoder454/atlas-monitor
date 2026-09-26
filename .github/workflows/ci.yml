@@ -70,16 +70,10 @@ jobs:
       - name: Build (default)
         run: make build
 
-      - name: Build (lean, -tags noai)
-        run: make build-lean
-
       # -count=1 because several suites read this machine's live /proc, /sys and
       # D-Bus; a cached "ok" would hide a real regression.
       - name: Test
         run: go test -count=1 ./...
-
-      - name: Test (lean, -tags noai)
-        run: go test -count=1 -tags noai ./...
 
   race:
     name: race detector

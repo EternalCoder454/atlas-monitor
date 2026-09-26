@@ -197,7 +197,7 @@ func iconListIn(t *testing.T, path, start, end string) []string {
 	return out
 }
 
-// TestPackagingListsAgree keeps the three installers in step. The Makefile is
+// TestPackagingListsAgree keeps every installer in step. The Makefile is
 // the one the project itself uses, so it is treated as the source of truth; the
 // RPM spec and the Arch PKGBUILD have to match it.
 func TestPackagingListsAgree(t *testing.T) {
@@ -208,6 +208,7 @@ func TestPackagingListsAgree(t *testing.T) {
 	for _, c := range []struct{ path, start, end string }{
 		{"packaging/atlas-monitor.spec", "for icon in", ";"},
 		{"packaging/PKGBUILD", "_icons=(", ")"},
+		{"packaging/install.sh", `ICONS="`, `"`},
 	} {
 		got := iconListIn(t, c.path, c.start, c.end)
 		if strings.Join(got, " ") != strings.Join(want, " ") {
@@ -215,5 +216,5 @@ func TestPackagingListsAgree(t *testing.T) {
 				c.path, strings.Join(got, " "), strings.Join(want, " "))
 		}
 	}
-	t.Logf("%d icons, listed the same way in all three installers", len(want))
+	t.Logf("%d icons, listed the same way in all of them", len(want))
 }

@@ -3,7 +3,7 @@ package process
 import "testing"
 
 // BenchmarkCollect measures one full scan of this machine's /proc. The
-// collector runs once a second for as long as the Apps or Assistant page is
+// collector runs once a second for as long as the Apps page is
 // open, and profiling showed it was two thirds of the app's CPU time, almost
 // all of it syscalls — so this is the number worth watching.
 func BenchmarkCollect(b *testing.B) {
