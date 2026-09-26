@@ -3,6 +3,18 @@
 Written for the people who use Atlas Monitor rather than the people who build
 it. One short line per change, no jargon — this is what the update prompt shows.
 
+## 0.11.1
+
+- Updating now works however Atlas was installed, not only from a source
+  checkout
+- A copy installed by pacman, apt or dnf is told which command updates it,
+  ready to copy or to run
+- Atlas hears about new versions even when it has no source to rebuild from
+- An update installs back over the copy that is running, instead of leaving a
+  second one behind
+- If something needed to build is missing, Atlas names it and the command that
+  installs it
+
 ## 0.11.0
 
 - Atlas now tells you when something is wrong: a warning appears in the title

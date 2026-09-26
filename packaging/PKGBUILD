@@ -17,7 +17,7 @@
 # only thing that actually works for a locally built package.
 
 pkgname=atlas-monitor
-pkgver=0.11.0
+pkgver=0.11.1
 pkgrel=1
 pkgdesc="Lightweight system monitor — CPU, memory, disk, network, GPU, processes and services"
 arch=('x86_64' 'aarch64')
