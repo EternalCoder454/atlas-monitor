@@ -32,7 +32,7 @@ sha256sums=('18590cae0a1bc42681692e0463f1cb1416947e3d59df45636e9eeb92ad8025a6')
 # is installed and never be used. Keep in step with ICONS in the Makefile —
 # TestPackagingInstallsEveryIcon checks that they agree.
 _icons=(cpu memory disk gpu assistant network wifi battery apps services
-        settings prompts update trash reset menu warning)
+        settings prompts update trash reset menu warning startup)
 
 build() {
     cd "$pkgname-$pkgver"
