@@ -42,8 +42,11 @@ const (
 	hotDegrees     = 85 // °C, for the processor and the graphics card
 	lowMemoryBytes = 2 << 30
 	highMemoryUsed = 0.90 // of total
-	heavySwapUsed  = 0.25 // of total
-	nearlyFullDisk = 0.05 // free, of total
+	heavySwapUsed  = 0.25 // of total, and only with memory short as well
+	// swapPressureAvail is how little memory has to be left before swap use
+	// means anything. Above it the machine has somewhere to put things.
+	swapPressureAvail = 0.25 // available, of total
+	nearlyFullDisk    = 0.05 // free, of total
 )
 
 // Check reports everything wrong with the machine right now, worst first.
@@ -77,7 +80,17 @@ func Check(s *stats.Stats, failedServices []string) []Alert {
 				format.GiB(m.Available), format.GiB(m.Total)),
 		})
 	}
-	if m := s.Mem; m.SwapTotal > 0 && float64(m.SwapUsed)/float64(m.SwapTotal) > heavySwapUsed {
+	// Swap in use is only a problem when memory is actually short.
+	//
+	// The inherited threshold fired on swap residency alone, and on Fedora —
+	// where swap is zram, compressed RAM that the system is designed to use —
+	// that is the normal state of a perfectly healthy machine. It warned that
+	// "the machine will feel slow" on this one while it had 23 GiB of 31 free.
+	// Pages parked in swap hours ago cost nothing; what hurts is swapping while
+	// there is nothing left to swap into.
+	if m := s.Mem; m.SwapTotal > 0 && m.Total > 0 &&
+		float64(m.SwapUsed)/float64(m.SwapTotal) > heavySwapUsed &&
+		float64(m.Available)/float64(m.Total) < swapPressureAvail {
 		warning = append(warning, Alert{
 			Level: Warning,
 			Title: "Swapping heavily",
