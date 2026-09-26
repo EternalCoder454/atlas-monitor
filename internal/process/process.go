@@ -70,6 +70,11 @@ type Collector struct {
 	gpuPidsSpare   map[int]bool
 	gpuScanCounter int
 
+	// What the UI is actually showing. Both default to true so a caller that
+	// never says otherwise gets every figure, as before.
+	wantDiskIO atomic.Bool
+	wantGPU    atomic.Bool
+
 	// Scratch reused by collect: the process list under construction and the
 	// per-pid socket counts. Only the sampling goroutine touches them.
 	scratch []Proc
@@ -119,12 +124,31 @@ func New() *Collector {
 		procFD:       -1,
 	}
 	c.interval.Store(int64(time.Second))
+	c.wantDiskIO.Store(true)
+	c.wantGPU.Store(true)
 	return c
 }
 
 // SetIncludeKernel controls whether kernel threads are collected at all. It is
 // safe to call from the UI thread; the next tick picks it up.
 func (c *Collector) SetIncludeKernel(include bool) { c.includeKernel.Store(include) }
+
+// SetWantDiskIO says whether anything is displaying per-process disk figures.
+//
+// They cost an open, a read and a parse of /proc/[pid]/io for every process on
+// every tick — about a tenth of the whole scan — and the columns that show them
+// are hidden by default, because on any machine with room for a page cache they
+// read zero for nearly everything. Collecting them for nobody to look at is the
+// one piece of this scan that buys nothing at all.
+//
+// Safe from the UI thread; the next tick picks it up.
+func (c *Collector) SetWantDiskIO(want bool) { c.wantDiskIO.Store(want) }
+
+// SetWantGPU says whether anything is displaying per-process GPU load. Walking
+// a process's open descriptors to find DRM handles is the most expensive part
+// of the scan after the stat reads; on a machine with no GPU column on screen
+// there is nothing to spend it on.
+func (c *Collector) SetWantGPU(want bool) { c.wantGPU.Store(want) }
 
 // SetInterval changes how often the process list is sampled. It takes effect
 // within one tick of the current period.
@@ -246,8 +270,10 @@ func (c *Collector) collect() {
 	// that was not here last tick — a game shows its per-process GPU load on
 	// the very first tick after it launches. The full sweep is only a safety
 	// net for anything those two miss, so it can be rare.
-	gpuFullScan := c.gpuScanCounter%gpuRescanTicks == 0
+	gpuWanted := c.wantGPU.Load()
+	gpuFullScan := gpuWanted && c.gpuScanCounter%gpuRescanTicks == 0
 	c.gpuScanCounter++
+	ioWanted := c.wantDiskIO.Load()
 	// Every per-tick container is a reused one: emptying a map keeps its buckets,
 	// so a steady process count settles into zero allocation per scan.
 	newGPUEngine, newGPUPids := c.gpuPrevSpare, c.gpuPidsSpare
@@ -285,7 +311,10 @@ func (c *Collector) collect() {
 		p := Proc{PID: pid, Name: string(c.stat.name), Kernel: c.stat.kernel, GPU: -1}
 		p.RSS = c.readRSS(pid)
 
-		rb, wb := c.readIO(pid)
+		var rb, wb uint64
+		if ioWanted {
+			rb, wb = c.readIO(pid)
+		}
 		prev, hadPrev := c.prev[pid]
 		if hadPrev && !first {
 			p.CPU = float64(c.stat.jiffies-prev.cpuJiffies) / clockTick / dt * 100
@@ -300,7 +329,7 @@ func (c *Collector) collect() {
 		// Both the socket count and the GPU counters come from the same place —
 		// the process's open descriptors — so they share one walk. Done
 		// separately, a tick where both were due read every link twice.
-		wantGPU := gpuFullScan || !hadPrev || c.gpuPids[pid]
+		wantGPU := gpuWanted && (gpuFullScan || !hadPrev || c.gpuPids[pid])
 		if doScan || wantGPU {
 			n, ns, hasDRM := c.scanFDs(pid, doScan, wantGPU)
 			if doScan && n > 0 {

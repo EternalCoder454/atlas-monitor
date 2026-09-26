@@ -347,6 +347,10 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 		func(a, b *process.Proc) bool { return a.DiskWrite < b.DiskWrite })
 	readCol.SetVisible(settings.ShowIOColumns)
 	writeCol.SetVisible(settings.ShowIOColumns)
+	// Nothing else reads these figures, so the scan can stop gathering them
+	// while the columns are hidden — which is the default.
+	proc.SetWantDiskIO(settings.ShowIOColumns)
+	proc.SetWantGPU(gpuAvail)
 	cv.AppendColumn(readCol)
 	cv.AppendColumn(writeCol)
 
@@ -359,6 +363,7 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 		}
 		readCol.SetVisible(on)
 		writeCol.SetVisible(on)
+		proc.SetWantDiskIO(on)
 		settings.ShowIOColumns = on
 		_ = config.Save(*settings)
 	})
