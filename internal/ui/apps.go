@@ -170,14 +170,25 @@ func isIdleReading(b []byte) bool {
 	return true
 }
 
+// optionalColumn is a column the user may put away. note, when set, explains
+// in the Columns list why it is worth putting away — the expensive ones say so.
+type optionalColumn struct {
+	title string
+	col   *gtk.ColumnViewColumn
+	note  string
+}
+
 type appsView struct {
-	root       *gtk.Box
-	proc       *process.Collector
-	model      *gioutil.ListModel[*procRow]
-	filter     *gtk.CustomFilter
-	scroller   *gtk.ScrolledWindow
-	columnView *gtk.ColumnView
-	popover    *gtk.PopoverMenu
+	optional         []optionalColumn
+	settings         *config.Settings
+	onColumnsChanged func()
+	root             *gtk.Box
+	proc             *process.Collector
+	model            *gioutil.ListModel[*procRow]
+	filter           *gtk.CustomFilter
+	scroller         *gtk.ScrolledWindow
+	columnView       *gtk.ColumnView
+	popover          *gtk.PopoverMenu
 
 	// Stable row registry and current model order (parallel to the model).
 	// Ungrouped rows are keyed by pid, grouped rows by process name, so the
@@ -304,85 +315,77 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 	cv.SetReorderable(false)
 	v.columnView = cv
 
+	// Columns, and what the user is allowed to put away.
+	//
+	// Name and CPU % stay: without them the table is not a process table. Every
+	// other column can be hidden, from the Columns button or by right-clicking
+	// its own header, and hiding the ones that cost something to gather stops
+	// the scan gathering it — per-process disk, GPU and network are the three
+	// expensive parts of a tick, and each is now only paid for while something
+	// is showing it.
 	cv.AppendColumn(v.textColumn("Name", true, 0,
 		func(dst []byte, p *process.Proc) []byte { return append(dst, p.Name...) },
 		func(a, b *process.Proc) bool { return lessFold(a.Name, b.Name) },
 		colOpts{minChars: 16}))
-	cv.AppendColumn(v.textColumn("PID", false, 1,
-		func(dst []byte, p *process.Proc) []byte { return strconv.AppendInt(dst, int64(p.PID), 10) },
-		func(a, b *process.Proc) bool { return a.PID < b.PID }))
+
 	cpuCol := v.textColumn("CPU %", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendPercent1(dst, p.CPU) },
 		func(a, b *process.Proc) bool { return a.CPU < b.CPU },
 		colOpts{heat: cpuHeat})
+
+	hide := func(title string, col *gtk.ColumnViewColumn, note string) {
+		v.optional = append(v.optional, optionalColumn{title: title, col: col, note: note})
+	}
+	pidCol := v.textColumn("PID", false, 1,
+		func(dst []byte, p *process.Proc) []byte { return strconv.AppendInt(dst, int64(p.PID), 10) },
+		func(a, b *process.Proc) bool { return a.PID < b.PID })
+	hide("PID", pidCol, "")
+	cv.AppendColumn(pidCol)
 	cv.AppendColumn(cpuCol)
-	cv.AppendColumn(v.textColumn("RAM", false, 1,
+	ramCol := v.textColumn("RAM", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendBytes(dst, p.RSS) },
-		func(a, b *process.Proc) bool { return a.RSS < b.RSS }))
+		func(a, b *process.Proc) bool { return a.RSS < b.RSS })
+	hide("RAM", ramCol, "")
+	cv.AppendColumn(ramCol)
 	if gpuAvail {
-		cv.AppendColumn(v.textColumn("GPU %", false, 1, appendGPU,
-			func(a, b *process.Proc) bool { return a.GPU < b.GPU }))
+		gpuCol := v.textColumn("GPU %", false, 1, appendGPU,
+			func(a, b *process.Proc) bool { return a.GPU < b.GPU })
+		hide("GPU %", gpuCol, "Finding this means walking every open file of every program.")
+		cv.AppendColumn(gpuCol)
 	}
 	// Sorted by the underlying score, not the label, so the order runs
 	// Very low → High rather than alphabetically.
-	cv.AppendColumn(v.textColumn("Power", false, 0,
+	powerCol := v.textColumn("Power", false, 0,
 		func(dst []byte, p *process.Proc) []byte { return append(dst, p.Impact().String()...) },
 		func(a, b *process.Proc) bool { return a.PowerScore() < b.PowerScore() },
-		colOpts{dim: func(b []byte) bool { return string(b) == process.ImpactVeryLow.String() }}))
-	cv.AppendColumn(v.textColumn("Net ≈ In", false, 1,
+		colOpts{dim: func(b []byte) bool { return string(b) == process.ImpactVeryLow.String() }})
+	hide("Power", powerCol, "")
+	cv.AppendColumn(powerCol)
+	netInCol := v.textColumn("Net ≈ In", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendRate(dst, p.NetIn) },
-		func(a, b *process.Proc) bool { return a.NetIn < b.NetIn }))
-	cv.AppendColumn(v.textColumn("Net ≈ Out", false, 1,
+		func(a, b *process.Proc) bool { return a.NetIn < b.NetIn })
+	netOutCol := v.textColumn("Net ≈ Out", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendRate(dst, p.NetOut) },
-		func(a, b *process.Proc) bool { return a.NetOut < b.NetOut }))
-	// Per-process disk figures count blocks that actually reach the drive, and
-	// on any machine with room for a page cache that is almost nothing: two
-	// columns of "0 B/s" holding width that the name column needed. They are
-	// still there for whoever wants them, behind the Columns button.
+		func(a, b *process.Proc) bool { return a.NetOut < b.NetOut })
+	hide("Net ≈ In", netInCol, "Attributing traffic means listing every open socket.")
+	hide("Net ≈ Out", netOutCol, "")
+	cv.AppendColumn(netInCol)
+	cv.AppendColumn(netOutCol)
 	readCol := v.textColumn("Disk Read", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendRate(dst, p.DiskRead) },
 		func(a, b *process.Proc) bool { return a.DiskRead < b.DiskRead })
 	writeCol := v.textColumn("Disk Write", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendRate(dst, p.DiskWrite) },
 		func(a, b *process.Proc) bool { return a.DiskWrite < b.DiskWrite })
-	readCol.SetVisible(settings.ShowIOColumns)
-	writeCol.SetVisible(settings.ShowIOColumns)
-	// Nothing else reads these figures, so the scan can stop gathering them
-	// while the columns are hidden — which is the default.
-	proc.SetWantDiskIO(settings.ShowIOColumns)
-	proc.SetWantGPU(gpuAvail)
+	hide("Disk Read", readCol, "Counts only what reaches the drive, so most programs read zero.")
+	hide("Disk Write", writeCol, "")
 	cv.AppendColumn(readCol)
 	cv.AppendColumn(writeCol)
 
-	ioChk := gtk.NewCheckButtonWithLabel("Disk read and write")
-	ioChk.SetActive(settings.ShowIOColumns)
-	ioChk.ConnectToggled(func() {
-		on := ioChk.Active()
-		if on == settings.ShowIOColumns {
-			return
-		}
-		readCol.SetVisible(on)
-		writeCol.SetVisible(on)
-		proc.SetWantDiskIO(on)
-		settings.ShowIOColumns = on
-		_ = config.Save(*settings)
-	})
-	ioNote := gtk.NewLabel("Counts only reads and writes that reach the drive, so most\nprograms sit at zero whatever they are doing.")
-	ioNote.SetXAlign(0)
-	ioNote.AddCSSClass("dim-label")
-	ioNote.AddCSSClass("caption")
-
-	colBox := gtk.NewBox(gtk.OrientationVertical, 6)
-	colBox.SetMarginTop(10)
-	colBox.SetMarginBottom(10)
-	colBox.SetMarginStart(12)
-	colBox.SetMarginEnd(12)
-	colBox.Append(ioChk)
-	colBox.Append(ioNote)
-
-	colPop := gtk.NewPopover()
-	colPop.SetChild(colBox)
-	colBtn.SetPopover(colPop)
+	v.settings = settings
+	v.proc = proc
+	v.applyHidden()
+	v.buildColumnMenus(cv, colBtn)
 
 	sortModel := gtk.NewSortListModel(filterModel, cv.Sorter())
 	cv.SetModel(gtk.NewNoSelection(sortModel))
@@ -990,4 +993,138 @@ func foldByte(c byte) byte {
 		return c + 'a' - 'A'
 	}
 	return c
+}
+
+// applyHidden puts the saved column choices into effect, and tells the scan
+// which of the expensive figures anything is still showing.
+func (v *appsView) applyHidden() {
+	hidden := map[string]bool{}
+	for _, t := range v.settings.HiddenColumns {
+		hidden[t] = true
+	}
+	for _, o := range v.optional {
+		o.col.SetVisible(!hidden[o.title])
+	}
+	// A figure is worth gathering only while a column is showing it.
+	v.proc.SetWantDiskIO(!hidden["Disk Read"] || !hidden["Disk Write"])
+	v.proc.SetWantNet(!hidden["Net ≈ In"] || !hidden["Net ≈ Out"])
+	gpuShown := false
+	for _, o := range v.optional {
+		if o.title == "GPU %" && !hidden[o.title] {
+			gpuShown = true
+		}
+	}
+	v.proc.SetWantGPU(gpuShown)
+}
+
+// setColumnHidden shows or hides one column and saves the choice.
+func (v *appsView) setColumnHidden(title string, hidden bool) {
+	v.settings.HiddenColumns = without(v.settings.HiddenColumns, title)
+	if hidden {
+		v.settings.HiddenColumns = append(v.settings.HiddenColumns, title)
+	}
+	v.applyHidden()
+	_ = config.Save(*v.settings)
+	if v.onColumnsChanged != nil {
+		v.onColumnsChanged()
+	}
+}
+
+// without returns names minus one entry, keeping order.
+func without(names []string, drop string) []string {
+	out := names[:0:0]
+	for _, n := range names {
+		if n != drop {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// buildColumnMenus wires the two ways to put a column away: a right-click on
+// its own header, which is where people look for it, and a list behind the
+// Columns button, which is the only way to get one back once it is gone.
+func (v *appsView) buildColumnMenus(cv *gtk.ColumnView, btn *gtk.MenuButton) {
+	// Right-click menus are driven by actions rather than callbacks, so the
+	// group goes on the column view and the menu items name entries in it.
+	group := gio.NewSimpleActionGroup()
+
+	hideAct := gio.NewSimpleAction("hide", glib.NewVariantType("s"))
+	hideAct.ConnectActivate(func(param *glib.Variant) {
+		if param != nil {
+			v.setColumnHidden(param.String(), true)
+		}
+	})
+	group.AddAction(hideAct)
+
+	showAllAct := gio.NewSimpleAction("showall", nil)
+	showAllAct.ConnectActivate(func(*glib.Variant) {
+		v.settings.HiddenColumns = nil
+		v.applyHidden()
+		_ = config.Save(*v.settings)
+		if v.onColumnsChanged != nil {
+			v.onColumnsChanged()
+		}
+	})
+	group.AddAction(showAllAct)
+	cv.InsertActionGroup("cols", group)
+
+	for _, o := range v.optional {
+		menu := gio.NewMenu()
+		menu.Append("Hide this column", "cols.hide::"+o.title)
+		menu.Append("Show all columns", "cols.showall")
+		o.col.SetHeaderMenu(menu)
+	}
+
+	// The list behind the button. Rebuilt whenever it changes so the ticks
+	// follow a column hidden from its own header.
+	box := gtk.NewBox(gtk.OrientationVertical, 6)
+	box.SetMarginTop(10)
+	box.SetMarginBottom(10)
+	box.SetMarginStart(12)
+	box.SetMarginEnd(12)
+
+	hidden := func(title string) bool {
+		for _, t := range v.settings.HiddenColumns {
+			if t == title {
+				return true
+			}
+		}
+		return false
+	}
+	var checks []*gtk.CheckButton
+	for _, o := range v.optional {
+		o := o
+		chk := gtk.NewCheckButtonWithLabel(o.title)
+		chk.SetActive(!hidden(o.title))
+		chk.ConnectToggled(func() {
+			if want := !chk.Active(); want != hidden(o.title) {
+				v.setColumnHidden(o.title, want)
+			}
+		})
+		box.Append(chk)
+		checks = append(checks, chk)
+		if o.note != "" {
+			note := gtk.NewLabel(o.note)
+			note.SetXAlign(0)
+			note.SetWrap(true)
+			note.SetMaxWidthChars(38)
+			note.AddCSSClass("dim-label")
+			note.AddCSSClass("caption")
+			note.SetMarginStart(26)
+			box.Append(note)
+		}
+	}
+	// Hiding a column from its header has to move the tick here too.
+	v.onColumnsChanged = func() {
+		for i, o := range v.optional {
+			if want := !hidden(o.title); checks[i].Active() != want {
+				checks[i].SetActive(want)
+			}
+		}
+	}
+
+	pop := gtk.NewPopover()
+	pop.SetChild(box)
+	btn.SetPopover(pop)
 }

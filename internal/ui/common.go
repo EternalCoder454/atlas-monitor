@@ -4,6 +4,8 @@ package ui
 
 import (
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
+
+	"atlas-monitor/internal/config"
 )
 
 // View is one page in the content stack. Update refreshes it from the latest
@@ -114,4 +116,72 @@ func orDash(s string) string {
 		return "—"
 	}
 	return s
+}
+
+// section is a page heading that folds away what is under it.
+//
+// The headings used to be plain labels, so every page showed everything it had
+// whether or not the reader wanted it — and a 32-core grid is a third of the
+// CPU page and the most expensive thing on it to draw. Folded, a section costs
+// nothing: expanded() is false, so the view skips updating what is inside as
+// well as GTK skipping drawing it.
+type section struct {
+	exp   *gtk.Expander
+	title string
+	s     *config.Settings
+}
+
+// newSection wraps child in a fold, remembering whether it was left open.
+func newSection(title string, child gtk.Widgetter, s *config.Settings) *section {
+	lbl := gtk.NewLabel(title)
+	lbl.AddCSSClass("am-section-label")
+	lbl.SetXAlign(0)
+
+	exp := gtk.NewExpander("")
+	exp.SetLabelWidget(lbl)
+	exp.SetChild(child)
+	exp.SetExpanded(!sectionCollapsed(s, title))
+
+	sec := &section{exp: exp, title: title, s: s}
+	exp.NotifyProperty("expanded", func() { sec.save() })
+	return sec
+}
+
+// widget is what the page appends.
+func (s *section) widget() gtk.Widgetter { return s.exp }
+
+// expanded reports whether what is inside is worth updating.
+func (s *section) expanded() bool { return s.exp.Expanded() }
+
+func (s *section) save() {
+	if s.s == nil {
+		return
+	}
+	s.s.CollapsedSections = withoutSection(s.s.CollapsedSections, s.title)
+	if !s.exp.Expanded() {
+		s.s.CollapsedSections = append(s.s.CollapsedSections, s.title)
+	}
+	_ = config.Save(*s.s)
+}
+
+func sectionCollapsed(s *config.Settings, title string) bool {
+	if s == nil {
+		return false
+	}
+	for _, t := range s.CollapsedSections {
+		if t == title {
+			return true
+		}
+	}
+	return false
+}
+
+func withoutSection(names []string, drop string) []string {
+	out := names[:0:0]
+	for _, n := range names {
+		if n != drop {
+			out = append(out, n)
+		}
+	}
+	return out
 }

@@ -352,3 +352,39 @@ func TestSettingsFromAFullInstallCannotRetargetTheUpdate(t *testing.T) {
 		}
 	}
 }
+
+// TestShowIOColumnsMigrates covers the rename of the 0.9.0 disk-column switch.
+// Someone who turned those columns on should still have them after upgrading.
+func TestShowIOColumnsMigrates(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "atlas-monitor"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(body string) {
+		if err := os.WriteFile(filepath.Join(dir, "atlas-monitor", "settings.json"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	has := func(names []string, want string) bool {
+		for _, n := range names {
+			if n == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	write(`{"show_io_columns": true}`)
+	if got := Load().HiddenColumns; has(got, "Disk Read") || has(got, "Disk Write") {
+		t.Errorf("show_io_columns:true still hid the disk columns: %v", got)
+	}
+	write(`{"show_io_columns": false}`)
+	if got := Load().HiddenColumns; !has(got, "Disk Read") {
+		t.Errorf("show_io_columns:false should leave them hidden, got %v", got)
+	}
+	write(`{}`)
+	if got := Load().HiddenColumns; !has(got, "Disk Read") {
+		t.Errorf("a settings file with neither key should use the default, got %v", got)
+	}
+}

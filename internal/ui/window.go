@@ -80,7 +80,7 @@ func (w *Window) Build() gtk.Widgetter {
 	w.stack.SetTransitionDuration(120)
 
 	col := w.col
-	w.addView("cpu", func() View { return newCPUView(col) })
+	w.addView("cpu", func() View { return newCPUView(col, w.settings) })
 	w.addView("memory", func() View { return newMemView(col) })
 
 	var disks []*stats.DiskStats
