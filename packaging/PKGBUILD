@@ -13,9 +13,18 @@
 # It conflicts with the full atlas-monitor package on purpose — both install the
 # same binary, desktop entry and icons.
 #
-# Updates come from pacman, not from the app: the in-app updater needs a source
-# checkout to pull and rebuild, and a packaged install has none. It notices that
-# on its own and says so rather than half-working.
+# Updates come from pacman, not from the app. Atlas notices that it was installed
+# by a package manager — it asks pacman who owns its own binary — and its Update
+# button then checks the minimal branch for a newer version and hands over the
+# command that installs it, rather than writing over /usr/bin behind pacman's back
+# and leaving its database describing a file that is no longer there.
+#
+# So there is nothing to switch off here. If this package is published to the AUR,
+# an AUR helper upgrades it in the ordinary way and Atlas will suggest exactly
+# that; without one it suggests rebuilding from this PKGBUILD, which is the only
+# thing that actually works for a locally built package. That suggestion clones
+# the minimal branch — see packageRecipe in internal/app/install_kind.go — because
+# the PKGBUILD on main builds the full application.
 
 _pkgname=atlas-monitor
 pkgname=atlas-monitor-minimal

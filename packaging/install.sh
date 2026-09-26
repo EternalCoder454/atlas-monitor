@@ -78,6 +78,9 @@ sed "s|@BIN@|$PREFIX/bin/$BINARY|g" "$here/assets/$APPID.desktop" > "$APPDIR/$AP
 chmod 644 "$APPDIR/$APPID.desktop"
 refresh_caches
 
-# No source checkout here, so the in-app updater correctly reports that it does
-# not know where to pull from; re-run this script with a newer tarball instead.
+# There is no source checkout here, which used to mean the in-app updater refused
+# to do anything. It now fetches the source itself the first time it is asked, and
+# installs the result back into this same prefix — so this copy updates itself from
+# here on, provided the build tools are present. Atlas names the ones that are
+# missing if they are not.
 echo "Installed Atlas Monitor to $PREFIX — press Super and search 'Atlas'."

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
@@ -37,6 +38,11 @@ type App struct {
 	updateOffered bool
 	// updating is set while an install is building, so a second one cannot start.
 	updating bool
+	// installed is how this copy got onto the machine, worked out once: see
+	// install(). The Settings dialog checks for updates on a goroutine of its
+	// own, so this is settled through a sync.Once rather than a plain flag.
+	installed   Install
+	installOnce sync.Once
 }
 
 // New creates the application. css is the embedded stylesheet contents and
@@ -187,15 +193,21 @@ func (a *App) saveWindowState(win *adw.ApplicationWindow) {
 // sourceDir returns the source checkout recorded by `make install`
 // (in $XDG_DATA_HOME/atlas-monitor/source), or "" if it is unknown.
 func sourceDir() string {
-	base := os.Getenv("XDG_DATA_HOME")
-	if base == "" {
-		base = filepath.Join(os.Getenv("HOME"), ".local", "share")
-	}
-	b, err := os.ReadFile(filepath.Join(base, "atlas-monitor", "source"))
+	b, err := os.ReadFile(filepath.Join(userDataDir(), "source"))
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// userDataDir is Atlas's own directory under the user's data home, where
+// `make install` records the source checkout and the build flavour.
+func userDataDir() string {
+	base := os.Getenv("XDG_DATA_HOME")
+	if base == "" {
+		base = filepath.Join(os.Getenv("HOME"), ".local", "share")
+	}
+	return filepath.Join(base, "atlas-monitor")
 }
 
 // settingsHooks bundles the callbacks the Settings dialog needs.
@@ -206,20 +218,13 @@ func (a *App) settingsHooks() ui.SettingsHooks {
 		CheckUpdate: a.checkUpdate,
 		Version:     a.version,
 		Location:    a.location(),
+		ManagedBy:   a.install().Manager,
 	}
 }
 
-// location is the source checkout (where updates are pulled), falling back to
-// the running binary's path.
-func (a *App) location() string {
-	if src := sourceDir(); src != "" {
-		return src
-	}
-	if exe, err := os.Executable(); err == nil {
-		return exe
-	}
-	return ""
-}
+// location is where this copy lives, said in a way that also explains who
+// updates it: a checkout path, or "installed by pacman — /usr/bin/atlas-monitor".
+func (a *App) location() string { return a.install().Where() }
 
 // checkUpdate adapts CheckUpdate to what the Settings dialog wants: a yes/no
 // and one line to show. The detail it drops — the version and the changelog —
@@ -317,7 +322,14 @@ func (a *App) offerUpdate(win *adw.ApplicationWindow, info UpdateInfo) {
 		dlg.SetBody("A newer version of Atlas Monitor is available.")
 	}
 	dlg.AddResponse("later", "Update Later")
-	dlg.AddResponse("now", "Update Now")
+	// "Update Now" would be a promise Atlas cannot keep on a copy it must not
+	// overwrite: what happens next there is a command for the package manager,
+	// so the button says that instead.
+	now := "Update Now"
+	if !a.install().SelfUpdatable() {
+		now = "How to Update"
+	}
+	dlg.AddResponse("now", now)
 	dlg.SetResponseAppearance("now", adw.ResponseSuggested)
 	dlg.SetDefaultResponse("now")
 	dlg.SetCloseResponse("later")

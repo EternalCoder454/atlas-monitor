@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Update Atlas Monitor from GitHub, then reinstall. Invoked by the in-app
-# "Update and restart" button with the chosen channel branch:
+# "Update and restart" button as:  update.sh <branch> [prefix]
 #   main = Release (stable), beta = newest features/fixes.
+#   prefix defaults to the Makefile's own ($HOME/.local).
 #
 # Safety: a dirty working tree is never touched (it just rebuilds in place), the
 # pull is fast-forward-only (local commits are never discarded), and a non-git
@@ -10,6 +11,11 @@
 set -uo pipefail
 
 branch="${1:-main}"
+# Where to install the result. The caller passes the prefix the running copy was
+# installed under, so a rebuild replaces it instead of landing somewhere else and
+# leaving two Atlases for PATH to choose between. Empty means the Makefile's own
+# default, which is what a person running this script by hand would expect.
+prefix="${2:-}"
 cd "$(dirname "$(readlink -f "$0")")/.." || exit 1   # repo root, relative to this script
 
 # The log goes under the user's own state directory rather than a predictable
@@ -27,7 +33,13 @@ tagfile="${XDG_DATA_HOME:-$HOME/.local/share}/atlas-monitor/buildtags"
 tags=""
 [ -f "$tagfile" ] && tags="$(cat "$tagfile")"
 
-reinstall() { make install TAGS="$tags"; }
+reinstall() {
+    if [ -n "$prefix" ]; then
+        make install TAGS="$tags" PREFIX="$prefix"
+    else
+        make install TAGS="$tags"
+    fi
+}
 
 # Not a git checkout (tarball/zip): nothing to pull, just rebuild.
 if ! git rev-parse --git-dir >/dev/null 2>&1; then

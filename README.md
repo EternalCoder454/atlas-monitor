@@ -195,11 +195,13 @@ pick the one matching yours, or build from source below. `install.sh` checks
 what the dynamic linker cannot resolve and says so before installing anything.
 
 Arch Linux has a [`PKGBUILD`](packaging/PKGBUILD). `makepkg -si` from
-`packaging/` builds the released version and installs it through pacman, so
-`pacman -R atlas-monitor` removes it cleanly and updates arrive the same way as
-every other package. The in-app updater stands down for a packaged install —
-it needs a source checkout to pull and rebuild, notices there is none, and says
-so rather than half-working.
+`packaging/` builds the current `minimal` branch and installs it through pacman as
+`atlas-monitor-minimal`, so `pacman -R atlas-monitor-minimal` removes it cleanly
+and updates arrive the same way as every other package. Atlas works out that
+pacman owns it — it asks pacman who owns its own binary — and its Update button
+then checks for a newer version and hands over the command that installs it,
+rather than writing over `/usr/bin` behind pacman's back. See
+[Updating](#updating).
 
 An RPM spec lives in [`packaging/`](packaging/atlas-monitor.spec) for COPR or a
 local `rpmbuild`.
@@ -236,15 +238,38 @@ make clean
 
 ## Updating
 
-Open **Settings** (the gear) → **Application** and click **Update and restart**.
-Atlas pulls the latest version of the selected **Update channel** from GitHub,
-rebuilds, and relaunches:
+Open **Settings** (the gear) → **Application** and use the update button there.
 
-- **Release (main)** — the stable `main` branch (the default).
-- **Beta (beta)** — the newest features and fixes, for trying things early.
+This build has one channel and there is nothing to choose: it always follows the
+`minimal` branch. Pulling `main` or `beta` would rebuild this install as the full
+application, assistant and all, which is the one thing someone who installed the
+minimal build has asked not to have.
 
-The pull is fast-forward only and is skipped entirely if the source checkout has
-local changes, so a tree you are editing is never overwritten.
+What happens when you click it depends on how Atlas was installed, which it works
+out for itself:
+
+| Installed by | What the button does |
+| --- | --- |
+| `make install` (a source checkout) | Pulls the `minimal` branch, rebuilds, and relaunches into the new version. |
+| A release tarball or `install.sh` | Fetches the source once, then behaves like a checkout from then on. |
+| pacman, apt, dnf or zypper | Checks for a newer version and gives you the one command that installs it, with a button to copy it and another to run it in a terminal. |
+
+Checking for a new version never needs a checkout: a packaged install reads
+`VERSION` on the `minimal` branch over HTTPS, so it still finds out when something
+is waiting.
+
+A packaged copy is deliberately never overwritten from inside the app. Writing
+over `/usr/bin/atlas-monitor` would leave the package database describing a file
+that is no longer there, and the next upgrade or removal of the real package
+would act on the wrong thing.
+
+Where Atlas does rebuild, the pull is fast-forward only and is skipped entirely
+if the checkout has local changes, so a tree you are editing is never
+overwritten. The new version is installed back into the same prefix the running
+copy came from, so an update never leaves two Atlases for `PATH` to choose
+between. Rebuilding needs Go, a C compiler and the GTK 4 and libadwaita
+development files; if any are missing, Atlas names them and the command that
+installs them rather than failing with a page of compiler errors.
 
 ## Notes
 

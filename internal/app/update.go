@@ -21,23 +21,29 @@ type UpdateInfo struct {
 // the list is to answer "is this worth doing now".
 const maxChangelogBullets = 8
 
-// CheckUpdate fetches the channel and reports what is waiting.
+// CheckUpdate reports what the channel is offering.
 //
-// Everything it needs comes out of the fetch: the version and the changelog are
-// read from the fetched objects with `git show`, so no API is involved and the
-// only network access is the fetch itself. It changes nothing on disk.
+// How it finds out depends on how Atlas was installed. A source checkout is
+// compared commit by commit, which is exact and notices work that has not been
+// given a version number yet. Anything else — a packaged install, or a tarball —
+// has no checkout to compare in, and asks the channel for its version instead.
+// Both change nothing on disk.
 func (a *App) CheckUpdate(channel string) (UpdateInfo, error) {
-	var info UpdateInfo
-	src := sourceDir()
-	if src == "" {
-		return info, fmt.Errorf("source location unknown — install with `make install`")
+	in := a.install()
+	if in.Kind != FromSource {
+		return a.checkRemote(channel)
 	}
+
+	var info UpdateInfo
+	src := in.Source
 	git := func(args ...string) (string, error) {
 		out, err := exec.Command("git", append([]string{"-C", src}, args...)...).Output()
 		return strings.TrimSpace(string(out)), err
 	}
 	if _, err := git("rev-parse", "--git-dir"); err != nil {
-		return info, fmt.Errorf("source is not a git checkout")
+		// A recorded directory that is not a checkout can still be asked about
+		// by version, which is better than refusing to look.
+		return a.checkRemote(channel)
 	}
 	if _, err := git("fetch", "--quiet", "origin", channel); err != nil {
 		return info, fmt.Errorf("couldn't reach GitHub")
@@ -45,7 +51,7 @@ func (a *App) CheckUpdate(channel string) (UpdateInfo, error) {
 
 	local, _ := git("rev-parse", "--short", "HEAD")
 	remote, _ := git("rev-parse", "--short", "origin/"+channel)
-	const name = "Minimal"
+	name := channelName(channel)
 
 	// Up to date when origin/<channel> is already contained in HEAD.
 	if exec.Command("git", "-C", src, "merge-base", "--is-ancestor", "origin/"+channel, "HEAD").Run() == nil {
