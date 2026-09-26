@@ -2,7 +2,7 @@
 # for the Go module cache, so enable it on the COPR project
 # (`copr-cli modify --enable-net on`) or run rpmbuild with modules pre-fetched.
 Name:           atlas-monitor
-Version:        %{?_version}%{!?_version:0.11.0}
+Version:        %{?_version}%{!?_version:0.11.1}
 Release:        1%{?dist}
 Summary:        Lightweight system monitor for GNOME — CPU, memory, disk, network, GPU
 
@@ -64,6 +64,13 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/com.atlas.Monitor.des
 %{_datadir}/icons/hicolor/scalable/actions/atlas-*-symbolic.svg
 
 %changelog
+* Sat Sep 26 2026 EternalHell <77252745+EternalCoder454@users.noreply.github.com> - 0.11.1-1
+- Updating works however Atlas was installed, not only from a source checkout
+- A packaged copy is told which command updates it rather than being told to run make install
+- New versions are found without a source checkout to compare against
+- An update installs back over the running copy instead of leaving a second one behind
+- Missing build dependencies are named along with the command that installs them
+
 * Thu Sep 24 2026 EternalHell <77252745+EternalCoder454@users.noreply.github.com> - 0.8.3-1
 - The Apps list reorders live so the busiest program stays at the top
 - Heavy processor users are highlighted in the list
