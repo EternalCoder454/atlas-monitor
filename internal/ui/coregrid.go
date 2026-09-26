@@ -40,6 +40,25 @@ type coreGrid struct {
 
 const coreRowHeight = 34
 
+// minCoreCellWidth is the narrowest a core cell can be and still fit "Core 31"
+// and a percentage on one line, measured against the grid's own font size.
+const minCoreCellWidth = 108
+
+// fitColumns picks how many cores sit across a grid of the given width.
+func fitColumns(width, cores int) int {
+	cols := width / minCoreCellWidth
+	if cols > cpuColumns {
+		cols = cpuColumns
+	}
+	if cols > cores {
+		cols = cores
+	}
+	if cols < 2 {
+		cols = 2
+	}
+	return cols
+}
+
 func newCoreGrid(n int) *coreGrid {
 	g := &coreGrid{
 		DrawingArea: gtk.NewDrawingArea(),
@@ -92,6 +111,15 @@ func (g *coreGrid) draw(area *gtk.DrawingArea, cr *cairo.Context, w, h int) {
 	}
 	fr, fg, fb := graph.Foreground(area)
 
+	// Columns follow the width rather than a constant. Eight of them across a
+	// 560px window leaves each core about 65px, which is not enough for a name
+	// and a reading side by side: "Core 0" and "4%" printed straight through
+	// each other. The grid re-flows instead, down to two columns.
+	if cols := fitColumns(w, len(g.usages)); cols != g.cols {
+		g.cols = cols
+		rows := (len(g.usages) + cols - 1) / cols
+		g.SetContentHeight(rows * coreRowHeight)
+	}
 	cellW := float64(w) / float64(g.cols)
 	if g.names == nil {
 		g.names = make([]*pango.Layout, n)

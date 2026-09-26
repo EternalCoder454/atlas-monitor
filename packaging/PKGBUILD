@@ -39,7 +39,7 @@ sha256sums=('SKIP')
 # is installed and never be used. Keep in step with ICONS in the Makefile —
 # TestPackagingListsAgree checks that every installer agrees.
 _icons=(cpu memory disk gpu network wifi battery apps services settings
-        update trash reset)
+        update trash reset menu)
 
 pkgver() {
     cd "$_pkgname"
