@@ -9,9 +9,13 @@ import (
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
 	"atlas-monitor/internal/config"
+	"atlas-monitor/internal/health"
 	"atlas-monitor/internal/process"
+	"atlas-monitor/internal/services"
 	"atlas-monitor/internal/stats"
 	"atlas-monitor/internal/sysmem"
+	"fmt"
+	"strings"
 )
 
 // lazyView is a page that is only built the first time it is opened. A machine
@@ -48,6 +52,17 @@ type Window struct {
 	sidebar  *sidebar
 	split    *adw.OverlaySplitView
 	menuBtn  *gtk.ToggleButton
+
+	// The alert badge, and what it is reporting. failedSvc is refreshed on a
+	// timer of its own because it costs a D-Bus round trip, unlike everything
+	// else here which is already in the snapshot.
+	alertBtn   *gtk.MenuButton
+	alertList  *gtk.Box
+	alertShown string
+	failedSvc  []string
+	lastSvc    time.Time
+	svc        *services.Client
+
 	active   string
 	visible  bool
 	tick     glib.SourceHandle
@@ -157,6 +172,13 @@ func (w *Window) Build() gtk.Widgetter {
 
 	// The button that opens it while it is an overlay. It is hidden the rest of
 	// the time: with the sidebar already on screen there is nothing to toggle.
+	w.buildAlertButton()
+	// The alert badge asks systemd for failed units; a machine without it just
+	// never reports that kind of problem.
+	if c, err := services.NewClient(); err == nil {
+		w.svc = c
+	}
+
 	w.menuBtn = gtk.NewToggleButton()
 	w.menuBtn.SetIconName("atlas-menu-symbolic")
 	w.menuBtn.SetTooltipText("Show the sidebar")
@@ -247,6 +269,7 @@ func (w *Window) installTick() {
 			w.col.Read(w.sidebar.update)
 		}
 		w.tickActive()
+		w.refreshAlerts()
 		if time.Since(w.lastTrim) >= trimInterval {
 			w.lastTrim = time.Now()
 			go sysmem.Trim() // off the main loop; malloc_trim walks the heap
@@ -372,4 +395,115 @@ func (w *Window) updateNetIcon(active string) {
 		}
 	}
 	w.netExp.SetIconName(icon)
+}
+
+// AlertButton is the badge for the window's header bar: hidden while the
+// machine is healthy, and showing what is wrong when it is not.
+func (w *Window) AlertButton() *gtk.MenuButton { return w.alertBtn }
+
+// buildAlertButton makes the badge and the list it drops down.
+func (w *Window) buildAlertButton() {
+	w.alertList = gtk.NewBox(gtk.OrientationVertical, 10)
+	w.alertList.SetMarginTop(12)
+	w.alertList.SetMarginBottom(12)
+	w.alertList.SetMarginStart(14)
+	w.alertList.SetMarginEnd(14)
+
+	pop := gtk.NewPopover()
+	pop.SetChild(w.alertList)
+
+	w.alertBtn = gtk.NewMenuButton()
+	w.alertBtn.SetIconName("atlas-warning-symbolic")
+	w.alertBtn.SetPopover(pop)
+	w.alertBtn.SetVisible(false)
+	w.alertBtn.AddCSSClass("am-alert-button")
+}
+
+// alertPoll is how often the failed-service list is refreshed. Everything else
+// an alert is built from is already in the snapshot; this is the one question
+// that has to leave the process, so it is asked rarely.
+const alertPoll = 20 * time.Second
+
+// refreshAlerts re-runs the checks and updates the badge.
+func (w *Window) refreshAlerts() {
+	if w.alertBtn == nil {
+		return
+	}
+	if w.svc != nil && time.Since(w.lastSvc) >= alertPoll {
+		w.lastSvc = time.Now()
+		svc := w.svc
+		go func() {
+			failed, err := svc.Failed()
+			if err != nil {
+				return
+			}
+			glib.IdleAdd(func() { w.failedSvc = failed })
+		}()
+	}
+
+	var alerts []health.Alert
+	w.col.Read(func(s *stats.Stats) { alerts = health.Check(s, w.failedSvc) })
+
+	if len(alerts) == 0 {
+		w.alertBtn.SetVisible(false)
+		w.alertShown = ""
+		return
+	}
+
+	// Rebuilding the list every tick would churn widgets for a machine that has
+	// been unhappy about the same thing for an hour, so it only happens when
+	// what is being said changes.
+	key := alertKey(alerts)
+	if key == w.alertShown {
+		return
+	}
+	w.alertShown = key
+
+	for child := w.alertList.FirstChild(); child != nil; child = w.alertList.FirstChild() {
+		w.alertList.Remove(child)
+	}
+	for _, a := range alerts {
+		title := gtk.NewLabel(a.Title)
+		title.SetXAlign(0)
+		title.AddCSSClass("heading")
+		detail := gtk.NewLabel(a.Detail)
+		detail.SetXAlign(0)
+		detail.SetWrap(true)
+		detail.SetMaxWidthChars(42)
+		detail.AddCSSClass("dim-label")
+		detail.AddCSSClass("caption")
+
+		row := gtk.NewBox(gtk.OrientationVertical, 2)
+		row.Append(title)
+		row.Append(detail)
+		w.alertList.Append(row)
+	}
+
+	w.alertBtn.SetTooltipText(alertTooltip(alerts))
+	if health.Worst(alerts) == health.Critical {
+		w.alertBtn.AddCSSClass("am-alert-critical")
+	} else {
+		w.alertBtn.RemoveCSSClass("am-alert-critical")
+	}
+	w.alertBtn.SetVisible(true)
+}
+
+// alertKey is what the badge is currently saying, so an unchanged complaint
+// does not rebuild the popover.
+func alertKey(alerts []health.Alert) string {
+	var b strings.Builder
+	for _, a := range alerts {
+		b.WriteString(a.Title)
+		b.WriteByte(30)
+		b.WriteString(a.Detail)
+		b.WriteByte(31)
+	}
+	return b.String()
+}
+
+func alertTooltip(alerts []health.Alert) string {
+	if len(alerts) == 1 {
+		return alerts[0].Title
+	}
+	return fmt.Sprintf("%d things need attention", len(alerts))
 }

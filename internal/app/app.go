@@ -119,6 +119,11 @@ func (a *App) activate() {
 	if btn := a.content.MenuButton(); btn != nil {
 		header.PackStart(btn)
 	}
+	// The alert badge sits on the right, beside the gear: it is a notice rather
+	// than navigation, and it is not there at all while the machine is fine.
+	if btn := a.content.AlertButton(); btn != nil {
+		header.PackEnd(btn)
+	}
 
 	gear := gtk.NewButtonFromIconName("atlas-settings-symbolic")
 	gear.SetTooltipText("Settings")
