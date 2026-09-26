@@ -34,7 +34,13 @@ jobs:
       - name: Cache dnf packages
         uses: actions/cache@v4
         with:
-          path: /var/cache/dnf
+          # Fedora is on dnf5, which keeps its packages under libdnf5; the old
+          # path is listed too so this keeps working either way. Caching the
+          # wrong one silently saves nothing at all — the run after reports
+          # "cache not found" and pays full price again.
+          path: |
+            /var/cache/libdnf5
+            /var/cache/dnf
           key: dnf-fedora-${{ hashFiles('.github/workflows/ci.yml') }}
           restore-keys: dnf-fedora-
 
@@ -119,7 +125,13 @@ jobs:
       - name: Cache dnf packages
         uses: actions/cache@v4
         with:
-          path: /var/cache/dnf
+          # Fedora is on dnf5, which keeps its packages under libdnf5; the old
+          # path is listed too so this keeps working either way. Caching the
+          # wrong one silently saves nothing at all — the run after reports
+          # "cache not found" and pays full price again.
+          path: |
+            /var/cache/libdnf5
+            /var/cache/dnf
           key: dnf-fedora-${{ hashFiles('.github/workflows/ci.yml') }}
           restore-keys: dnf-fedora-
 
