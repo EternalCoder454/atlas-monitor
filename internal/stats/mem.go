@@ -1,87 +1,79 @@
 package stats
 
-import (
-	"bytes"
+// The part of memory reporting that is the same everywhere.
+//
+// What the two platforms disagree about is only where the numbers come from:
+// /proc/meminfo in kilobytes, or GlobalMemoryStatusEx and the commit charge in
+// bytes. Once they are bytes, deciding what counts as used and turning that into
+// the percentages the charts plot is one piece of arithmetic, and it lives here
+// so the two cannot drift apart.
 
-	"atlas-monitor/internal/sysfs"
-)
+// memSample is one reading, in bytes, as either platform reports it.
+//
+// Free and Available are both here because Linux distinguishes them — Free is
+// memory nobody has touched, Available is what a new program could get without
+// swapping, which is the larger and more useful figure. Windows reports one
+// number for both.
+type memSample struct {
+	Total     uint64
+	Available uint64
+	Free      uint64
+	Cached    uint64
+	SwapTotal uint64
+	SwapFree  uint64
 
-// initMem allocates the memory ring buffers and holds /proc/meminfo open.
-func (c *Collector) initMem() {
-	c.memInfo = sysfs.OpenSize("/proc/meminfo", 4096)
+	// SwapUsedDirect is set by a platform that measures swap use rather than
+	// deriving it from what is free. Windows estimates the page file in use and
+	// has no meaningful "free" figure to subtract from.
+	SwapUsedDirect uint64
+	HaveSwapUsed   bool
+}
+
+// initMemHist allocates the ring buffers the memory charts draw from.
+func (c *Collector) initMemHist() {
 	c.write(func(s *Stats) {
 		s.Mem.UsageHist = NewRingBuffer()
 		s.Mem.SwapHist = NewRingBuffer()
 	})
 }
 
-// collectMem parses /proc/meminfo. All values are converted to bytes.
-// The file is read into a reused buffer and scanned as bytes: at one sample a
-// second, a map and fifty per-line field slices are not worth allocating.
-func (c *Collector) collectMem() {
-	data, ok := c.memInfo.Bytes()
-	if !ok {
-		return
-	}
-
-	var total, avail, free, cached, sreclaim, buffers, swapTotal, swapFree uint64
-	for len(data) > 0 {
-		var line []byte
-		line, data = nextLine(data)
-		key, kb, valid := meminfoLine(line)
-		if !valid {
-			continue
-		}
-		// Values in /proc/meminfo are in kB.
-		switch string(key) { // no allocation: the compiler compares in place
-		case "MemTotal":
-			total = kb
-		case "MemAvailable":
-			avail = kb
-		case "MemFree":
-			free = kb
-		case "Cached":
-			cached = kb
-		case "SReclaimable":
-			sreclaim = kb
-		case "Buffers":
-			buffers = kb
-		case "SwapTotal":
-			swapTotal = kb
-		case "SwapFree":
-			swapFree = kb
-		}
-	}
-	const kB = 1024
-	total, avail, free = total*kB, avail*kB, free*kB
-	cachedTotal := (cached + sreclaim + buffers) * kB
-	swapTotal, swapFree = swapTotal*kB, swapFree*kB
-
+// publishMem turns a sample into what the UI reads.
+//
+// Used is total minus *available*, not minus free. Page cache is memory the
+// kernel will hand back the moment something wants it, so counting it as used
+// would show a healthy machine as nearly full — which is the complaint every
+// system monitor that gets this wrong receives.
+func (c *Collector) publishMem(m memSample) {
 	used := uint64(0)
-	if total > avail {
-		used = total - avail
+	if m.Total > m.Available {
+		used = m.Total - m.Available
 	}
-	swapUsed := uint64(0)
-	if swapTotal > swapFree {
-		swapUsed = swapTotal - swapFree
+
+	swapUsed := m.SwapUsedDirect
+	if !m.HaveSwapUsed {
+		if m.SwapTotal > m.SwapFree {
+			swapUsed = m.SwapTotal - m.SwapFree
+		} else {
+			swapUsed = 0
+		}
 	}
 
 	usagePct := 0.0
-	if total > 0 {
-		usagePct = float64(used) / float64(total) * 100
+	if m.Total > 0 {
+		usagePct = float64(used) / float64(m.Total) * 100
 	}
 	swapPct := 0.0
-	if swapTotal > 0 {
-		swapPct = float64(swapUsed) / float64(swapTotal) * 100
+	if m.SwapTotal > 0 {
+		swapPct = float64(swapUsed) / float64(m.SwapTotal) * 100
 	}
 
 	c.write(func(s *Stats) {
-		s.Mem.Total = total
+		s.Mem.Total = m.Total
 		s.Mem.Used = used
-		s.Mem.Cached = cachedTotal
-		s.Mem.Available = avail
-		s.Mem.Free = free
-		s.Mem.SwapTotal = swapTotal
+		s.Mem.Cached = m.Cached
+		s.Mem.Available = m.Available
+		s.Mem.Free = m.Free
+		s.Mem.SwapTotal = m.SwapTotal
 		s.Mem.SwapUsed = swapUsed
 		if s.Mem.UsageHist != nil {
 			s.Mem.UsageHist.Push(usagePct)
@@ -90,17 +82,4 @@ func (c *Collector) collectMem() {
 			s.Mem.SwapHist.Push(swapPct)
 		}
 	})
-}
-
-// meminfoLine splits one "Key:   1234 kB" line into its key and value.
-func meminfoLine(line []byte) (key []byte, value uint64, ok bool) {
-	i := bytes.IndexByte(line, ':')
-	if i < 0 {
-		return nil, 0, false
-	}
-	v := field(line[i+1:], 0)
-	if v == nil {
-		return nil, 0, false
-	}
-	return line[:i], parseUintBytes(v), true
 }

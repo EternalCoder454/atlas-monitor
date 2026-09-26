@@ -15,9 +15,13 @@ package winapi
 
 import (
 	"fmt"
+	"os"
+	"runtime"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 var (
@@ -158,15 +162,20 @@ const (
 	_ = 48 - unsafe.Sizeof(processorPerformance{})
 )
 
-// CPUTimes is one logical processor's cumulative time, in seconds.
+// CPUTimes is one logical processor's cumulative time, in the 100-nanosecond
+// units Windows counts in.
+//
+// The raw counts are kept rather than converted to seconds: the only thing done
+// with them is a ratio of differences between two samples, and integers that only
+// ever increase are the right shape for that.
 //
 // Busy excludes idle. Windows reports KernelTime with idle *included*, which is
-// the single easiest thing to get wrong here — left uncorrected every core reads
+// the single easiest thing to get wrong here — left uncorrected, every core reads
 // as permanently busy — so the subtraction happens once, on the way out.
 type CPUTimes struct {
-	Idle  float64
-	Busy  float64
-	Total float64
+	Idle  uint64
+	Busy  uint64
+	Total uint64
 }
 
 // ReadCPUTimes returns one entry per logical processor.
@@ -192,11 +201,18 @@ func ReadCPUTimes() ([]CPUTimes, error) {
 		out := make([]CPUTimes, count)
 		for i := 0; i < count; i++ {
 			p := buf[i]
-			idle := float64(p.IdleTime) / hundredNS
-			// KernelTime includes IdleTime; user time is separate.
-			kernel := float64(p.KernelTime)/hundredNS - idle
-			user := float64(p.UserTime) / hundredNS
-			out[i] = CPUTimes{Idle: idle, Busy: kernel + user, Total: idle + kernel + user}
+			idle := uint64(p.IdleTime)
+			kernel := uint64(p.KernelTime)
+			user := uint64(p.UserTime)
+			// KernelTime includes IdleTime, so the busy part of it is the
+			// difference. Guarded because these are read without a lock and a
+			// sample torn across the two fields would otherwise underflow into an
+			// enormous number.
+			busy := user
+			if kernel > idle {
+				busy += kernel - idle
+			}
+			out[i] = CPUTimes{Idle: idle, Busy: busy, Total: idle + busy}
 		}
 		return out, nil
 	}
@@ -480,6 +496,7 @@ type Interface struct {
 	Type        uint32
 	Up          bool
 	SpeedBits   uint64
+	MAC         string
 	RxBytes     uint64
 	TxBytes     uint64
 	// Loopback and Virtual mark interfaces a person did not install: the
@@ -531,6 +548,7 @@ func ReadInterfaces() ([]Interface, error) {
 			Type:        row.Type,
 			Up:          row.OperStatus == ifOperStatusUp,
 			SpeedBits:   row.ReceiveLinkSpeed,
+			MAC:         macString(row.PhysicalAddress[:], row.PhysicalAddressLength),
 			RxBytes:     row.InOctets,
 			TxBytes:     row.OutOctets,
 			Loopback:    row.Type == ifTypeSoftwareLoopback,
@@ -544,3 +562,388 @@ func ReadInterfaces() ([]Interface, error) {
 // IsWireless reports whether an interface type is Wi-Fi, so the UI can pick the
 // right icon the way it does from /sys/class/net/*/wireless on Linux.
 func (i Interface) IsWireless() bool { return i.Type == ifTypeIEEE80211 }
+
+// ---------------------------------------------------------------- disks
+
+// diskPerformance is DISK_PERFORMANCE, the counters the storage stack keeps per
+// volume. Only the byte totals and the device name are read.
+type diskPerformance struct {
+	BytesRead           int64
+	BytesWritten        int64
+	ReadTime            int64
+	WriteTime           int64
+	IdleTime            int64
+	ReadCount           uint32
+	WriteCount          uint32
+	QueueDepth          uint32
+	SplitCount          uint32
+	QueryTime           int64
+	StorageDeviceNumber uint32
+	StorageManagerName  [8]uint16
+}
+
+// IOCTL_DISK_PERFORMANCE, assembled the way CTL_CODE does:
+// (IOCTL_DISK_BASE << 16) | (FILE_READ_ACCESS << 14) | (0x0008 << 2) | METHOD_BUFFERED.
+const ioctlDiskPerformance = (0x00000007 << 16) | (0x0001 << 14) | (0x0008 << 2) | 0
+
+// DiskIO is a volume's cumulative bytes read and written.
+type DiskIO struct {
+	ReadBytes  uint64
+	WriteBytes uint64
+}
+
+// ReadDiskIO asks a volume for its own byte counters.
+//
+// volume is a drive letter with no trailing separator, as in `C:`. The handle is
+// opened asking for no access at all, which is what lets this work without
+// administrator rights: querying performance counters needs the handle to exist,
+// not permission to read the data on it.
+//
+// The counters come from the partition manager and are only kept while disk
+// performance counters are enabled. They are on by default on current Windows,
+// but a machine where someone has turned them off reports nothing rather than
+// zero — hence the boolean.
+func ReadDiskIO(volume string) (DiskIO, bool) {
+	path, err := windows.UTF16PtrFromString(`\\.\` + volume)
+	if err != nil {
+		return DiskIO{}, false
+	}
+	h, err := windows.CreateFile(path, 0,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil,
+		windows.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		return DiskIO{}, false
+	}
+	defer windows.CloseHandle(h)
+
+	var perf diskPerformance
+	var got uint32
+	err = windows.DeviceIoControl(h, ioctlDiskPerformance,
+		nil, 0,
+		(*byte)(unsafe.Pointer(&perf)), uint32(unsafe.Sizeof(perf)),
+		&got, nil)
+	if err != nil {
+		return DiskIO{}, false
+	}
+	return DiskIO{ReadBytes: uint64(perf.BytesRead), WriteBytes: uint64(perf.BytesWritten)}, true
+}
+
+// Volume is one mounted volume: a drive letter and what is on it.
+type Volume struct {
+	// Root is the path with its separator, as in `C:\`; Letter is `C:`.
+	Root   string
+	Letter string
+	// Label is the volume's name, and FileSystem is NTFS, FAT32 and so on.
+	Label      string
+	FileSystem string
+	// Fixed is false for removable media, network shares and optical drives.
+	Fixed bool
+	// Remote marks a network share, which is worth telling apart: measuring one
+	// can block for as long as the server takes to answer.
+	Remote bool
+
+	TotalBytes uint64
+	FreeBytes  uint64
+}
+
+// Drive types from GetDriveType.
+const (
+	driveRemovable = 2
+	driveFixed     = 3
+	driveRemote    = 4
+	driveCDROM     = 5
+)
+
+// ReadVolumes enumerates the mounted volumes with their size and free space.
+//
+// A drive that is present but has no medium in it — an empty card reader, an
+// optical drive with the tray open — answers the size query with an error, and is
+// left out rather than listed as a disk of zero bytes.
+func ReadVolumes() ([]Volume, error) {
+	buf := make([]uint16, 512)
+	n, err := windows.GetLogicalDriveStrings(uint32(len(buf)), &buf[0])
+	if err != nil {
+		return nil, fmt.Errorf("GetLogicalDriveStrings: %w", err)
+	}
+	if int(n) > len(buf) {
+		buf = make([]uint16, n)
+		if _, err = windows.GetLogicalDriveStrings(uint32(len(buf)), &buf[0]); err != nil {
+			return nil, fmt.Errorf("GetLogicalDriveStrings: %w", err)
+		}
+	}
+
+	var out []Volume
+	for _, root := range splitNulUTF16(buf) {
+		rootPtr, err := windows.UTF16PtrFromString(root)
+		if err != nil {
+			continue
+		}
+		kind := windows.GetDriveType(rootPtr)
+		if kind == driveCDROM {
+			continue // an optical drive is not something to chart
+		}
+
+		v := Volume{
+			Root:   root,
+			Letter: strings.TrimSuffix(root, `\`),
+			Fixed:  kind == driveFixed,
+			Remote: kind == driveRemote,
+		}
+		if kind == driveRemovable && !hasMedium(rootPtr) {
+			continue
+		}
+
+		var free, total uint64
+		if err := windows.GetDiskFreeSpaceEx(rootPtr, nil, &total, &free); err != nil {
+			continue // no medium, or not ready
+		}
+		v.TotalBytes, v.FreeBytes = total, free
+
+		label := make([]uint16, 261)
+		fsName := make([]uint16, 261)
+		if err := windows.GetVolumeInformation(rootPtr,
+			&label[0], uint32(len(label)), nil, nil, nil,
+			&fsName[0], uint32(len(fsName))); err == nil {
+			v.Label = windows.UTF16ToString(label)
+			v.FileSystem = windows.UTF16ToString(fsName)
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// hasMedium reports whether a removable drive has anything in it, without
+// provoking the "please insert a disk" dialog that a bare query would.
+func hasMedium(root *uint16) bool {
+	old := windows.SetErrorMode(windows.SEM_FAILCRITICALERRORS)
+	defer windows.SetErrorMode(old)
+	var free, total uint64
+	return windows.GetDiskFreeSpaceEx(root, nil, &total, &free) == nil
+}
+
+// splitNulUTF16 splits the NUL-separated, double-NUL-terminated list that several
+// Windows calls return into strings.
+func splitNulUTF16(buf []uint16) []string {
+	var out []string
+	start := 0
+	for i, c := range buf {
+		if c != 0 {
+			continue
+		}
+		if i == start {
+			break // the second NUL: end of the list
+		}
+		out = append(out, windows.UTF16ToString(buf[start:i]))
+		start = i + 1
+	}
+	return out
+}
+
+// SystemDrive is the drive Windows is installed on, as `C:` with no separator.
+// It comes from the environment because that is where Windows itself publishes
+// it, and it is not always C.
+func SystemDrive() string {
+	return strings.TrimSuffix(os.Getenv("SystemDrive"), `\`)
+}
+
+// VolumeSpace returns a volume's total and available bytes. root is a path with
+// its separator, as in `C:\`.
+//
+// Available is what this user may actually use, which on a volume with quotas is
+// less than what is unallocated. That matches statfs's Bavail on Linux, which is
+// also the caller-visible figure rather than the raw one.
+func VolumeSpace(root string) (total, available uint64, ok bool) {
+	p, err := windows.UTF16PtrFromString(root)
+	if err != nil {
+		return 0, 0, false
+	}
+	old := windows.SetErrorMode(windows.SEM_FAILCRITICALERRORS)
+	defer windows.SetErrorMode(old)
+
+	var free uint64
+	if err := windows.GetDiskFreeSpaceEx(p, &available, &total, &free); err != nil {
+		return 0, 0, false
+	}
+	return total, available, true
+}
+
+// ---------------------------------------------------------------- processor detail
+
+var (
+	powrprof                    = windows.NewLazySystemDLL("powrprof.dll")
+	procCallNtPowerInformation  = powrprof.NewProc("CallNtPowerInformation")
+	procGetLogicalProcessorInfo = kernel32.NewProc("GetLogicalProcessorInformationEx")
+)
+
+// processorPowerInformation is PROCESSOR_POWER_INFORMATION, one per logical
+// processor.
+type processorPowerInformation struct {
+	Number           uint32
+	MaxMhz           uint32
+	CurrentMhz       uint32
+	MhzLimit         uint32
+	MaxIdleState     uint32
+	CurrentIdleState uint32
+}
+
+const (
+	_ = unsafe.Sizeof(processorPowerInformation{}) - 24
+	_ = 24 - unsafe.Sizeof(processorPowerInformation{})
+)
+
+// processorInformationLevel is the ProcessorInformation information level for
+// CallNtPowerInformation.
+const processorInformationLevel = 11
+
+// ReadFrequencies returns each logical processor's current and maximum clock in
+// MHz.
+//
+// This is the honest source for a live frequency on Windows. The registry's ~MHz
+// is the clock the machine booted at and never changes, so a processor sitting at
+// 800 MHz or boosting to 4.8 GHz would read identically — which is the whole
+// thing the reading is for.
+func ReadFrequencies() (current, max []uint32, err error) {
+	n := runtime.NumCPU()
+	buf := make([]processorPowerInformation, n)
+	size := uint32(n) * uint32(unsafe.Sizeof(processorPowerInformation{}))
+
+	// The first two arguments are for setting information, which is not what this
+	// is doing, so they are nil.
+	r, _, callErr := procCallNtPowerInformation.Call(
+		uintptr(processorInformationLevel),
+		0, 0,
+		uintptr(unsafe.Pointer(&buf[0])), uintptr(size))
+	// CallNtPowerInformation returns an NTSTATUS: zero is success.
+	if r != 0 {
+		return nil, nil, fmt.Errorf("CallNtPowerInformation: status %#x (%v)", r, callErr)
+	}
+
+	current = make([]uint32, n)
+	max = make([]uint32, n)
+	for i := range buf {
+		current[i] = buf[i].CurrentMhz
+		max[i] = buf[i].MaxMhz
+	}
+	return current, max, nil
+}
+
+// Relationship values for GetLogicalProcessorInformationEx.
+const (
+	relationProcessorCore    = 0
+	relationCache            = 2
+	relationProcessorPackage = 3
+	relationAll              = 0xffff
+)
+
+// Cache types, from LOGICAL_PROCESSOR_RELATIONSHIP's CACHE_RELATIONSHIP.
+const (
+	cacheUnified     = 0
+	cacheInstruction = 1
+	cacheData        = 2
+)
+
+// Topology is how many of each thing the machine has, and the size of one core's
+// caches in bytes.
+type Topology struct {
+	Logical   int
+	PhysCores int
+	Sockets   int
+
+	L1D, L1I, L2, L3 uint64
+}
+
+// ReadTopology counts cores, sockets and caches.
+//
+// The records are variable-length and self-describing: each carries its own size,
+// so the walk steps by that rather than by any structure's size. Only the few
+// fields that are read are decoded, at fixed offsets from the start of a record,
+// which avoids transcribing three union members whose layouts would then all have
+// to be kept right.
+func ReadTopology() (Topology, error) {
+	t := Topology{Logical: runtime.NumCPU()}
+
+	var size uint32
+	r, _, _ := procGetLogicalProcessorInfo.Call(uintptr(relationAll), 0, uintptr(unsafe.Pointer(&size)))
+	if r != 0 && size == 0 {
+		return t, fmt.Errorf("GetLogicalProcessorInformationEx: no size")
+	}
+	buf := make([]byte, size)
+	r, _, err := procGetLogicalProcessorInfo.Call(
+		uintptr(relationAll), uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)))
+	if r == 0 {
+		return t, fmt.Errorf("GetLogicalProcessorInformationEx: %w", err)
+	}
+
+	// Caches are reported per core, so the same L1 appears once for every core on
+	// the machine. Only the first of each level is kept: the figure Atlas shows is
+	// "how big is a core's L1", not the sum across the package.
+	for off := 0; off+8 <= int(size); {
+		rel := *(*uint32)(unsafe.Pointer(&buf[off]))
+		recSize := int(*(*uint32)(unsafe.Pointer(&buf[off+4])))
+		if recSize < 8 || off+recSize > int(size) {
+			break // a malformed record must not spin or read past the buffer
+		}
+		body := off + 8
+
+		switch rel {
+		case relationProcessorCore:
+			t.PhysCores++
+		case relationProcessorPackage:
+			t.Sockets++
+		case relationCache:
+			// CACHE_RELATIONSHIP: Level, Associativity, LineSize, CacheSize, Type.
+			if body+16 <= off+recSize {
+				level := buf[body]
+				cacheSize := uint64(*(*uint32)(unsafe.Pointer(&buf[body+4])))
+				cacheType := *(*uint32)(unsafe.Pointer(&buf[body+8]))
+				switch {
+				case level == 1 && cacheType == cacheData && t.L1D == 0:
+					t.L1D = cacheSize
+				case level == 1 && cacheType == cacheInstruction && t.L1I == 0:
+					t.L1I = cacheSize
+				case level == 1 && cacheType == cacheUnified && t.L1D == 0:
+					// A unified L1 counts as both rather than neither.
+					t.L1D, t.L1I = cacheSize, cacheSize
+				case level == 2 && t.L2 == 0:
+					t.L2 = cacheSize
+				case level == 3 && t.L3 == 0:
+					t.L3 = cacheSize
+				}
+			}
+		}
+		off += recSize
+	}
+	return t, nil
+}
+
+// ProcessorName is the model string, as the firmware reported it.
+func ProcessorName() string {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE,
+		`HARDWARE\DESCRIPTION\System\CentralProcessor\0`, registry.QUERY_VALUE)
+	if err != nil {
+		return ""
+	}
+	defer k.Close()
+	name, _, err := k.GetStringValue("ProcessorNameString")
+	if err != nil {
+		return ""
+	}
+	return strings.Join(strings.Fields(name), " ") // collapse the padding it comes with
+}
+
+// macString formats a hardware address the way Linux writes it in sysfs, so both
+// platforms hand the UI the same shape of string. An interface with no hardware
+// address — a tunnel, the loopback — gets "".
+func macString(addr []byte, n uint32) string {
+	if n == 0 || int(n) > len(addr) {
+		return ""
+	}
+	var b strings.Builder
+	for i := 0; i < int(n); i++ {
+		if i > 0 {
+			b.WriteByte(':')
+		}
+		fmt.Fprintf(&b, "%02x", addr[i])
+	}
+	return b.String()
+}
