@@ -22,6 +22,23 @@ version="${1:-$(cat VERSION)}"
 name="atlas-monitor-${version}-windows-x86_64"
 dist="dist/$name"
 
+# The icon and version block, compiled into an object the Go linker picks up.
+#
+# The name matters: Go links a .syso from the package directory into every build,
+# but honours a _GOOS_GOARCH suffix — so called this, it is invisible to a Linux
+# build of the same tree. It is generated rather than committed, from the same
+# VERSION the app reports about itself.
+echo "==> compiling Windows resources"
+version_comma="$(echo "$version" | awk -F. '{printf "%d,%d,%d,0", $1, $2, $3}')"
+sed -e "s/@VERSION@/$version/g" -e "s/@V_COMMA@/$version_comma/g" \
+    packaging/windows-resource.rc.in > /tmp/atlas-resource.rc
+if command -v windres >/dev/null 2>&1; then
+    windres -O coff -i /tmp/atlas-resource.rc -o atlas_windows_amd64.syso
+    echo "    icon and version block: $(stat -c%s atlas_windows_amd64.syso) bytes"
+else
+    echo "    windres not found; building without an icon or version block" >&2
+fi
+
 echo "==> building atlas-monitor.exe"
 CGO_ENABLED=1 go build -trimpath -ldflags="-s -w -H=windowsgui" -o atlas-monitor.exe .
 
