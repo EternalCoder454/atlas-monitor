@@ -20,6 +20,7 @@ import (
 	"atlas-monitor/internal/gfx"
 	"atlas-monitor/internal/gpu"
 	"atlas-monitor/internal/stats"
+	"atlas-monitor/internal/theme"
 	"atlas-monitor/internal/ui"
 )
 
@@ -45,6 +46,11 @@ type App struct {
 	// own, so this is settled through a sync.Once rather than a plain flag.
 	installed   Install
 	installOnce sync.Once
+
+	// themeCSS carries the chosen theme's colour overrides. It is kept so that
+	// changing theme can replace its contents instead of stacking another
+	// provider on the display for every change.
+	themeCSS *gtk.CSSProvider
 }
 
 // New creates the application. css is the embedded stylesheet contents and
@@ -173,6 +179,7 @@ func (a *App) activate() {
 
 // onSettingsChanged applies saved settings to the running app.
 func (a *App) onSettingsChanged() {
+	a.applyTheme()
 	a.aiClient.SetConfig(a.settings.OllamaURL, a.settings.Model)
 	a.content.SetAIEnabled(a.settings.AIEnabled)
 	a.content.RefreshQuickPrompts()
@@ -257,16 +264,75 @@ func (a *App) checkUpdate(channel string) (available bool, info string, err erro
 	return u.Available, u.Summary, err
 }
 
-// loadCSS installs the embedded stylesheet for the default display.
+// loadCSS installs the embedded stylesheet and the theme's colours.
+//
+// Three providers, in order of increasing priority: the stylesheet, the picker's
+// circles, and the chosen theme's colour overrides. The overrides have to come
+// last, because they redefine the very names the stylesheet is written in terms of.
 func (a *App) loadCSS() {
-	if a.css == "" {
+	display := gdk.DisplayGetDefault()
+	if display == nil {
 		return
 	}
-	provider := gtk.NewCSSProvider()
-	provider.LoadFromString(a.css)
-	if display := gdk.DisplayGetDefault(); display != nil {
-		gtk.StyleContextAddProviderForDisplay(
-			display, provider, gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+	add := func(css string, priority uint) *gtk.CSSProvider {
+		if css == "" {
+			return nil
+		}
+		p := gtk.NewCSSProvider()
+		p.LoadFromString(css)
+		gtk.StyleContextAddProviderForDisplay(display, p, priority)
+		return p
+	}
+
+	add(a.css, gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+	// The circles are generated from the theme table, so one cannot be added
+	// without its colours. See theme.SwatchCSS.
+	add(theme.SwatchCSS(), gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+	// Empty to begin with and filled by applyTheme, which runs next and also
+	// runs again whenever the choice changes.
+	a.themeCSS = gtk.NewCSSProvider()
+	// APPLICATION+1, not USER. USER is where GTK loads the person's own
+	// gtk.css, and an application that installs itself at the same priority is
+	// competing with their customisations on nothing but load order.
+	gtk.StyleContextAddProviderForDisplay(
+		display, a.themeCSS, gtk.STYLE_PROVIDER_PRIORITY_APPLICATION+1)
+	a.applyTheme()
+}
+
+// applyTheme puts the chosen theme into effect, live.
+//
+// Two separate things, and both matter. The colour scheme decides whether
+// libadwaita draws its light or dark widgets, and — because internal/graph works
+// out which side it is on from the foreground colour — whether the chart palette
+// is the one drawn for a dark background or the darkened one for a light background.
+// The overrides then supply the palette itself.
+//
+// An unset or unrecognised setting leaves the scheme on Default, which is
+// libadwaita following the desktop. That is what Atlas did before it had themes and
+// is still what it does until somebody picks one.
+func (a *App) applyTheme() {
+	mgr := adw.StyleManagerGetDefault()
+	if mgr == nil {
+		return
+	}
+
+	if theme.IsFollowing(a.settings.Theme) {
+		mgr.SetColorScheme(adw.ColorSchemeDefault)
+		if a.themeCSS != nil {
+			a.themeCSS.LoadFromString("")
+		}
+		return
+	}
+
+	t := theme.Resolve(a.settings.Theme, mgr.Dark())
+	if t.Dark {
+		mgr.SetColorScheme(adw.ColorSchemeForceDark)
+	} else {
+		mgr.SetColorScheme(adw.ColorSchemeForceLight)
+	}
+	if a.themeCSS != nil {
+		a.themeCSS.LoadFromString(t.CSS())
 	}
 }
 

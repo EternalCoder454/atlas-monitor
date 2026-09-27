@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -14,6 +15,7 @@ import (
 	"atlas-monitor/internal/format"
 	"atlas-monitor/internal/gfx"
 	"atlas-monitor/internal/sysmem"
+	"atlas-monitor/internal/theme"
 )
 
 const modelsURL = "https://ollama.com/library"
@@ -73,7 +75,23 @@ func ShowSettings(parent gtk.Widgetter, s *config.Settings, h SettingsHooks) {
 			stack.SetVisibleChildName(row.Name())
 		}
 	})
-	sidebar.SelectRow(sidebar.RowAtIndex(0))
+	// Dev aid, alongside ATLAS_OPEN_SETTINGS and ATLAS_VIEW: open the dialog on a
+	// named page. Screenshotting the theme picker otherwise means opening the
+	// dialog and clicking, which a capture script cannot do.
+	selected := 0
+	if want := os.Getenv("ATLAS_SETTINGS_PAGE"); want != "" {
+		for i := 0; ; i++ {
+			row := sidebar.RowAtIndex(i)
+			if row == nil {
+				break
+			}
+			if row.Name() == want {
+				selected = i
+				break
+			}
+		}
+	}
+	sidebar.SelectRow(sidebar.RowAtIndex(selected))
 
 	sidebarScroll := gtk.NewScrolledWindow()
 	sidebarScroll.SetChild(sidebar)
@@ -286,6 +304,7 @@ func newAppPage(s *config.Settings, h SettingsHooks) *appPage {
 		version = "unknown"
 	}
 
+	p.page.Add(themeGroup(s, h))
 	p.page.Add(perfGroup(s, h))
 
 	updGroup := adw.NewPreferencesGroup()
@@ -410,6 +429,119 @@ func newAppPage(s *config.Settings, h SettingsHooks) *appPage {
 	aboutGroup.Add(loc)
 	p.page.Add(aboutGroup)
 	return p
+}
+
+// themeGroup builds the colour theme picker: one circle per theme, split between
+// the window background and the accent.
+//
+// Circles rather than a dropdown because the thing being chosen is a colour, and a
+// list of names makes you pick one to find out what it looks like. Split circles
+// rather than single ones because a theme is two decisions — what the window is and
+// what stands out against it — and either one alone is a misleading preview.
+//
+// There is no circle for "follow the desktop". It is the state Atlas starts in and
+// it is not a palette, so it sits underneath as a plain button, and only when there
+// is something to go back from.
+func themeGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
+	g := adw.NewPreferencesGroup()
+	g.SetTitle("Theme")
+
+	row := gtk.NewBox(gtk.OrientationHorizontal, 18)
+	row.SetHAlign(gtk.AlignCenter)
+	row.SetMarginTop(6)
+	row.SetMarginBottom(6)
+
+	// A small, quiet button. Added to the group's own box rather than to the
+	// group directly: a bare button there picks up the styling meant for a
+	// section heading and comes out bold and full width, which for the way back
+	// from a choice is much too loud.
+	follow := gtk.NewButtonWithLabel("Follow the desktop instead")
+	follow.SetHAlign(gtk.AlignCenter)
+	follow.AddCSSClass("flat")
+	follow.AddCSSClass("am-quiet-button")
+
+	// Every button is held so that choosing one can clear the others. A GtkCheckButton
+	// group would do that itself, but its indicator cannot be styled into a disc.
+	var buttons []*gtk.ToggleButton
+
+	describe := func() {
+		if theme.IsFollowing(s.Theme) {
+			g.SetDescription("Atlas is following the desktop's light and dark setting. " +
+				"Choose a theme to set it here instead.")
+			follow.SetVisible(false)
+			return
+		}
+		if t, ok := theme.ByID(s.Theme); ok {
+			g.SetDescription(t.Name + " — " + t.Summary)
+		}
+		follow.SetVisible(true)
+	}
+
+	// sync marks the chosen one and leaves the rest clear. The guard is for the
+	// notify that setting Active fires: without it, clearing the others would
+	// re-enter this through their own handlers.
+	syncing := false
+	sync := func() {
+		syncing = true
+		for i, b := range buttons {
+			b.SetActive(theme.Themes[i].ID == s.Theme)
+		}
+		syncing = false
+		describe()
+	}
+
+	for _, t := range theme.Themes {
+		t := t
+
+		swatch := gtk.NewToggleButton()
+		swatch.AddCSSClass("am-swatch")
+		swatch.AddCSSClass(theme.SwatchClass(t.ID))
+		swatch.SetTooltipText(t.Name + " — " + t.Summary)
+		// The button has no label, so without this a screen reader would announce
+		// an unnamed toggle five times over.
+		swatch.SetName(t.Name)
+		swatch.Widget.SetTooltipText(t.Name + " — " + t.Summary)
+
+		name := gtk.NewLabel(t.Name)
+		name.AddCSSClass("caption")
+
+		cell := gtk.NewBox(gtk.OrientationVertical, 6)
+		cell.SetHAlign(gtk.AlignCenter)
+		cell.Append(swatch)
+		cell.Append(name)
+		row.Append(cell)
+
+		swatch.ConnectToggled(func() {
+			if syncing {
+				return
+			}
+			if !swatch.Active() {
+				// Clicking the chosen one again would otherwise turn the theme
+				// off and leave nothing selected. It stays chosen.
+				swatch.SetActive(true)
+				return
+			}
+			s.Theme = t.ID
+			_ = config.Save(*s)
+			sync()
+			fire(h.OnChange)
+		})
+		buttons = append(buttons, swatch)
+	}
+
+	follow.ConnectClicked(func() {
+		s.Theme = theme.Follow
+		_ = config.Save(*s)
+		sync()
+		fire(h.OnChange)
+	})
+
+	content := gtk.NewBox(gtk.OrientationVertical, 4)
+	content.Append(row)
+	content.Append(follow)
+	g.Add(content)
+	sync()
+	return g
 }
 
 // perfGroup builds the rendering-mode selector and the live self-memory

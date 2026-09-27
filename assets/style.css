@@ -218,3 +218,59 @@ columnview header button label {
 .am-alert-button.am-alert-critical {
   color: @error_color;
 }
+
+/* ---- Theme picker --------------------------------------------------- */
+
+/* One disc per theme, its two colours split on the diagonal. The colours
+   themselves are generated from the theme table — see theme.SwatchCSS — so a
+   theme cannot be added without them. This is only the shape.
+
+   Everything a GtkButton normally draws has to be taken away: Adwaita gives it a
+   background, a border and a shadow, and any of them would sit on top of or
+   around the colours this is meant to show. */
+.am-swatch {
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-radius: 9999px;
+  background-color: transparent;
+  background-image: none;
+  box-shadow: none;
+  border: 1px solid alpha(@window_fg_color, 0.22);
+  /* The dark half of a dark theme's disc is nearly the colour of the window it
+     sits on, so without an outline it reads as a half-circle. */
+  outline: none;
+}
+
+.am-swatch:hover {
+  border-color: alpha(@window_fg_color, 0.45);
+}
+
+/* The chosen one gets a ring in the accent colour, set outside the border so it
+   does not cover any of the two colours. */
+.am-swatch:checked {
+  border-color: @accent_bg_color;
+  box-shadow: 0 0 0 2px @accent_bg_color;
+}
+
+/* Adwaita tints a checked toggle's background. That tint would wash over the
+   theme's own colours, so it is removed — the ring above is what says which one
+   is chosen. */
+.am-swatch:checked,
+.am-swatch:checked:hover,
+.am-swatch:active {
+  background-color: transparent;
+}
+
+/* The way back from a chosen theme. It is a correction, not an action, so it is
+   as quiet as a button can be and still be one. */
+.am-quiet-button {
+  font-size: 0.88em;
+  font-weight: normal;
+  padding: 2px 10px;
+  opacity: 0.7;
+}
+
+.am-quiet-button:hover {
+  opacity: 1;
+}
