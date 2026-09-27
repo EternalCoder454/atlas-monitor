@@ -27,9 +27,11 @@ import (
 // That is what this does, which means an entry disabled here shows as disabled in
 // Task Manager and the other way round.
 //
-// Entries from HKEY_LOCAL_MACHINE are listed but cannot be changed. Their approval
+// Machine-wide *registry* entries are listed but cannot be changed: their approval
 // lives in the machine hive, which needs administrator rights to write, and Atlas
-// does not run elevated — the same position it takes on services.
+// does not run elevated — the same position it takes on services. Entries in the
+// shared Startup folder are a different case, because their approval is per-user
+// even though the shortcut is not. See SetEnabled.
 
 // Registry locations. The approval subkeys sit beside the Run keys.
 const (
@@ -47,10 +49,10 @@ const (
 	approvalLen      = 12
 )
 
-// errNeedsAdmin is returned for an entry this user may not change.
-var errNeedsAdmin = errors.New("this program starts for every user, and changing that " +
-	"needs administrator rights — use Task Manager's Startup tab from an " +
-	"administrator account")
+// errNeedsAdmin is returned for an entry whose approval lives in the machine hive.
+var errNeedsAdmin = errors.New("this program is registered for every user, and " +
+	"changing that needs administrator rights — use Task Manager's Startup tab " +
+	"from an administrator account")
 
 // Reader reads the login entries. It holds no state; the locations are fixed.
 type Reader struct{}
@@ -223,14 +225,20 @@ func hiveName(hive registry.Key) string {
 //
 // The Run value is never touched: switching off writes the StartupApproved value
 // that Windows itself uses, so the command survives and Task Manager agrees about
-// the state. An entry that belongs to the machine rather than to this user is
-// refused, because its approval lives in a hive this user cannot write.
+// the state.
+//
+// What can be changed depends on where the *approval* lives, not on where the entry
+// lives — which is not the same thing. A machine-wide Run entry is approved under
+// HKEY_LOCAL_MACHINE and needs administrator rights. A shortcut in the shared
+// Startup folder is approved under HKEY_CURRENT_USER like any other, so this user
+// can switch it off for themselves, exactly as Task Manager lets them. Refusing
+// both would have been safe and would also have told the user something untrue.
 func SetEnabled(e Entry, on bool) error {
-	if e.System {
-		return errNeedsAdmin
-	}
 	if e.approvalKey == "" {
 		return errors.New("this entry has no approval setting to change")
+	}
+	if e.System && e.approvalKey == runApprovedKey {
+		return errNeedsAdmin
 	}
 
 	k, _, err := registry.CreateKey(registry.CURRENT_USER, e.approvalKey, registry.SET_VALUE)
