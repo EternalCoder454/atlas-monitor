@@ -23,6 +23,13 @@ on:
 permissions:
   contents: read
 
+# Each push supersedes the last. These runs take several minutes — MSYS2 upgrades
+# itself before installing anything — and a queue of them all building the same
+# branch only delays the one whose answer is wanted.
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: exe
