@@ -95,8 +95,92 @@ jobs:
           echo "---- count ----"
           ldd atlas-monitor.exe | grep -c mingw64 || true
 
+      # Everything the exe needs to run on a machine with no MSYS2 on it.
+      #
+      # This is the part that decides whether the build is a deliverable or just a
+      # file that happens to have compiled. A GTK application on Windows carries
+      # its own world: the DLLs it links, the settings schemas GLib aborts without,
+      # the icon theme, and gdk-pixbuf's SVG loader — without which every icon
+      # Atlas draws is an empty square.
+      - name: Stage the distribution
+        id: stage
+        run: |
+          set -eu
+          version="$(cat VERSION)"
+          name="atlas-monitor-${version}-windows-x86_64"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+          dist="dist/$name"
+          mkdir -p "$dist"
+          cp atlas-monitor.exe "$dist/"
+
+          # The DLLs, taken from what the linker actually recorded rather than
+          # from a list someone maintains by hand. ldd names the mingw64 ones by
+          # absolute path; the system ones under /c/WINDOWS are already on the
+          # machine and must not be shipped.
+          ldd atlas-monitor.exe \
+            | awk '/=> \/mingw64/ {print $3}' \
+            | sort -u > /tmp/direct.txt
+          wc -l < /tmp/direct.txt | xargs echo "directly linked mingw64 DLLs:"
+
+          # ...and what those need in turn. GTK pulls in a deep tree — Pango,
+          # cairo, HarfBuzz, GLib, the lot — so this walks it to a fixed point
+          # instead of guessing at a depth.
+          cp /tmp/direct.txt /tmp/all.txt
+          for round in 1 2 3 4 5 6; do
+            before="$(wc -l < /tmp/all.txt)"
+            while read -r dll; do
+              ldd "$dll" 2>/dev/null | awk '/=> \/mingw64/ {print $3}'
+            done < /tmp/all.txt | sort -u > /tmp/next.txt
+            cat /tmp/all.txt /tmp/next.txt | sort -u > /tmp/merged.txt
+            mv /tmp/merged.txt /tmp/all.txt
+            after="$(wc -l < /tmp/all.txt)"
+            echo "round $round: $before -> $after"
+            [ "$before" != "$after" ] || break
+          done
+          xargs -a /tmp/all.txt -r cp -t "$dist"
+          echo "shipping $(wc -l < /tmp/all.txt) DLLs"
+
+          # GLib aborts on startup if it cannot find its compiled schemas, and
+          # libadwaita's own settings are among them.
+          mkdir -p "$dist/share/glib-2.0/schemas"
+          cp /mingw64/share/glib-2.0/schemas/*.xml "$dist/share/glib-2.0/schemas/" 2>/dev/null || true
+          glib-compile-schemas "$dist/share/glib-2.0/schemas"
+
+          # The icon theme GTK falls back to, and Atlas's own icons beside it.
+          mkdir -p "$dist/share/icons"
+          cp -r /mingw64/share/icons/Adwaita "$dist/share/icons/"
+          cp -r /mingw64/share/icons/hicolor "$dist/share/icons/" 2>/dev/null || true
+
+          icondir="$dist/share/icons/hicolor/scalable/actions"
+          mkdir -p "$icondir" "$dist/share/icons/hicolor/scalable/apps"
+          cp assets/icons/atlas-*-symbolic.svg "$icondir/"
+          cp assets/icon.svg "$dist/share/icons/hicolor/scalable/apps/com.atlas.Monitor.svg"
+          gtk4-update-icon-cache -f -t "$dist/share/icons/hicolor" || true
+
+          # gdk-pixbuf's loaders, and a cache naming them by a path that will
+          # still be true on somebody else's machine. The generated cache holds
+          # absolute build-machine paths, so they are rewritten to the relative
+          # ones the exe sets GDK_PIXBUF_MODULE_FILE to at startup.
+          loaders="$dist/lib/gdk-pixbuf-2.0/2.10.0/loaders"
+          mkdir -p "$loaders"
+          cp /mingw64/lib/gdk-pixbuf-2.0/2.10.0/loaders/*.dll "$loaders/"
+          ( cd "$dist" && GDK_PIXBUF_MODULEDIR="lib/gdk-pixbuf-2.0/2.10.0/loaders" \
+              gdk-pixbuf-query-loaders > lib/gdk-pixbuf-2.0/2.10.0/loaders.cache )
+          grep -c '"' "$dist/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache" \
+            | xargs echo "loaders.cache entries:"
+          # The SVG loader is the one that matters: without it every icon in the
+          # sidebar is a blank square, which is a broken-looking app rather than a
+          # missing feature. Fail the build instead of shipping that.
+          grep -qi 'svg' "$dist/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache" \
+            || { echo "no SVG loader registered; icons would not render"; exit 1; }
+
+          cp README.md LICENSE NOTICE "$dist/"
+          ( cd dist && zip -qr "$name.zip" "$name" )
+          ls -l "dist/$name.zip"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: atlas-monitor-windows-unpackaged
-          path: atlas-monitor.exe
+          name: ${{ steps.stage.outputs.name }}
+          path: dist/*.zip
           if-no-files-found: error
