@@ -208,12 +208,29 @@ func sourceDir() string {
 
 // userDataDir is Atlas's own directory under the user's data home, where
 // `make install` records the source checkout and the build flavour.
-func userDataDir() string {
-	base := os.Getenv("XDG_DATA_HOME")
-	if base == "" {
-		base = filepath.Join(os.Getenv("HOME"), ".local", "share")
+func userDataDir() string { return atlasDir("XDG_DATA_HOME", filepath.Join(".local", "share")) }
+
+// atlasDir resolves one of the XDG directories to Atlas's folder inside it.
+//
+// The variable wins wherever it is set, which is the whole of the Linux story and
+// on Windows lets a portable install keep its state beside itself. Failing that
+// there is a per-platform default: the XDG path under the home directory on Unix,
+// and %LocalAppData% on Windows, which is where a Windows program is supposed to
+// put things it wrote itself. Falling back to "$HOME/.local/share" on a machine
+// where HOME is unset — which is most Windows machines — used to produce a relative
+// path, so Atlas wrote a .local folder into whatever directory it was started from.
+func atlasDir(envVar, unixSuffix string) string {
+	if base := os.Getenv(envVar); base != "" {
+		return filepath.Join(base, "atlas-monitor")
 	}
-	return filepath.Join(base, "atlas-monitor")
+	if base := localAppData(); base != "" {
+		return filepath.Join(base, "atlas-monitor")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "atlas-monitor"
+	}
+	return filepath.Join(home, unixSuffix, "atlas-monitor")
 }
 
 // settingsHooks bundles the callbacks the Settings dialog needs.

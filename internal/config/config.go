@@ -140,10 +140,27 @@ func Defaults() Settings {
 	}
 }
 
+// dir is where settings.json lives.
+//
+// An explicit XDG_CONFIG_HOME wins on every platform. On Linux that is what
+// os.UserConfigDir does anyway. On Windows it would be ignored in favour of
+// %AppData%, which had two consequences: a portable install unpacked into a folder
+// had no way to keep its settings beside itself, and these tests — which isolate
+// themselves by setting XDG_CONFIG_HOME — were reading and writing the real
+// settings file instead of their own fixture. That is how four of them failed the
+// first time they ran on Windows.
 func dir() string {
+	if base := os.Getenv("XDG_CONFIG_HOME"); base != "" {
+		return filepath.Join(base, "atlas-monitor")
+	}
 	base, err := os.UserConfigDir()
 	if err != nil {
-		base = filepath.Join(os.Getenv("HOME"), ".config")
+		// UserConfigDir only fails when it cannot find a home directory at all.
+		home, herr := os.UserHomeDir()
+		if herr != nil {
+			return "atlas-monitor" // beside the working directory: nowhere better
+		}
+		base = filepath.Join(home, ".config")
 	}
 	return filepath.Join(base, "atlas-monitor")
 }

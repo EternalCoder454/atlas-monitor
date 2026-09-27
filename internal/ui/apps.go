@@ -2,13 +2,11 @@ package ui
 
 import (
 	"bytes"
-	"fmt"
-	"os"
-	"os/exec"
+	"net/url"
 	"path/filepath"
 	"sort"
 	"strconv"
-	"syscall"
+	"strings"
 	"unsafe"
 
 	"github.com/diamondburned/gotk4/pkg/core/gioutil"
@@ -770,10 +768,10 @@ func (v *appsView) buildContextMenu(parent gtk.Widgetter) {
 		act.ConnectActivate(func(_ *glib.Variant) { fn() })
 		group.AddAction(act)
 	}
-	add("term", func() { v.kill(syscall.SIGTERM) })
-	add("kill", func() { v.kill(syscall.SIGKILL) })
-	add("stop", func() { v.kill(syscall.SIGSTOP) })
-	add("cont", func() { v.kill(syscall.SIGCONT) })
+	add("term", func() { v.act(process.Terminate) })
+	add("kill", func() { v.act(process.Kill) })
+	add("stop", func() { v.act(process.Suspend) })
+	add("cont", func() { v.act(process.Resume) })
 	add("open", v.openLocation)
 
 	if w, ok := parent.(*gtk.ColumnView); ok {
@@ -839,11 +837,16 @@ func (v *appsView) cellAt(cv *gtk.ColumnView, x, y float64) *procCell {
 	return nil
 }
 
-func (v *appsView) kill(sig syscall.Signal) {
+// act carries out a context-menu action on the selected process.
+//
+// What each one does is the platform's business — see internal/process — because
+// the menu used to speak in Unix signals, and two of the four have no equivalent
+// constant on Windows at all.
+func (v *appsView) act(a process.Action) {
 	if !v.targetIsStillTheSameProcess() {
 		return
 	}
-	_ = syscall.Kill(v.target.pid, sig)
+	_ = process.Signal(v.target.pid, a)
 }
 
 // targetIsStillTheSameProcess re-checks that the PID the context menu was opened
@@ -859,11 +862,27 @@ func (v *appsView) openLocation() {
 	if !v.targetIsStillTheSameProcess() {
 		return
 	}
-	exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", v.target.pid))
-	if err != nil {
+	exe := process.ExecutablePath(v.target.pid)
+	if exe == "" {
 		return
 	}
-	_ = exec.Command("xdg-open", filepath.Dir(exe)).Start()
+	// Through GIO rather than xdg-open: it is the desktop's own handler on Linux
+	// and ShellExecute on Windows, so one call covers both instead of shelling out
+	// to a command that only exists on one of them.
+	_ = gio.AppInfoLaunchDefaultForURI(pathURI(filepath.Dir(exe)), nil)
+}
+
+// pathURI turns a directory into a file:// URI.
+//
+// Windows paths need the separators turned round and the drive letter given a
+// leading slash — file:///C:/Users/... — which url.URL does not do on its own
+// because it has no idea it is looking at a Windows path.
+func pathURI(dir string) string {
+	p := filepath.ToSlash(dir)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return "file://" + (&url.URL{Path: p}).EscapedPath()
 }
 
 // appendGPU renders the GPU column: a dash for processes that hold no GPU

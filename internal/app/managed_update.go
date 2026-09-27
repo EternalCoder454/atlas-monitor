@@ -4,6 +4,7 @@ import (
 	"os/exec"
 
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
+	"github.com/diamondburned/gotk4/pkg/gio/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 	"github.com/diamondburned/gotk4/pkg/pango"
 )
@@ -81,6 +82,37 @@ func (a *App) showManagedUpdate(in Install) {
 		body.Append(note)
 	}
 
+	// Where there is no command to run, there is a page to go to. This is the
+	// Windows path: the new build is a download rather than a package.
+	if cmd == "" {
+		if url := downloadPage(); url != "" {
+			link := gtk.NewLabel(url)
+			link.SetXAlign(0)
+			link.SetWrap(true)
+			link.SetWrapMode(pango.WrapWordChar)
+			link.SetMaxWidthChars(44)
+			link.SetSelectable(true)
+			link.SetCanFocus(false)
+			link.AddCSSClass("caption")
+			body.Append(link)
+
+			open := gtk.NewButtonWithLabel("Open download page")
+			open.SetHAlign(gtk.AlignStart)
+			open.AddCSSClass("suggested-action")
+			open.ConnectClicked(func() {
+				if err := gio.AppInfoLaunchDefaultForURI(url, nil); err != nil {
+					// No browser, or nothing registered for https. The address is
+					// on screen and selectable, so say so and leave it at that.
+					open.SetLabel("Could not open a browser")
+					open.SetSensitive(false)
+					return
+				}
+				dlg.Close()
+			})
+			body.Append(open)
+		}
+	}
+
 	dlg.SetExtraChild(body)
 	dlg.AddResponse("close", "Close")
 	dlg.SetCloseResponse("close")
@@ -93,6 +125,9 @@ func (a *App) showManagedUpdate(in Install) {
 // managedWording is the heading and the explanation, which differ by why Atlas
 // is staying out of it.
 func managedWording(in Install) (heading, body string) {
+	if h, b, ok := platformWording(in); ok {
+		return h, b
+	}
 	if in.Kind == FromPackage {
 		mgr := in.Manager
 		if mgr == "" {

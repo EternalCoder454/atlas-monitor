@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -651,55 +650,39 @@ func modelInstalled(models []string, want string) bool {
 
 // systemFacts gathers OS / kernel / host / uptime / load so the assistant knows
 // the broader environment, not just the live metrics.
+// Every line is omitted when there is nothing to put in it, which is how the
+// platform differences are handled: Windows has no load average, so that line
+// simply is not there rather than reading as zero.
 func systemFacts() string {
 	var b strings.Builder
-	if name := osReleaseName(); name != "" {
+	if name := osName(); name != "" {
 		fmt.Fprintf(&b, "OS: %s\n", name)
 	}
-	if k, err := os.ReadFile("/proc/sys/kernel/osrelease"); err == nil {
-		fmt.Fprintf(&b, "Kernel: %s\n", strings.TrimSpace(string(k)))
+	if k := kernelVersion(); k != "" {
+		fmt.Fprintf(&b, "Kernel: %s\n", k)
 	}
 	if h, err := os.Hostname(); err == nil {
 		fmt.Fprintf(&b, "Hostname: %s\n", h)
 	}
-	if u := os.Getenv("USER"); u != "" {
+	if u := userName(); u != "" {
 		fmt.Fprintf(&b, "User: %s\n", u)
 	}
 	if up := uptimeStr(); up != "" {
 		fmt.Fprintf(&b, "Uptime: %s\n", up)
 	}
-	if la, err := os.ReadFile("/proc/loadavg"); err == nil {
-		if f := strings.Fields(string(la)); len(f) >= 3 {
-			fmt.Fprintf(&b, "Load average: %s %s %s (1/5/15 min)\n", f[0], f[1], f[2])
-		}
+	if la := loadAverage(); la != "" {
+		fmt.Fprintf(&b, "Load average: %s\n", la)
 	}
 	return b.String()
 }
 
-func osReleaseName() string {
-	data, err := os.ReadFile("/etc/os-release")
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if v, ok := strings.CutPrefix(line, "PRETTY_NAME="); ok {
-			return strings.Trim(v, "\"")
-		}
-	}
-	return ""
-}
-
+// uptimeStr formats how long the machine has been up. The figure is the
+// platform's; the wording is shared.
 func uptimeStr() string {
-	data, err := os.ReadFile("/proc/uptime")
-	if err != nil {
+	d, ok := uptime()
+	if !ok {
 		return ""
 	}
-	f := strings.Fields(string(data))
-	if len(f) == 0 {
-		return ""
-	}
-	secs, _ := strconv.ParseFloat(f[0], 64)
-	d := time.Duration(secs) * time.Second
 	days, hours, mins := int(d.Hours())/24, int(d.Hours())%24, int(d.Minutes())%60
 	switch {
 	case days > 0:

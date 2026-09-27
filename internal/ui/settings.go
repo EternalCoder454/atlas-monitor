@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
@@ -540,22 +539,14 @@ func refreshDetail(seconds int) string {
 		strconv.Itoa(seconds) + " minutes"
 }
 
-// selfMemory reports this process's resident set, read straight from
-// /proc/self/statm — the same figure a task manager shows for Atlas.
+// selfMemory reports this process's resident set — the same figure a task manager
+// shows for Atlas. Where it comes from is per-platform; see internal/sysmem.
 func selfMemory() string {
-	b, err := os.ReadFile("/proc/self/statm")
-	if err != nil {
+	n, ok := sysmem.Resident()
+	if !ok {
 		return "unavailable"
 	}
-	fields := strings.Fields(string(b))
-	if len(fields) < 2 {
-		return "unavailable"
-	}
-	pages, err := strconv.ParseUint(fields[1], 10, 64)
-	if err != nil {
-		return "unavailable"
-	}
-	return format.Bytes(pages*uint64(os.Getpagesize())) + " resident"
+	return format.Bytes(n) + " resident"
 }
 
 func channelName(ch string) string {

@@ -110,6 +110,7 @@ func (w *Window) Build() gtk.Widgetter {
 	var gpuAvail bool
 	var packs []string
 	var activeNet string
+	var activeWireless bool
 	batteryAvail := w.col.PowerAvailable()
 	w.col.Read(func(s *stats.Stats) {
 		disks = append(disks, s.Disks...)
@@ -119,6 +120,12 @@ func (w *Window) Build() gtk.Widgetter {
 			packs = append(packs, p.Battery.Name)
 		}
 		activeNet = s.ActiveNet
+		for _, n := range s.Nets {
+			if n.Name == activeNet {
+				activeWireless = n.Wireless
+				break
+			}
+		}
 	})
 	w.diskNames = map[string]string{}
 	for _, d := range disks {
@@ -172,7 +179,7 @@ func (w *Window) Build() gtk.Widgetter {
 	for i, n := range orderedNets {
 		w.netCurrent[i] = n.Name
 	}
-	w.updateNetIcon(activeNet)
+	w.updateNetIcon(activeWireless)
 	w.SetAIEnabled(w.settings.AIEnabled)
 	w.col.SetInterval(w.refreshInterval())
 	w.proc.SetInterval(w.refreshInterval())
@@ -411,7 +418,16 @@ func (w *Window) reorderNets() {
 		return
 	}
 	var active string
-	w.col.Read(func(s *stats.Stats) { active = s.ActiveNet })
+	var wireless bool
+	w.col.Read(func(s *stats.Stats) {
+		active = s.ActiveNet
+		for _, n := range s.Nets {
+			if n.Name == active {
+				wireless = n.Wireless
+				break
+			}
+		}
+	})
 	desired := orderNames(w.netStable, active)
 	if equalStrings(desired, w.netCurrent) {
 		return
@@ -427,20 +443,18 @@ func (w *Window) reorderNets() {
 		}
 	}
 	w.netCurrent = desired
-	w.updateNetIcon(active)
+	w.updateNetIcon(wireless)
 }
 
 // updateNetIcon shows a wireless or wired glyph on the Network group depending
 // on the active interface.
-func (w *Window) updateNetIcon(active string) {
+func (w *Window) updateNetIcon(wireless bool) {
 	if w.netExp == nil {
 		return
 	}
 	icon := "atlas-network-symbolic"
-	if active != "" {
-		if _, err := os.Stat("/sys/class/net/" + active + "/wireless"); err == nil {
-			icon = "atlas-wifi-symbolic"
-		}
+	if wireless {
+		icon = "atlas-wifi-symbolic"
 	}
 	w.netExp.SetIconName(icon)
 }
