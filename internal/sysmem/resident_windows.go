@@ -21,6 +21,17 @@ type processMemoryCounters struct {
 	PeakPagefileUsage          uintptr
 }
 
+// PROCESS_MEMORY_COUNTERS is 72 bytes on 64-bit Windows: two 32-bit fields and
+// eight pointer-sized ones. Checked, because a wrong layout would report some other
+// field as the working set and the number would look believable.
+const (
+	_ = unsafe.Sizeof(processMemoryCounters{}) - 72
+	_ = 72 - unsafe.Sizeof(processMemoryCounters{})
+
+	_ = unsafe.Offsetof(processMemoryCounters{}.WorkingSetSize) - 16
+	_ = 16 - unsafe.Offsetof(processMemoryCounters{}.WorkingSetSize)
+)
+
 var (
 	psapi                    = windows.NewLazySystemDLL("psapi.dll")
 	procGetProcessMemoryInfo = psapi.NewProc("GetProcessMemoryInfo")

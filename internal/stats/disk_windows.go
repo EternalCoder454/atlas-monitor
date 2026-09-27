@@ -43,7 +43,6 @@ func (c *Collector) discoverDisks() {
 			// one that gets listed first.
 			IsRoot:   strings.EqualFold(v.Letter, systemDrive()),
 			mounts:   []string{v.Root},
-			isFixed:  v.Fixed,
 			isRemote: v.Remote,
 		}
 		disks = append(disks, d)

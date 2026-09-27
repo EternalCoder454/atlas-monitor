@@ -36,10 +36,6 @@ var (
 	procFreeMibTable         = iphlpapi.NewProc("FreeMibTable")
 )
 
-// hundredNS is the unit Windows reports every duration in: 100-nanosecond
-// intervals. Dividing by it gives seconds.
-const hundredNS = 1e7
-
 // ---------------------------------------------------------------- memory
 
 // memoryStatusEx is MEMORYSTATUSEX. Length must be set before the call; the
@@ -221,7 +217,10 @@ func ReadCPUTimes() ([]CPUTimes, error) {
 
 // ---------------------------------------------------------------- processes
 
-// TicksPerSecond is how many of the units CPUTicks counts in make up a second.
+// TicksPerSecond is how many of the units Windows counts durations in make up a
+// second: it reports every one of them in 100-nanosecond intervals. Both CPUTicks
+// here and CPUTimes above keep the raw counts, because the only thing done with
+// either is a ratio of differences.
 const TicksPerSecond = 1e7
 
 // Process is one running process, as the kernel describes it.
@@ -586,6 +585,20 @@ type diskPerformance struct {
 	StorageDeviceNumber uint32
 	StorageManagerName  [8]uint16
 }
+
+// DISK_PERFORMANCE is 88 bytes on 64-bit Windows: five 64-bit counters, four
+// 32-bit ones, the query time, the device number and an eight-character name, with
+// the trailing padding that brings it back to an 8-byte boundary. Checked because a
+// wrong layout here reads the wrong fields as byte totals, which would show as
+// plausible throughput rather than as a failure.
+const (
+	_ = unsafe.Sizeof(diskPerformance{}) - 88
+	_ = 88 - unsafe.Sizeof(diskPerformance{})
+
+	_ = unsafe.Offsetof(diskPerformance{}.BytesRead) - 0
+	_ = unsafe.Offsetof(diskPerformance{}.BytesWritten) - 8
+	_ = 8 - unsafe.Offsetof(diskPerformance{}.BytesWritten)
+)
 
 // IOCTL_DISK_PERFORMANCE, assembled the way CTL_CODE does:
 // (IOCTL_DISK_BASE << 16) | (FILE_READ_ACCESS << 14) | (0x0008 << 2) | METHOD_BUFFERED.

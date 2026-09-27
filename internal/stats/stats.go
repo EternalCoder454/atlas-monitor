@@ -59,10 +59,9 @@ type DiskStats struct {
 	prevRead, prevWrite uint64
 	havePrev            bool
 
-	// Windows only. A volume's counters come from the local storage stack, so a
-	// network share has none and is not asked every tick; see
+	// Windows only: a volume's counters come from the local storage stack, so a
+	// network share has none and is not asked for them every tick. See
 	// disk_windows.go. Unused on Linux, where a block device is a block device.
-	isFixed  bool
 	isRemote bool
 }
 

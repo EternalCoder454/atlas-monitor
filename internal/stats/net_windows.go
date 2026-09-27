@@ -2,7 +2,6 @@ package stats
 
 import (
 	"net"
-	"strings"
 	"sync"
 	"time"
 
@@ -172,13 +171,4 @@ func routeLookup() string {
 		}
 	}
 	return ""
-}
-
-// friendlyNetName exists so the shared code has one on both platforms. Windows
-// aliases need no translating; the loopback is the exception.
-func friendlyNetName(name string) string {
-	if strings.Contains(strings.ToLower(name), "loopback") {
-		return "Loopback"
-	}
-	return name
 }

@@ -49,10 +49,18 @@ func kernelVersion() string {
 // userName is who is logged in. Windows sets USERNAME rather than USER.
 func userName() string { return os.Getenv("USERNAME") }
 
+// GetTickCount64 is not wrapped by x/sys/windows, so it is bound here. It has been
+// present since Vista; the 32-bit GetTickCount it replaced wrapped after 49 days,
+// which is exactly the kind of uptime worth reporting correctly.
+var (
+	kernel32           = windows.NewLazySystemDLL("kernel32.dll")
+	procGetTickCount64 = kernel32.NewProc("GetTickCount64")
+)
+
 // uptime is how long the machine has been running, from the tick count — which is
 // unaffected by the clock being changed, unlike a boot-time subtraction.
 func uptime() (time.Duration, bool) {
-	ms := windows.GetTickCount64()
+	ms, _, _ := procGetTickCount64.Call()
 	if ms == 0 {
 		return 0, false
 	}
