@@ -221,13 +221,18 @@ func ReadCPUTimes() ([]CPUTimes, error) {
 
 // ---------------------------------------------------------------- processes
 
+// TicksPerSecond is how many of the units CPUTicks counts in make up a second.
+const TicksPerSecond = 1e7
+
 // Process is one running process, as the kernel describes it.
 type Process struct {
 	PID       int
 	ParentPID int
 	Name      string
-	// CPUSeconds is cumulative user + kernel time. A rate needs two samples.
-	CPUSeconds float64
+	// CPUTicks is cumulative user + kernel time in 100-nanosecond units. Raw
+	// rather than converted, for the same reason CPUTimes keeps raw counts: the
+	// only thing done with it is a difference between two samples.
+	CPUTicks uint64
 	// WorkingSet is resident bytes; Private is the part not shared with another
 	// process, which is the closer analogue of what Atlas shows on Linux.
 	WorkingSet uint64
@@ -283,7 +288,7 @@ func parseProcesses(buf []byte) []Process {
 			PID:        int(p.UniqueProcessID),
 			ParentPID:  int(p.InheritedFromUniqueProcessID),
 			Name:       ntString(p.ImageName),
-			CPUSeconds: float64(p.UserTime+p.KernelTime) / hundredNS,
+			CPUTicks:   uint64(p.UserTime + p.KernelTime),
 			WorkingSet: uint64(p.WorkingSetSize),
 			Private:    uint64(p.PrivatePageCount),
 			ReadBytes:  uint64(p.ReadTransferCount),
