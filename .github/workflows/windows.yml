@@ -127,6 +127,48 @@ jobs:
           echo "---- count ----"
           ldd atlas-monitor.exe | grep -c mingw64 || true
 
+      # Actually start it.
+      #
+      # Everything above this is static: it proves the thing links and that the
+      # files are in the right places, not that it runs. This launches the console
+      # build from the staged folder — the same folder a user would unpack — and
+      # sees how far it gets.
+      #
+      # It does not fail the build yet. A GitHub runner may or may not give a GUI
+      # process a usable window station, so an exit here could mean Atlas is broken
+      # or could mean the runner has no desktop, and I would rather read what it
+      # says than guess which. What it can already tell us for certain is whether
+      # the DLLs resolve and whether GLib finds its schemas, because both of those
+      # fail before any window is needed.
+      - name: Try starting it
+        continue-on-error: true
+        run: |
+          cd "dist/${{ steps.stage.outputs.name }}"
+          ./atlas-monitor-console.exe > /tmp/atlas-run.log 2>&1 &
+          pid=$!
+          sleep 20
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "RESULT: still running after 20 seconds — it started"
+            kill "$pid" 2>/dev/null || true
+            status=started
+          else
+            wait "$pid" || true
+            echo "RESULT: exited before the 20 seconds were up"
+            status=exited
+          fi
+          echo "---- what it said ----"
+          cat /tmp/atlas-run.log || echo "(nothing on stdout or stderr)"
+          echo "---- the failures that would mean the packaging is wrong ----"
+          if grep -qiE "entry point|cannot find|not found|No such file" /tmp/atlas-run.log; then
+            echo "A LIBRARY DID NOT RESOLVE — the DLL set is incomplete"
+            exit 1
+          fi
+          if grep -qiE "Settings schema|GSettings|gschemas" /tmp/atlas-run.log; then
+            echo "GLIB COULD NOT FIND ITS SCHEMAS — the share/glib-2.0 staging is wrong"
+            exit 1
+          fi
+          echo "none of those appeared ($status)"
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.stage.outputs.name }}
