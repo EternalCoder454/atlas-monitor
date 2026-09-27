@@ -15,9 +15,13 @@ name: Windows
 
 on:
   push:
-    branches: [windows]
+    # beta and main are here so the Windows build does not quietly rot once the
+    # port lands. It is a slow job — MSYS2 upgrades itself, then cgo compiles the
+    # whole of gotk4 — but a platform nothing builds for is a platform that stops
+    # working, and nobody would notice until someone downloaded it.
+    branches: [windows, beta, main]
   pull_request:
-    branches: [windows]
+    branches: [windows, beta, main]
   workflow_dispatch:
 
 permissions:
@@ -134,14 +138,12 @@ jobs:
       # build from the staged folder — the same folder a user would unpack — and
       # sees how far it gets.
       #
-      # It does not fail the build yet. A GitHub runner may or may not give a GUI
-      # process a usable window station, so an exit here could mean Atlas is broken
-      # or could mean the runner has no desktop, and I would rather read what it
-      # says than guess which. What it can already tell us for certain is whether
-      # the DLLs resolve and whether GLib finds its schemas, because both of those
-      # fail before any window is needed.
-      - name: Try starting it
-        continue-on-error: true
+      # This gates the build. It was informational to begin with, because a GitHub
+      # runner might not give a GUI process a usable window station and an exit
+      # would then have been ambiguous. A runner has since started it and held it
+      # for twenty seconds with nothing on stderr, so the ambiguity is gone: from
+      # here on, exiting early means something is broken.
+      - name: Start it
         run: |
           cd "dist/${{ steps.stage.outputs.name }}"
           ./atlas-monitor-console.exe > /tmp/atlas-run.log 2>&1 &
@@ -155,6 +157,11 @@ jobs:
             wait "$pid" || true
             echo "RESULT: exited before the 20 seconds were up"
             status=exited
+          fi
+          if [ "$status" = exited ]; then
+            echo "It should have stayed up. Whatever it printed is below."
+            cat /tmp/atlas-run.log || true
+            exit 1
           fi
           echo "---- what it said ----"
           cat /tmp/atlas-run.log || echo "(nothing on stdout or stderr)"
