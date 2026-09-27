@@ -40,12 +40,19 @@ jobs:
           # go and gcc from MSYS2 rather than the runner's own: cgo needs the
           # compiler and the Go toolchain to agree about the C runtime, and the
           # GTK libraries here are built against this one.
+          # gobject-introspection is a build dependency of the gotk4 bindings
+          # themselves. librsvg and the icon theme are runtime ones: every icon
+          # Atlas ships is an SVG, and GTK loads those through gdk-pixbuf's rsvg
+          # loader, so without it the sidebar comes up with empty squares.
           install: >-
             mingw-w64-x86_64-go
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-gtk4
             mingw-w64-x86_64-libadwaita
+            mingw-w64-x86_64-gobject-introspection
+            mingw-w64-x86_64-librsvg
+            mingw-w64-x86_64-adwaita-icon-theme
             git
 
       - name: What we are building against
