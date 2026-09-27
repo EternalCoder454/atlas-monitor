@@ -154,17 +154,23 @@ func (c *Client) List(servicesOnly bool) ([]Service, error) {
 	return out, nil
 }
 
-// startType reads how a service is set to start, or "" if it will not say.
+// startType reads how a service is set to start.
+//
+// Some services will not say. WaaSMedicSvc is the one that found this: it is
+// protected, so even opening it for a configuration query is refused, and the
+// column came back blank — which reads as though Atlas forgot to fill it in rather
+// than as the machine declining to answer. "Unknown" is the honest word for it, and
+// startupLabel passes anything it does not recognise through unchanged.
 func (c *Client) startType(name string) string {
 	s, err := c.openService(name, windows.SERVICE_QUERY_CONFIG)
 	if err != nil {
-		return ""
+		return "Unknown"
 	}
 	defer s.Close()
 
 	cfg, err := s.Config()
 	if err != nil {
-		return ""
+		return "Unknown"
 	}
 	switch cfg.StartType {
 	case windows.SERVICE_BOOT_START:
@@ -184,7 +190,7 @@ func (c *Client) startType(name string) string {
 	case windows.SERVICE_DISABLED:
 		return "disabled"
 	default:
-		return ""
+		return "Unknown"
 	}
 }
 

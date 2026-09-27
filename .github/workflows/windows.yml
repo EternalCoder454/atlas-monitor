@@ -94,7 +94,8 @@ jobs:
       # to Linux by filename. What is left is the platform-neutral logic plus the
       # Windows mappings: process names, service states, battery status, and what
       # the updater offers. internal/app and internal/ui need cgo and a display, so
-      # they are built above rather than tested here.
+      # they are built above rather than tested here — and so is internal/graph, which
+      # draws the charts and imports GTK just as they do.
       - name: Test the Windows code paths
         env:
           CGO_ENABLED: 0
@@ -108,8 +109,7 @@ jobs:
             ./internal/stats/ \
             ./internal/format/ \
             ./internal/health/ \
-            ./internal/config/ \
-            ./internal/graph/
+            ./internal/config/
 
       # Build and stage in one step, through the script the release uses, so the
       # two cannot package differently.

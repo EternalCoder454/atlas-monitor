@@ -40,11 +40,23 @@ else
 fi
 
 echo "==> building atlas-monitor.exe"
+# -H=windowsgui detaches it from a console, so launching it does not leave a black
+# window behind — which is what a command-line program looks like.
 CGO_ENABLED=1 go build -trimpath -ldflags="-s -w -H=windowsgui" -o atlas-monitor.exe .
 
 rm -rf "$dist"
 mkdir -p "$dist"
 cp atlas-monitor.exe "$dist/"
+
+# ...and the same program with its console left attached.
+#
+# The cost of windowsgui is that nothing the program writes to stderr goes
+# anywhere. If GTK cannot find its schemas, or a driver refuses to load, GLib says
+# so on stderr and the user sees an application that does not start and gives no
+# reason. That is a bad enough failure on any platform and worse on one the author
+# cannot test, so the diagnosable build ships beside the normal one.
+echo "==> building the console build"
+CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o "$dist/atlas-monitor-console.exe" .
 
 echo "==> collecting DLLs"
 # Taken from what the linker actually recorded rather than a hand-kept list. ldd
@@ -109,6 +121,39 @@ grep -qi 'svg' "$dist/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache" \
 echo "    SVG loader present"
 
 cp README.md LICENSE NOTICE "$dist/"
+
+# A note in the folder, for whoever opens it after the app has not started.
+cat > "$dist/TROUBLESHOOTING.txt" <<'TXT'
+Atlas Monitor — if it does not start
+====================================
+
+atlas-monitor.exe runs without a console, so anything it complains about on the
+way up is discarded. atlas-monitor-console.exe in this folder is the same
+program with the console attached.
+
+Open a terminal in this folder and run:
+
+    atlas-monitor-console.exe
+
+Whatever GTK or Atlas has to say will appear there.
+
+The usual cause is a file missing from this folder. Atlas needs the DLLs and the
+share\ and lib\ folders sitting beside the exe, so run it where you unpacked it
+rather than copying the exe somewhere on its own.
+
+A graphics problem is unlikely: Atlas draws on the processor by default and does
+not ask the driver for anything. If you have switched Rendering to GPU in
+Settings and it stopped starting, put it back with:
+
+    set GSK_RENDERER=cairo
+    set GDK_DISABLE=gl,vulkan
+    atlas-monitor-console.exe
+
+and then change the setting back.
+
+Please include the console output in a bug report:
+https://github.com/EternalCoder454/atlas-monitor/issues
+TXT
 
 echo "==> zipping"
 ( cd dist && zip -qr "$name.zip" "$name" && sha256sum "$name.zip" > "$name.zip.sha256" )
