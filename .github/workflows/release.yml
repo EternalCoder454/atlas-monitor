@@ -112,3 +112,82 @@ jobs:
             echo "The tarball is available as this run's artifact; publish a"
             echo "release for the tag and re-run to attach it."
           fi
+
+  windows:
+    name: windows zip
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-go
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-gtk4
+            mingw-w64-x86_64-libadwaita
+            mingw-w64-x86_64-gobject-introspection
+            mingw-w64-x86_64-librsvg
+            mingw-w64-x86_64-adwaita-icon-theme
+            git
+            zip
+
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$(pwd)"
+
+      - name: Resolve the tag
+        id: tag
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      # The same staging the Windows workflow does, which is where it is explained.
+      # Kept as a call into the repository rather than copied, so the two cannot
+      # drift: a release that packaged differently from what CI tested would be the
+      # worst possible place for that difference to first show up.
+      - name: Build and stage
+        id: build
+        env:
+          CGO_ENABLED: 1
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          version="${TAG#v}"
+          [ -n "$version" ] || version="$(cat VERSION)"
+          bash packaging/stage-windows.sh "$version"
+          echo "name=atlas-monitor-${version}-windows-x86_64" >> "$GITHUB_OUTPUT"
+
+      - name: What it links against
+        run: |
+          ldd atlas-monitor.exe | grep mingw64 | wc -l | xargs echo "mingw64 DLLs linked:"
+          pkg-config --modversion gtk4 libadwaita-1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build.outputs.name }}
+          path: dist/*.zip*
+          if-no-files-found: error
+
+      - name: Attach to the release, if there is one
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          tag="$TAG"
+          case "$tag" in
+            v*) ;;
+            *) echo "Not a version tag ($tag); nothing to attach to."; exit 0 ;;
+          esac
+          command -v gh >/dev/null || { echo "gh is not installed in this image"; exit 1; }
+          if gh release view "$tag" >/dev/null; then
+            gh release upload "$tag" dist/*.zip dist/*.zip.sha256 --clobber
+            echo "Attached the Windows zip to release $tag."
+          else
+            echo "No GitHub Release exists for $tag, so nothing was attached."
+          fi
