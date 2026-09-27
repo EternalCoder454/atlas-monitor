@@ -8,6 +8,11 @@
  *
  * @VERSION@ and @V_COMMA@ are substituted by packaging/stage-windows.sh from the
  * VERSION file, so this cannot drift from what the app reports about itself.
+ *
+ * Every string here is ASCII on purpose. windres assumes CP1252 unless told
+ * otherwise, and the build passes --codepage=65001 so UTF-8 would work — but a
+ * resource string that renders as three stray characters in Explorer's Properties
+ * dialog is not worth an em-dash on a platform this cannot be checked on.
  */
 
 1 ICON "assets/atlas.ico"
@@ -24,7 +29,7 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName",      "EternalCoder454"
-            VALUE "FileDescription",  "Atlas Monitor — system monitor"
+            VALUE "FileDescription",  "Atlas Monitor - system monitor"
             VALUE "FileVersion",      "@VERSION@"
             VALUE "InternalName",     "atlas-monitor"
             VALUE "LegalCopyright",   "MIT licensed. See LICENSE."

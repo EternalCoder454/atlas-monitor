@@ -173,21 +173,30 @@ jobs:
           path: dist/*.zip*
           if-no-files-found: error
 
+      # In PowerShell rather than the MSYS2 shell the rest of this job uses.
+      # setup-msys2 defaults to path-type: minimal, which deliberately keeps the
+      # Windows PATH out — so gh, which lives in Program Files, is not on it. Rather
+      # than widen the PATH for the whole job and risk the Windows Go and gcc
+      # shadowing MSYS2's, this one step steps outside.
       - name: Attach to the release, if there is one
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          tag="$TAG"
-          case "$tag" in
-            v*) ;;
-            *) echo "Not a version tag ($tag); nothing to attach to."; exit 0 ;;
-          esac
-          command -v gh >/dev/null || { echo "gh is not installed in this image"; exit 1; }
-          if gh release view "$tag" >/dev/null; then
-            gh release upload "$tag" dist/*.zip dist/*.zip.sha256 --clobber
-            echo "Attached the Windows zip to release $tag."
-          else
-            echo "No GitHub Release exists for $tag, so nothing was attached."
-          fi
+          if (-not $env:TAG.StartsWith("v")) {
+            Write-Host "Not a version tag ($env:TAG); nothing to attach to."
+            exit 0
+          }
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "No GitHub Release exists for $env:TAG, so nothing was attached."
+            Write-Host "The zip is available as this run's artifact."
+            exit 0
+          }
+          $files = Get-ChildItem dist -Filter *.zip*
+          if (-not $files) { throw "nothing in dist to attach" }
+          gh release upload $env:TAG $files.FullName --clobber
+          if ($LASTEXITCODE -ne 0) { throw "gh release upload failed" }
+          Write-Host "Attached the Windows zip to release $env:TAG."

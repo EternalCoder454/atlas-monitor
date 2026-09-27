@@ -33,7 +33,10 @@ version_comma="$(echo "$version" | awk -F. '{printf "%d,%d,%d,0", $1, $2, $3}')"
 sed -e "s/@VERSION@/$version/g" -e "s/@V_COMMA@/$version_comma/g" \
     packaging/windows-resource.rc.in > /tmp/atlas-resource.rc
 if command -v windres >/dev/null 2>&1; then
-    windres -O coff -i /tmp/atlas-resource.rc -o atlas_windows_amd64.syso
+    # --codepage=65001 so the .rc is read as UTF-8; windres assumes CP1252
+    # otherwise, which turns any non-ASCII byte into mojibake in the Properties
+    # dialog. The template is ASCII anyway, so this is the belt to its braces.
+    windres --codepage=65001 -O coff -i /tmp/atlas-resource.rc -o atlas_windows_amd64.syso
     echo "    icon and version block: $(stat -c%s atlas_windows_amd64.syso) bytes"
 else
     echo "    windres not found; building without an icon or version block" >&2
@@ -82,6 +85,19 @@ done
 xargs -a /tmp/atlas-dll-all.txt -r cp -t "$dist"
 echo "    shipping $(wc -l < /tmp/atlas-dll-all.txt) DLLs"
 
+# Check the ones it cannot run without are actually there.
+#
+# If ldd fails to resolve anything — it is not guaranteed to work on every PE file,
+# and a version that printed nothing would leave the list empty — then cp copies
+# nothing, the zip builds, and the result is an exe that dies on launch with a
+# missing-DLL box. Naming the libraries rather than counting them says what is wrong
+# when it is wrong.
+for must in libgtk-4 libadwaita libglib-2.0 libgobject-2.0 libcairo libpango; do
+    ls "$dist"/${must}*.dll >/dev/null 2>&1 \
+        || { echo "no $must DLL was collected; the build would not run" >&2; exit 1; }
+done
+echo "    GTK, libadwaita, GLib, cairo and Pango all present"
+
 echo "==> compiling GSettings schemas"
 # GLib aborts on startup if it cannot find these, and libadwaita's own settings
 # are among them.
@@ -94,7 +110,13 @@ test -f "$dist/share/glib-2.0/schemas/gschemas.compiled" \
 echo "==> staging icons"
 mkdir -p "$dist/share/icons"
 cp -r /mingw64/share/icons/Adwaita "$dist/share/icons/"
-cp -r /mingw64/share/icons/hicolor "$dist/share/icons/" 2>/dev/null || true
+
+# hicolor gets its index.theme and nothing else. Copying the whole directory also
+# brought GTK's own demo application icons — org.gtk.Demo4 and friends — which are
+# no use to anybody here. But the index has to be there: without it GTK does not
+# treat the directory as a theme and would not look inside it for Atlas's icons.
+mkdir -p "$dist/share/icons/hicolor"
+cp /mingw64/share/icons/hicolor/index.theme "$dist/share/icons/hicolor/"
 
 # Atlas's own symbolic icons. All atlas-prefixed on purpose: icon lookup falls back
 # to hicolor last, so a generic name would lose to the theme and never be used.
@@ -103,6 +125,12 @@ mkdir -p "$icondir" "$dist/share/icons/hicolor/scalable/apps"
 cp assets/icons/atlas-*-symbolic.svg "$icondir/"
 cp assets/icon.svg "$dist/share/icons/hicolor/scalable/apps/com.atlas.Monitor.svg"
 gtk4-update-icon-cache -f -t "$dist/share/icons/hicolor" || true
+
+staged_icons=$(ls "$icondir"/atlas-*-symbolic.svg 2>/dev/null | wc -l)
+makefile_icons=$(grep -oP '(?<=^ICONS   := ).*' Makefile | wc -w)
+[ "$staged_icons" = "$makefile_icons" ] \
+    || { echo "staged $staged_icons icons but the Makefile lists $makefile_icons" >&2; exit 1; }
+echo "    $staged_icons Atlas icons, matching the Makefile"
 
 echo "==> staging gdk-pixbuf loaders"
 # The generated cache holds absolute build-machine paths, so it is generated with
