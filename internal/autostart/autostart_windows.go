@@ -186,15 +186,26 @@ func readApprovals(hive registry.Key, sub string) map[string]bool {
 	}
 	for _, name := range names {
 		v, _, err := k.GetBinaryValue(name)
-		if err != nil || len(v) == 0 {
+		if err != nil {
 			continue
 		}
-		// Only the low bit of the first byte matters. Windows writes 0x02 for
-		// enabled and 0x03 for disabled, and other values have been seen in the
-		// wild, so this tests the bit rather than comparing the byte.
-		out[strings.ToLower(name)] = v[0]&0x01 != 0
+		out[strings.ToLower(name)] = isDisabled(v)
 	}
 	return out
+}
+
+// isDisabled reads a StartupApproved value.
+//
+// Only the low bit of the first byte matters. Windows writes 0x02 for enabled and
+// 0x03 for disabled, but values with the higher bits set have been seen in the
+// wild — 0x06 among them — so this tests the bit rather than comparing the byte.
+// Getting it backwards would present every enabled program as switched off, which
+// is the kind of mistake that looks like a working feature.
+func isDisabled(v []byte) bool {
+	if len(v) == 0 {
+		return false // nothing recorded means nothing has switched it off
+	}
+	return v[0]&0x01 != 0
 }
 
 // startupDir is the Startup folder for this user, or the shared one.

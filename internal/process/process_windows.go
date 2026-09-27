@@ -80,8 +80,12 @@ func (c *Collector) collect() {
 
 		if hadPrev && !first {
 			if p.CPUTicks > prev.cpuJiffies {
+				// Not clamped to 100. A process using four cores is at 400% of one,
+				// and that is the point of the column — Proc.CPU says so, and the
+				// Linux side does not clamp either. Clamping here would have quietly
+				// capped every multithreaded program at a single core's worth.
 				used := float64(p.CPUTicks-prev.cpuJiffies) / winapi.TicksPerSecond
-				proc.CPU = clampPct(used / dt * 100)
+				proc.CPU = used / dt * 100
 			}
 			if ioWanted {
 				proc.DiskRead = deltaRate(p.ReadBytes, prev.readBytes, dt)
