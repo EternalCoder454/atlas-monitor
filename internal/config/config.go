@@ -97,6 +97,11 @@ type Settings struct {
 	UpdateChannel  string `json:"update_channel"` // "main" (Release) or "beta" (newest features/fixes)
 	RenderMode     string `json:"render_mode"`    // see gfx: "software" (default), "gpu", "system"
 
+	// Theme is the colour theme's id — see internal/theme. Empty means Atlas
+	// follows the desktop's light/dark preference, which is what it did before
+	// there was a choice, and is the default for that reason.
+	Theme string `json:"theme"`
+
 	// RefreshSeconds is how often every collector samples and the visible page
 	// redraws. It also stretches the graphs: they keep 60 samples either way, so
 	// 1s shows the last minute and 5s the last five.
