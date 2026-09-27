@@ -87,6 +87,30 @@ jobs:
           CGO_ENABLED: 1
         run: go vet ./... || true
 
+      # The only automated check the Windows code paths get.
+      #
+      # It is a named list rather than ./... because most of the suite reads the
+      # live /proc and /sys of the machine it runs on, and those tests are scoped
+      # to Linux by filename. What is left is the platform-neutral logic plus the
+      # Windows mappings: process names, service states, battery status, and what
+      # the updater offers. internal/app and internal/ui need cgo and a display, so
+      # they are built above rather than tested here.
+      - name: Test the Windows code paths
+        env:
+          CGO_ENABLED: 0
+        run: |
+          go test -count=1 \
+            ./internal/winapi/ \
+            ./internal/process/ \
+            ./internal/power/ \
+            ./internal/services/ \
+            ./internal/autostart/ \
+            ./internal/stats/ \
+            ./internal/format/ \
+            ./internal/health/ \
+            ./internal/config/ \
+            ./internal/graph/
+
       # Build and stage in one step, through the script the release uses, so the
       # two cannot package differently.
       - name: Build and stage the distribution
