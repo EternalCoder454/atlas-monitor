@@ -21,6 +21,12 @@ jobs:
     # for AdwButtonRow, which Ubuntu 24.04 does not ship, and Fedora is what the
     # project targets.
     container: fedora:latest
+    # One set of build flags for vet, build and test, so they share one compile
+    # of gotk4. `make build` uses -trimpath and Go keys its cache on the flags,
+    # so without this a cold run compiled the bindings twice — once for vet,
+    # once for the build. See windows.yml, which had the same problem.
+    env:
+      GOFLAGS: -trimpath
     steps:
       # Split in two so the package cache can be restored between them: the
       # cache action needs tar and zstd, which is why those come first, and the
