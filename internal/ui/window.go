@@ -27,12 +27,13 @@ import (
 // GTK objects for pages the user may never look at. The sidebar row is cheap,
 // so navigation is unaffected.
 //
-// The reverse — tearing a page down again when the user leaves it — does not
-// work and is deliberately not attempted. Destroying a GTK page reclaims
-// nothing: gotk4 keeps each signal handler's Go closure alive for the widget's
-// lifetime and those closures reference the page, so the two hold each other
-// up. Rebuilding one simply costs its memory a second time. Not building it
-// until it is asked for is the saving that actually lands.
+// The reverse — tearing a page down again when the user leaves it — is not
+// attempted. Before gotk4 0.4.1 it reclaimed nothing: gotk4 kept each signal
+// handler's Go closure alive for good, and those closures referenced the page,
+// so the two held each other up. 0.4.1 would release it, but a page left is
+// usually a page returned to, and rebuilding it each time would trade a few
+// megabytes held for work and a flicker on every visit. Not building it until
+// it is asked for is the saving that lands either way.
 type lazyView struct {
 	build func() View
 	view  View

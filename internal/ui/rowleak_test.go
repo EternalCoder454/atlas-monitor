@@ -110,11 +110,10 @@ func collectedAfterRemoval(t *testing.T, rounds, n int, c chain) (created, freed
 		t.Fatalf("model still holds %d rows", model.Len())
 	}
 
-	// Finalizers need two cycles: one to queue them, one after they have run.
-	for i := 0; i < 4; i++ {
-		runtime.GC()
-		runtime.Gosched()
-	}
+	// Finalizers need collections to queue and run them, and since gotk4 0.4.1
+	// part of the release happens on GLib's main context, which has to be let
+	// run — as it always is in the application.
+	settle()
 	for {
 		select {
 		case <-freedCh:
@@ -127,38 +126,22 @@ func collectedAfterRemoval(t *testing.T, rounds, n int, c chain) (created, freed
 	return created, freed
 }
 
-// TestSplicedOutRowsArePinnedByGoCallbacks pins the gotk4 behaviour the Apps
-// table is built around, because the reason for that design is invisible in the
-// code it produces.
+// TestSplicedOutRowsAreReleased checks that a row spliced out of the model is
+// released, whatever sits on top of the model.
 //
-// A row spliced out of a plain list model is released. Attach any Go callback to
-// that model — the search GtkCustomFilter, the column GtkCustomSorters — and the
-// same row is never released: the binding takes a reference on every item it
-// hands the callback and never gives it back. On the Apps page, where a row is
-// created per process, that measured about a megabyte a minute of ordinary
-// process churn. Hence the free list in appsView: rows are recycled so the item
-// set stays bounded, which bounds the pinning.
-//
-// If this test starts failing because the callback cases now release their rows,
-// that is good news and the free list can go. Until then it is load-bearing.
-func TestSplicedOutRowsArePinnedByGoCallbacks(t *testing.T) {
-	released := map[chain]bool{}
+// Before gotk4 0.4.1 it was not: any layer with a Go callback — the search
+// filter, the column sorters — took a reference on every row it was handed and
+// never gave it back, so every process that ever came and went stayed in memory
+// for the life of the application. The Apps view recycles rows (see the free
+// list in appsView) because of that; this test is what says the recycling is now
+// an economy rather than the only thing bounding a leak, and it fails if a
+// future gotk4 brings the leak back.
+func TestSplicedOutRowsAreReleased(t *testing.T) {
 	for _, c := range []chain{chainBare, chainFilter, chainSort, chainFull} {
 		created, freed := collectedAfterRemoval(t, 20, 50, c)
 		t.Logf("%-12s %d rows spliced in and out, %d released", c, created, freed)
-		released[c] = freed*4 >= created*3
-	}
-
-	// Without a Go callback the model releases what it removes.
-	if !released[chainBare] {
-		t.Error("a plain list model no longer releases rows spliced out of it; " +
-			"recycling rows would no longer be enough to bound the leak")
-	}
-	// With one, it does not. Any of these turning green means gotk4 fixed it.
-	for _, c := range []chain{chainFilter, chainSort, chainFull} {
-		if released[c] {
-			t.Errorf("%s now releases rows spliced out of the model — gotk4 appears to have "+
-				"fixed the reference it used to keep, so the free list in appsView can be removed", c)
+		if freed*4 < created*3 {
+			t.Errorf("%s: only %d of %d rows released after being spliced out", c, freed, created)
 		}
 	}
 }

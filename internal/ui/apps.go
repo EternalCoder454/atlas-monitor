@@ -223,15 +223,15 @@ type appsView struct {
 	// are reused for the next process that appears, so the model's item set only
 	// ever grows to the high-water mark of concurrent processes and never churns.
 	//
-	// This is not an optimisation, it is a leak fix. Attaching any Go callback to
+	// This began as a leak fix. Before gotk4 0.4.1, attaching any Go callback to
 	// a list model — the search GtkCustomFilter here, the column GtkCustomSorters
-	// below — makes gotk4 take a reference on every item the callback is handed
-	// and never give it back, so an item spliced out of the model is pinned for
-	// the life of the process. On a machine with ordinary process churn that is
-	// around a megabyte a minute, for as long as this page is open. The pinning
-	// is per item rather than per call, so holding the item set steady is what
-	// bounds it; TestAppsRowsAreRecycled and TestRowsAreReleasedWhenSplicedOut
-	// cover both halves of that.
+	// below — made gotk4 take a reference on every item the callback was handed
+	// and never give it back, so each row spliced out of the model stayed in
+	// memory for the life of the process: around a megabyte a minute on a
+	// machine with ordinary churn. 0.4.1 releases them (TestSplicedOutRowsAreReleased
+	// says so, and fails if that ever regresses), and recycling stays because
+	// it is still the cheaper way: a process that comes and goes costs no splice,
+	// no new GObject and no re-filtering. TestAppsRowsAreRecycled covers it.
 	free []*procRow
 
 	// cells holds the state of every realised cell, keyed by the native
@@ -718,18 +718,17 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 	}
 
 	// GTK builds and discards list-item cells as the table changes, and each
-	// setup used to make a fresh GtkLabel. gotk4 keeps a reference to every
-	// GObject it hands a Go callback and never gives it back, so those labels —
-	// and the accessibility context GTK creates alongside each one — were never
-	// freed. Measured with heaptrack under heavy process churn: 4905 labels in
-	// 150 seconds on this page against zero on a page with no table, about a
-	// kilobyte each.
+	// setup used to make a fresh GtkLabel. Before gotk4 0.4.1 those labels — and
+	// the accessibility context GTK creates alongside each one — were never
+	// freed: gotk4 kept a reference to every GObject it handed a Go callback.
+	// Measured with heaptrack under heavy process churn, 4905 labels in 150
+	// seconds on this page, about a kilobyte each.
 	//
-	// The labels are pooled per column instead. A column only ever needs as many
-	// as GTK realises at once, so after the table has filled the pool no more
-	// are created, and the pinning stops growing with them. The pool is a plain
-	// slice in this closure: one per column, only ever touched from the UI
-	// thread.
+	// The labels are pooled per column instead, which since 0.4.1 is an economy
+	// rather than a fix: a column only ever needs as many as GTK realises at
+	// once, so after the table has filled no more are created at all. The pool
+	// is a plain slice in this closure: one per column, only ever touched from
+	// the UI thread.
 	var pool []cellParts
 
 	factory := gtk.NewSignalListItemFactory()
@@ -821,9 +820,9 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 
 	// This runs on every tick now, because the rows' values change in place and
 	// the sorter has to be told (see applyRows). The Take() wrappers below are
-	// therefore a warm path: they are safe because the set of row objects is
-	// bounded — rows are recycled rather than replaced — so the references gotk4
-	// keeps on them do not accumulate.
+	// therefore a warm path. Before gotk4 0.4.1 each one kept a reference on its
+	// row for good, which only stayed bounded because rows are recycled rather
+	// than replaced; 0.4.1 releases them.
 	sorter := gtk.NewCustomSorter(func(a, b unsafe.Pointer) int {
 		ra := gioutil.ObjectValue[*procRow](coreglib.Take(a))
 		rb := gioutil.ObjectValue[*procRow](coreglib.Take(b))
@@ -891,13 +890,12 @@ func (v *appsView) buildContextMenu(parent gtk.Widgetter) {
 // the row under the pointer at click time.
 //
 // It used to be a gesture per cell, connected in the factory's setup handler.
-// That leaks: gotk4 registers every Go callback in a process-wide registry and
-// does not release the entry when the widget goes away — around eleven live
-// objects per gesture, and disconnecting the handler first only halves it (see
-// TestPerWidgetGestureClosuresAreRetained). GTK builds cells constantly, on
-// scrolling as much as on refreshes, so on a machine with busy process churn the
-// Apps page grew by roughly a megabyte a minute for as long as it was open.
-// One gesture for the table costs one registration for the life of the process.
+// Before gotk4 0.4.1 that leaked: every Go callback went into a process-wide
+// registry that was never cleaned when the widget went away — around eleven live
+// objects per gesture — and GTK builds cells constantly, so the Apps page grew
+// by roughly a megabyte a minute on a machine with busy process churn. 0.4.1
+// releases them (see TestDroppedGestureClosuresAreReleased); one gesture for the
+// whole table is kept because it is still less work than one per cell.
 func (v *appsView) attachContextMenu(cv *gtk.ColumnView) {
 	v.popover.SetParent(cv)
 	click := gtk.NewGestureClick()

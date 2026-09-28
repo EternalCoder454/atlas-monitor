@@ -41,13 +41,13 @@ vet:
 test:
 	go test ./...
 
-# The race detector, split in two: internal/ui builds real GObjects, and -race
-# also enables checkptr, which trips over the unsafe pointer arithmetic in
-# gotk4's weak-reference dependency rather than on anything here. The race
-# detector is kept for it; only that pointer check is switched off.
+# The race detector, over the packages that share state between goroutines and
+# the one that builds real GObjects. internal/ui used to need checkptr switched
+# off, for the unsafe pointer arithmetic in gotk4's old weak-reference
+# dependency; gotk4 0.4.1 dropped it, and the pointer check runs everywhere.
 test-race:
-	go test -race -count=1 ./internal/stats/ ./internal/process/ ./internal/ai/ ./internal/gpu/ ./internal/power/
-	go test -race -count=1 -gcflags=all=-d=checkptr=0 ./internal/ui/
+	go test -race -count=1 ./internal/stats/ ./internal/process/ ./internal/ai/ ./internal/gpu/ ./internal/power/ \
+		./internal/ease/ ./internal/desktop/ ./internal/sensors/ ./internal/ui/
 
 setup-ai:
 	bash scripts/setup-ai.sh
