@@ -12,6 +12,7 @@ import (
 	"atlas-monitor/internal/config"
 	"atlas-monitor/internal/health"
 	"atlas-monitor/internal/process"
+	"atlas-monitor/internal/sensors"
 	"atlas-monitor/internal/services"
 	"atlas-monitor/internal/stats"
 	"atlas-monitor/internal/sysmem"
@@ -160,6 +161,11 @@ func (w *Window) Build() gtk.Widgetter {
 		}
 	}
 
+	sensorsAvail := sensors.Available()
+	if sensorsAvail {
+		w.addView("sensors", func() View { return newSensorsView() })
+	}
+
 	if aiCompiledIn {
 		w.addView("assistant", func() View {
 			a := newAssistant(col, w.proc, w.ai, w.settings)
@@ -178,7 +184,7 @@ func (w *Window) Build() gtk.Widgetter {
 	}
 	orderedNets := orderByActive(nets, activeNet)
 
-	sb := buildSidebar(disks, orderedNets, packs, gpuAvail, batteryAvail, aiCompiledIn, w.selectView)
+	sb := buildSidebar(disks, orderedNets, packs, gpuAvail, batteryAvail, sensorsAvail, aiCompiledIn, w.selectView)
 	w.sidebar = sb
 	w.assistantRow = sb.assistantRow
 	w.netExp = sb.netExp

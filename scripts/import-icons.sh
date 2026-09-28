@@ -44,6 +44,7 @@ map=(
     reset:reset
     warning:warning
     power-saving:energy
+    sensors:sensors
 )
 
 fail=0
