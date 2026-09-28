@@ -297,7 +297,7 @@ Arch Linux:
 sudo pacman -S --needed base-devel go gtk4 libadwaita
 ```
 
-You need Go 1.22 or newer. The first build compiles the gotk4 cgo bindings and
+You need Go 1.24 or newer. The first build compiles the gotk4 cgo bindings and
 can take several minutes; subsequent builds are cached and fast.
 
 ## Build & install
