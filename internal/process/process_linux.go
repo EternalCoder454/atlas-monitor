@@ -72,6 +72,8 @@ func (c *Collector) collect() {
 	gpuFullScan := gpuWanted && c.gpuScanCounter%gpuRescanTicks == 0
 	c.gpuScanCounter++
 	ioWanted := c.wantDiskIO.Load()
+	unitRescan := c.unitScanCounter%unitRescanTicks == 0
+	c.unitScanCounter++
 	// Every per-tick container is a reused one: emptying a map keeps its buckets,
 	// so a steady process count settles into zero allocation per scan.
 	newGPUEngine, newGPUPids := c.gpuPrevSpare, c.gpuPidsSpare
@@ -102,7 +104,14 @@ func (c *Collector) collect() {
 		if !hadPrev || name != string(c.stat.name) {
 			name = string(c.stat.name)
 		}
-		p := Proc{PID: pid, Name: name, Kernel: c.stat.kernel, GPU: -1}
+		// The unit, read when the process first appears and then only on the
+		// occasional rescan. Processes are almost never moved between cgroups,
+		// and one more file per process per tick would be a third more opens.
+		unit := prev.unit
+		if !c.stat.kernel && (!hadPrev || unitRescan) {
+			unit = c.readUnit(pid, unit)
+		}
+		p := Proc{PID: pid, Name: name, Kernel: c.stat.kernel, GPU: -1, Unit: unit}
 		p.RSS = c.readRSS(pid)
 
 		var rb, wb uint64
@@ -117,7 +126,7 @@ func (c *Collector) collect() {
 			p.DiskRead = deltaRate(rb, prev.readBytes, dt)
 			p.DiskWrite = deltaRate(wb, prev.writeBytes, dt)
 		}
-		newPrev[pid] = procPrev{name: name, cpuJiffies: c.stat.jiffies, readBytes: rb, writeBytes: wb}
+		newPrev[pid] = procPrev{name: name, unit: unit, cpuJiffies: c.stat.jiffies, readBytes: rb, writeBytes: wb}
 
 		// Both the socket count and the GPU counters come from the same place —
 		// the process's open descriptors — so they share one walk. Done
@@ -292,6 +301,62 @@ func (c *Collector) readRSS(pid int) uint64 {
 		return 0
 	}
 	return fieldUint(b, 1) * pageSize // field 1 = resident pages
+}
+
+// unitRescanTicks is how often every process's unit is read again. A process can
+// be moved into another cgroup — `systemd-run --scope` does it — but it is rare
+// and nothing breaks for the half minute it takes to notice.
+const unitRescanTicks = 30
+
+// readUnit returns the systemd unit pid runs in, reusing prev when it has not
+// changed so that a steady process costs no allocation.
+func (c *Collector) readUnit(pid int, prev string) string {
+	b := c.slurpPID(pid, "/cgroup")
+	if b == nil {
+		return prev
+	}
+	u := UnitFromCgroup(b)
+	if string(u) == prev {
+		return prev
+	}
+	return string(u)
+}
+
+// UnitFromCgroup finds the systemd unit in the contents of /proc/[pid]/cgroup:
+// the deepest path component that is a scope or a service. Deepest, because a
+// unit may have cgroups of its own below it — a delegated scope, a browser's
+// sandbox — and those belong to the unit above. The unified hierarchy's "0::"
+// line is used where there is one; on a legacy or hybrid system, the systemd
+// controller's line. The result aliases b.
+func UnitFromCgroup(b []byte) []byte {
+	var path []byte
+	for len(b) > 0 {
+		line := b
+		if i := bytes.IndexByte(b, '\n'); i >= 0 {
+			line, b = b[:i], b[i+1:]
+		} else {
+			b = nil
+		}
+		if rest, ok := bytes.CutPrefix(line, []byte("0::")); ok {
+			path = rest
+			break
+		}
+		if i := bytes.Index(line, []byte(":name=systemd:")); i >= 0 {
+			path = line[i+len(":name=systemd:"):]
+		}
+	}
+	for len(path) > 0 {
+		comp := path
+		if i := bytes.LastIndexByte(path, '/'); i >= 0 {
+			comp, path = path[i+1:], path[:i]
+		} else {
+			path = nil
+		}
+		if bytes.HasSuffix(comp, []byte(".scope")) || bytes.HasSuffix(comp, []byte(".service")) {
+			return comp
+		}
+	}
+	return nil
 }
 
 // readIO returns cumulative read_bytes/write_bytes (0 if not permitted).
