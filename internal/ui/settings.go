@@ -446,7 +446,18 @@ func themeGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 	g := adw.NewPreferencesGroup()
 	g.SetTitle("Theme")
 
-	row := gtk.NewBox(gtk.OrientationHorizontal, 18)
+	// Two rows of five rather than one of ten. Ten circles and their names are
+	// wider than the dialog is at its narrowest — it becomes a bottom sheet on a
+	// phone-width window — and a FlowBox wraps to fewer per line there instead of
+	// forcing the dialog wider or clipping the names.
+	row := gtk.NewFlowBox()
+	row.SetSelectionMode(gtk.SelectionNone)
+	row.SetActivateOnSingleClick(false)
+	row.SetMaxChildrenPerLine(5)
+	row.SetMinChildrenPerLine(1)
+	row.SetHomogeneous(true)
+	row.SetColumnSpacing(18)
+	row.SetRowSpacing(12)
 	row.SetHAlign(gtk.AlignCenter)
 	row.SetMarginTop(6)
 	row.SetMarginBottom(6)
@@ -494,6 +505,12 @@ func themeGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 		t := t
 
 		swatch := gtk.NewToggleButton()
+		// Centred, not filled. A button fills its cell by default, and the cell
+		// is as wide as the name under it — so every theme with a name longer
+		// than the circle ("Ember", "Dracula", "Solarized") was drawn as an oval,
+		// and the ring round the chosen one with it.
+		swatch.SetHAlign(gtk.AlignCenter)
+		swatch.SetVAlign(gtk.AlignCenter)
 		swatch.AddCSSClass("am-swatch")
 		swatch.AddCSSClass(theme.SwatchClass(t.ID))
 		swatch.SetTooltipText(t.Name + " — " + t.Summary)
@@ -510,6 +527,12 @@ func themeGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 		cell.Append(swatch)
 		cell.Append(name)
 		row.Append(cell)
+		// The FlowBox wraps each cell in a child of its own that takes keyboard
+		// focus, which would put two tab stops in front of every circle — one
+		// that does nothing, then the button. Only the button should take it.
+		if child := row.ChildAtIndex(len(buttons)); child != nil {
+			child.SetFocusable(false)
+		}
 
 		swatch.ConnectToggled(func() {
 			if syncing {
