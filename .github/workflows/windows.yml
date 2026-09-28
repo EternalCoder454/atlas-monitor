@@ -42,6 +42,17 @@ jobs:
     defaults:
       run:
         shell: msys2 {0}
+    # Every go command in the job uses the same build flags and the same caches.
+    #
+    # The expensive thing in this job is compiling gotk4's cgo bindings, and it
+    # used to happen twice, cold, on every run: 18 minutes inside `go vet`, then
+    # another 17 in the staging build. Twice because vet built without -trimpath
+    # and packaging/stage-windows.sh builds with it, and Go keys its build cache
+    # on the flags, so neither compile could use the other's. Cold because nothing
+    # survived from one run to the next. -trimpath everywhere fixes the first; the
+    # cache step below fixes the second.
+    env:
+      GOFLAGS: -trimpath
     steps:
       - uses: actions/checkout@v5
 
@@ -68,12 +79,40 @@ jobs:
             git
             zip
 
+      # Go's caches in the runner's temp directory, which is where the cache step
+      # saves and restores them. Set here rather than in the job's env because the
+      # runner context, and so runner.temp, is not available at that level.
+      - name: Put Go's caches where the cache step keeps them
+        run: |
+          temp="$(cygpath -w "$RUNNER_TEMP")"
+          echo "GOCACHE=$temp\\go-build" >> "$GITHUB_ENV"
+          echo "GOMODCACHE=$temp\\go-mod" >> "$GITHUB_ENV"
+
       - name: What we are building against
+        id: toolchain
         run: |
           go version
           gcc --version | head -1
           pkg-config --modversion gtk4
           pkg-config --modversion libadwaita-1
+          echo "key=$(go env GOVERSION)-gcc$(gcc -dumpversion)-gtk$(pkg-config --modversion gtk4)-adw$(pkg-config --modversion libadwaita-1)" >> "$GITHUB_OUTPUT"
+
+      # The compiled gotk4 bindings, kept between runs. Go's build cache does not
+      # notice when C headers change underneath it, so the key names the exact Go,
+      # gcc, GTK and libadwaita it was built with: when MSYS2 upgrades any of them
+      # the cache starts again rather than linking objects built against the old
+      # headers. Within one toolchain a change to go.sum can still reuse most of it.
+      #
+      # release.yml restores the same key for the release's zip, so these paths
+      # and this key must stay the same in both files.
+      - name: Cache Go modules and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/go-build
+            ${{ runner.temp }}/go-mod
+          key: windows-go-${{ steps.toolchain.outputs.key }}-${{ hashFiles('go.sum') }}
+          restore-keys: windows-go-${{ steps.toolchain.outputs.key }}-
 
       - name: Trust the checkout
         run: git config --global --add safe.directory "$(pwd)"
