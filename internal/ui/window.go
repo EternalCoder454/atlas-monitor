@@ -10,6 +10,7 @@ import (
 
 	"atlas-monitor/internal/ai"
 	"atlas-monitor/internal/config"
+	"atlas-monitor/internal/ease"
 	"atlas-monitor/internal/health"
 	"atlas-monitor/internal/process"
 	"atlas-monitor/internal/sensors"
@@ -57,6 +58,11 @@ type Window struct {
 	assistantRow *adw.ActionRow
 	split        *adw.OverlaySplitView
 	menuBtn      *gtk.ToggleButton
+
+	// easer is Energy Saver's automatic half, owned by the application; nil
+	// with easeErr saying why where the system cannot support it.
+	easer   *ease.Controller
+	easeErr error
 
 	// keys is the widget whose unclaimed typing goes to the open page's search
 	// box, and capturing the page currently taking it. See searcher.
@@ -174,7 +180,7 @@ func (w *Window) Build() gtk.Widgetter {
 		})
 	}
 	w.addView("apps", func() View { return newAppsView(w.proc, gpuAvail, w.settings) })
-	w.addView("energy", func() View { return newEnergyView(w.proc) })
+	w.addView("energy", func() View { return newEnergyView(w.proc, w.easer, w.easeErr, w.settings) })
 	w.addView("startup", func() View { return newStartupView() })
 	w.addView("services", func() View { return newServicesView() })
 
@@ -299,6 +305,12 @@ func (w *Window) Build() gtk.Widgetter {
 		})
 	})
 	return bin
+}
+
+// SetEnergy hands the window Energy Saver's automatic half, before Build. c is
+// nil where it is not available, and err then says why.
+func (w *Window) SetEnergy(c *ease.Controller, err error) {
+	w.easer, w.easeErr = c, err
 }
 
 // SetAIEnabled shows or hides the Assistant entry. With AI off the page is

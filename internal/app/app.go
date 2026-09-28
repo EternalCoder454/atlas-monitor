@@ -17,6 +17,7 @@ import (
 
 	"atlas-monitor/internal/ai"
 	"atlas-monitor/internal/config"
+	"atlas-monitor/internal/ease"
 	"atlas-monitor/internal/gfx"
 	"atlas-monitor/internal/gpu"
 	"atlas-monitor/internal/stats"
@@ -55,6 +56,13 @@ type App struct {
 	// when there is nothing to do. See applyTheme for why that matters.
 	appliedTheme string
 	themeApplied bool
+
+	// easer is Energy Saver's automatic half, or nil where the system cannot
+	// support it (easeErr says why). It ticks on a goroutine of its own, window
+	// or no window: see startEaser.
+	easer    *ease.Controller
+	easeErr  error
+	easeStop chan struct{}
 }
 
 // New creates the application. css is the embedded stylesheet contents and
@@ -87,6 +95,7 @@ func New(css, version string) *App {
 		if a.col != nil {
 			a.col.Stop()
 		}
+		a.stopEaser()
 	})
 	return a
 }
@@ -115,6 +124,8 @@ func (a *App) activate() {
 	a.col.Start()
 
 	a.content = ui.NewWindow(a.col, a.aiClient, &a.settings)
+	a.startEaser()
+	a.content.SetEnergy(a.easer, a.easeErr)
 	root := a.content.Build()
 
 	win := adw.NewApplicationWindow(&a.app.Application)
@@ -266,6 +277,49 @@ func (a *App) location() string { return a.install().Where() }
 func (a *App) checkUpdate(channel string) (available bool, info string, err error) {
 	u, err := a.CheckUpdate(channel)
 	return u.Available, u.Summary, err
+}
+
+// easeEvery is how often the automatic Energy Saver samples. It reads one small
+// file per application, so running it while the window is closed — which is the
+// point of it — costs next to nothing.
+const easeEvery = 5 * time.Second
+
+// startEaser sets up Energy Saver's automatic half and starts it sampling. It
+// runs whatever the window is doing: this is the one part of Atlas that has to
+// keep working when nobody is looking at it.
+func (a *App) startEaser() {
+	c, err := ease.System(ease.DesktopIdentity)
+	a.easer, a.easeErr = c, err
+	if c == nil {
+		return
+	}
+	c.SetNever(a.settings.EnergyNever)
+	c.SetAutomatic(a.settings.EnergyAuto)
+	a.easeStop = make(chan struct{})
+	go func(stop <-chan struct{}) {
+		t := time.NewTicker(easeEvery)
+		defer t.Stop()
+		c.Tick()
+		for {
+			select {
+			case <-t.C:
+				c.Tick()
+			case <-stop:
+				return
+			}
+		}
+	}(a.easeStop)
+}
+
+// stopEaser stops the sampling and puts back everything eased automatically:
+// with Atlas gone, nothing would notice an eased application start playing.
+func (a *App) stopEaser() {
+	if a.easer == nil {
+		return
+	}
+	close(a.easeStop)
+	a.easer.Shutdown()
+	a.easer = nil
 }
 
 // loadCSS installs the embedded stylesheet and the theme's colours.
