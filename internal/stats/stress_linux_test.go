@@ -49,6 +49,7 @@ func histHead(c *Collector) int {
 // minimised and restored. Sampling must actually stop, actually restart, and
 // leave no goroutine parked on the condition variable.
 func TestPauseResumeCycles(t *testing.T) {
+	t.Parallel()
 	c := New(gpu.NewReader())
 	c.Start()
 	defer c.Stop()
@@ -94,6 +95,7 @@ func TestPauseResumeCycles(t *testing.T) {
 // selectable for no practical gain — so the bound is what this test asserts,
 // followed by silence.
 func TestPauseActuallyStopsSampling(t *testing.T) {
+	t.Parallel()
 	c := New(gpu.NewReader())
 	c.SetInterval(time.Second)
 	c.Start()
@@ -127,6 +129,7 @@ func TestPauseActuallyStopsSampling(t *testing.T) {
 // samplers write. Under -race this is what would expose a figure published
 // outside the lock.
 func TestConcurrentReadsWhileCollecting(t *testing.T) {
+	t.Parallel()
 	c := New(gpu.NewReader())
 	c.Start()
 	defer c.Stop()
@@ -206,6 +209,13 @@ func TestStopIsIdempotent(t *testing.T) {
 // TestStopReleasesDescriptors checks the held files are actually given back.
 // 0.7.0 replaced per-tick opens with descriptors kept for the process's life, so
 // this is the regression that change could have introduced.
+//
+// Not parallel, and neither is TestStopIsIdempotent: both reason about this
+// process's descriptor table, which every other test's collector is opening and
+// closing. The rest of the package's slow tests run in parallel — they sleep
+// through real one-second samples on collectors of their own, and one after
+// another they were a minute of CI — and Go holds them back until the
+// sequential tests, these two included, have finished.
 func TestStopReleasesDescriptors(t *testing.T) {
 	before := selfFDs(t)
 
@@ -231,6 +241,7 @@ func TestStopReleasesDescriptors(t *testing.T) {
 // TestIntervalIsHonoured checks the configurable refresh rate actually changes
 // the sampling rate, in both directions.
 func TestIntervalIsHonoured(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("takes ten seconds")
 	}

@@ -27,9 +27,11 @@ jobs:
       # expensive half (gtk4-devel and its dependencies) then comes out of the
       # cache instead of the network.
       - name: Install the cache tools
+        id: cachetools
         run: |
           echo "keepcache=1" >> /etc/dnf/dnf.conf
           dnf install -y --setopt=install_weak_deps=False --nodocs tar zstd
+          echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
 
       - name: Cache dnf packages
         uses: actions/cache@v4
@@ -41,7 +43,13 @@ jobs:
           path: |
             /var/cache/libdnf5
             /var/cache/dnf
-          key: dnf-fedora-${{ hashFiles('.github/workflows/ci.yml') }}
+          # Keyed by the week, so the cache follows Fedora's updates. It used to
+          # be keyed on a hash of this file, but this step runs before the
+          # checkout, where that hash is empty: the key was always "dnf-fedora-",
+          # an exact hit that is never saved again, so the cache stayed the
+          # packages of the day it was made and every update since was downloaded
+          # on every run. A new week starts from the last one's and saves once.
+          key: dnf-fedora-${{ steps.cachetools.outputs.week }}
           restore-keys: dnf-fedora-
 
       - name: Install build dependencies
@@ -118,9 +126,11 @@ jobs:
       # expensive half (gtk4-devel and its dependencies) then comes out of the
       # cache instead of the network.
       - name: Install the cache tools
+        id: cachetools
         run: |
           echo "keepcache=1" >> /etc/dnf/dnf.conf
           dnf install -y --setopt=install_weak_deps=False --nodocs tar zstd
+          echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
 
       - name: Cache dnf packages
         uses: actions/cache@v4
@@ -132,7 +142,13 @@ jobs:
           path: |
             /var/cache/libdnf5
             /var/cache/dnf
-          key: dnf-fedora-${{ hashFiles('.github/workflows/ci.yml') }}
+          # Keyed by the week, so the cache follows Fedora's updates. It used to
+          # be keyed on a hash of this file, but this step runs before the
+          # checkout, where that hash is empty: the key was always "dnf-fedora-",
+          # an exact hit that is never saved again, so the cache stayed the
+          # packages of the day it was made and every update since was downloaded
+          # on every run. A new week starts from the last one's and saves once.
+          key: dnf-fedora-${{ steps.cachetools.outputs.week }}
           restore-keys: dnf-fedora-
 
       - name: Install build dependencies

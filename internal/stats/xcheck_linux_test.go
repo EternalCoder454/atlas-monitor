@@ -83,6 +83,7 @@ func freeFigures(t *testing.T) (mem, swap map[string]uint64) {
 // tools read straight out of /proc/meminfo — and then checks our Used against
 // free's *available* column, not its used column.
 func TestMemoryAgreesWithFree(t *testing.T) {
+	t.Parallel()
 	// A single comparison can fail on a machine that is only busy. The
 	// bracketing below absorbs memory that moves steadily, but not a spike
 	// that comes and goes between our reads — and go test ./... runs the other
@@ -150,6 +151,7 @@ func compareMemoryWithFree(t *testing.T) (problems []string) {
 // TestMemoryInvariants checks the figures are internally consistent, which the
 // Memory page's bars and percentages depend on.
 func TestMemoryInvariants(t *testing.T) {
+	t.Parallel()
 	var m MemStats
 	sample(t, 2, func(s *Stats) { m = s.Mem })
 
@@ -218,6 +220,7 @@ func readDF(t *testing.T) []dfRow {
 // (/ and /home here), and summing those would double-count the whole
 // filesystem. That de-duplication is the thing most worth guarding.
 func TestDiskSpaceAgreesWithDF(t *testing.T) {
+	t.Parallel()
 	rows := readDF(t)
 	if len(rows) == 0 {
 		t.Skip("df listed no block devices")
@@ -280,6 +283,7 @@ func TestDiskSpaceAgreesWithDF(t *testing.T) {
 // nothing to flag and flagging something would be the bug. The strict check
 // therefore runs only where /proc/mounts really does show a block device at /.
 func TestRootDiskIdentified(t *testing.T) {
+	t.Parallel()
 	var roots, total int
 	var name string
 	sample(t, 1, func(s *Stats) {
@@ -334,6 +338,7 @@ func blockDeviceAtRoot(t *testing.T) bool {
 // independent parse of /proc/net/dev. Counters only climb, so ours must be at
 // least what we read before the sample and no more than what we read after.
 func TestNetCountersAgreeWithProc(t *testing.T) {
+	t.Parallel()
 	before := parseNetDevForTest(t)
 
 	var nets []*NetStats
@@ -401,6 +406,7 @@ func parseNetDevForTest(t *testing.T) map[string][2]uint64 {
 // TestNetAddressesAgreeWithIP checks the addresses shown on the Network page
 // against `ip addr`.
 func TestNetAddressesAgreeWithIP(t *testing.T) {
+	t.Parallel()
 	bin, err := exec.LookPath("ip")
 	if err != nil {
 		t.Skip("ip not installed")
@@ -447,6 +453,7 @@ func TestNetAddressesAgreeWithIP(t *testing.T) {
 // TestActiveNetIsRoutable checks the interface the sidebar highlights is the one
 // the kernel routes through.
 func TestActiveNetIsRoutable(t *testing.T) {
+	t.Parallel()
 	data, err := os.ReadFile("/proc/net/route")
 	if err != nil {
 		t.Skipf("cannot read /proc/net/route: %v", err)
@@ -478,6 +485,7 @@ func TestActiveNetIsRoutable(t *testing.T) {
 // direct /proc/stat reads and checks the samples average out to the same busy
 // percentage the kernel's own counters imply over that window.
 func TestCPUUsageAgreesWithProcStat(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("takes several seconds")
 	}
@@ -554,17 +562,46 @@ func procStatTotals() (idle, total uint64, ok bool) {
 	return 0, 0, false
 }
 
+// onlineCPUs is how many processors the machine has online, which is what the
+// CPU page counts. runtime.NumCPU is not a substitute: it counts the processors
+// this process is allowed to run on, so under taskset or a container's cpuset it
+// is smaller than the machine, while Atlas, rightly, still reports the machine.
+func onlineCPUs(t *testing.T) int {
+	t.Helper()
+	b, err := os.ReadFile("/sys/devices/system/cpu/online")
+	if err != nil {
+		return runtime.NumCPU()
+	}
+	n := 0
+	for _, part := range strings.Split(strings.TrimSpace(string(b)), ",") { // "0-3,8-11"
+		lo, hi, isRange := strings.Cut(part, "-")
+		first, err := strconv.Atoi(lo)
+		if err != nil {
+			t.Fatalf("cannot read /sys/devices/system/cpu/online: %q", b)
+		}
+		last := first
+		if isRange {
+			if last, err = strconv.Atoi(hi); err != nil || last < first {
+				t.Fatalf("cannot read /sys/devices/system/cpu/online: %q", b)
+			}
+		}
+		n += last - first + 1
+	}
+	return n
+}
+
 // TestCPUTopologyAgreesWithSysfs checks the core grid and the static header
 // against the machine's real topology.
 func TestCPUTopologyAgreesWithSysfs(t *testing.T) {
+	t.Parallel()
 	var cpu CPUStats
 	sample(t, 2, func(s *Stats) {
 		cpu = s.CPU
 		cpu.Cores = append([]CoreStat(nil), s.CPU.Cores...)
 	})
 
-	if cpu.Logical != runtime.NumCPU() {
-		t.Errorf("Logical = %d, runtime.NumCPU() = %d", cpu.Logical, runtime.NumCPU())
+	if want := onlineCPUs(t); cpu.Logical != want {
+		t.Errorf("Logical = %d, the machine has %d online", cpu.Logical, want)
 	}
 	if len(cpu.Cores) != cpu.Logical {
 		t.Errorf("core grid has %d entries, Logical = %d", len(cpu.Cores), cpu.Logical)

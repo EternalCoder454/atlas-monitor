@@ -25,12 +25,28 @@ jobs:
         run: |
           dnf install -y --setopt=install_weak_deps=False \
             golang gtk4-devel libadwaita-devel glib2-devel \
-            gcc pkgconf-pkg-config git tar gzip \
+            gcc pkgconf-pkg-config git tar gzip zstd \
             gh # the runner host has it, the container does not
 
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+
+      # The gotk4 bindings, already compiled by CI on main. A cold build of them
+      # was 14 of this job's 15 minutes. A tag can read caches saved on the default
+      # branch, and CI builds there with the same container and the same
+      # `make build`, so this is usually an exact hit. Restore only: a cache saved
+      # under a tag is readable by that tag alone, so saving one would be storage
+      # for nothing. The paths and key must stay identical to ci.yml's, which is
+      # what makes the two caches the same cache.
+      - name: Restore the Go build cache from CI
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: fedora-go-${{ hashFiles('go.sum') }}
+          restore-keys: fedora-go-
 
       # See ci.yml: git refuses a checkout owned by another uid, which breaks
       # the VCS stamping `go build` does.
@@ -119,6 +135,10 @@ jobs:
     defaults:
       run:
         shell: msys2 {0}
+    # The same flags and cache locations as windows.yml, so the cache it saves on
+    # main is one this job can use. See that file for why they matter.
+    env:
+      GOFLAGS: -trimpath
     steps:
       - uses: actions/checkout@v5
         with:
@@ -142,6 +162,31 @@ jobs:
 
       - name: Trust the checkout
         run: git config --global --add safe.directory "$(pwd)"
+
+      # Go's caches in the runner's temp directory, which is where the cache step
+      # saves and restores them. Set here rather than in the job's env because the
+      # runner context, and so runner.temp, is not available at that level.
+      - name: Put Go's caches where the cache step keeps them
+        run: |
+          temp="$(cygpath -w "$RUNNER_TEMP")"
+          echo "GOCACHE=$temp\\go-build" >> "$GITHUB_ENV"
+          echo "GOMODCACHE=$temp\\go-mod" >> "$GITHUB_ENV"
+
+      - name: Toolchain
+        id: toolchain
+        run: echo "key=$(go env GOVERSION)-gcc$(gcc -dumpversion)-gtk$(pkg-config --modversion gtk4)-adw$(pkg-config --modversion libadwaita-1)" >> "$GITHUB_OUTPUT"
+
+      # The bindings as the Windows workflow last compiled them on main: 18 minutes
+      # of this job when built cold. Restore only, for the reason given on the
+      # tarball job's cache step.
+      - name: Restore the Go build cache from the Windows workflow
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ runner.temp }}/go-build
+            ${{ runner.temp }}/go-mod
+          key: windows-go-${{ steps.toolchain.outputs.key }}-${{ hashFiles('go.sum') }}
+          restore-keys: windows-go-${{ steps.toolchain.outputs.key }}-
 
       - name: Resolve the tag
         id: tag

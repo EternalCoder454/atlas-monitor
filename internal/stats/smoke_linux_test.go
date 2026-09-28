@@ -1,7 +1,6 @@
 package stats
 
 import (
-	"runtime"
 	"testing"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 // TestCollectorSmoke runs the real collectors against this machine's /proc and
 // /sys for a few samples and sanity-checks the results. Run with -v to inspect.
 func TestCollectorSmoke(t *testing.T) {
+	t.Parallel()
 	c := New(gpu.NewReader())
 	c.Start()
 	defer c.Stop()
@@ -18,9 +18,10 @@ func TestCollectorSmoke(t *testing.T) {
 	// Wait for at least two samples so byte-rates are populated.
 	time.Sleep(2300 * time.Millisecond)
 
+	online := onlineCPUs(t)
 	c.Read(func(s *Stats) {
-		if s.CPU.Logical != runtime.NumCPU() {
-			t.Errorf("CPU.Logical = %d, want %d", s.CPU.Logical, runtime.NumCPU())
+		if s.CPU.Logical != online {
+			t.Errorf("CPU.Logical = %d, want %d online", s.CPU.Logical, online)
 		}
 		if s.Mem.Total == 0 {
 			t.Error("Mem.Total is 0")
