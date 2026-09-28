@@ -51,6 +51,10 @@ type App struct {
 	// changing theme can replace its contents instead of stacking another
 	// provider on the display for every change.
 	themeCSS *gtk.CSSProvider
+	// appliedTheme is the setting last put into effect, so applyTheme can tell
+	// when there is nothing to do. See applyTheme for why that matters.
+	appliedTheme string
+	themeApplied bool
 }
 
 // New creates the application. css is the embedded stylesheet contents and
@@ -215,12 +219,29 @@ func sourceDir() string {
 
 // userDataDir is Atlas's own directory under the user's data home, where
 // `make install` records the source checkout and the build flavour.
-func userDataDir() string {
-	base := os.Getenv("XDG_DATA_HOME")
-	if base == "" {
-		base = filepath.Join(os.Getenv("HOME"), ".local", "share")
+func userDataDir() string { return atlasDir("XDG_DATA_HOME", filepath.Join(".local", "share")) }
+
+// atlasDir resolves one of the XDG directories to Atlas's folder inside it.
+//
+// The variable wins wherever it is set, which is the whole of the Linux story and
+// on Windows lets a portable install keep its state beside itself. Failing that
+// there is a per-platform default: the XDG path under the home directory on Unix,
+// and %LocalAppData% on Windows, which is where a Windows program is supposed to
+// put things it wrote itself. Falling back to "$HOME/.local/share" on a machine
+// where HOME is unset — which is most Windows machines — used to produce a relative
+// path, so Atlas wrote a .local folder into whatever directory it was started from.
+func atlasDir(envVar, unixSuffix string) string {
+	if base := os.Getenv(envVar); base != "" {
+		return filepath.Join(base, "atlas-monitor")
 	}
-	return filepath.Join(base, "atlas-monitor")
+	if base := localAppData(); base != "" {
+		return filepath.Join(base, "atlas-monitor")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "atlas-monitor"
+	}
+	return filepath.Join(home, unixSuffix, "atlas-monitor")
 }
 
 // settingsHooks bundles the callbacks the Settings dialog needs.
@@ -299,6 +320,20 @@ func (a *App) applyTheme() {
 	if mgr == nil {
 		return
 	}
+
+	// Only when the choice has changed. This runs on every settings change —
+	// every switch flipped, and closing the dialog — and reloading a CSS
+	// provider invalidates the style of every widget in the window, whether or
+	// not a single colour in it is different. Reloading the same theme is a full
+	// restyle that changes nothing.
+	want := a.settings.Theme
+	if theme.IsFollowing(want) {
+		want = theme.Follow
+	}
+	if a.themeApplied && want == a.appliedTheme {
+		return
+	}
+	a.themeApplied, a.appliedTheme = true, want
 
 	if theme.IsFollowing(a.settings.Theme) {
 		mgr.SetColorScheme(adw.ColorSchemeDefault)

@@ -2,8 +2,15 @@
 //
 // Atlas used to take whatever the desktop was set to and follow it, which is the
 // right default and the only behaviour anybody needs most of the time. This adds
-// the choice: five themes, two of them the ordinary light and dark that libadwaita
-// already provides, and three with palettes of their own.
+// the choice: ten themes, two of them the ordinary light and dark that libadwaita
+// already provides, and eight with palettes of their own — four light, four dark.
+//
+// Every palette is held to WCAG's contrast minimums by TestPalettesAreReadable:
+// 4.5:1 for text, including the label on an accent-coloured button, and 3:1 for
+// the status colours. That test is not a formality. When it was written, two of
+// the first three themes failed it — Nord's and Ember's button labels were 3.5:1
+// and 3.9:1 — and a screenshot does not show that, because a button reads fine at
+// a glance until you have to read the label on one.
 //
 // A theme is two things. It forces a light or dark colour scheme, which is what
 // makes the widgets and the chart palette pick the right side — internal/graph
@@ -62,9 +69,15 @@ type Theme struct {
 // Themes is every theme, in the order the picker shows them.
 //
 // Light and dark come first because they are what most people want and what the
-// desktop itself offers. The other three are dark, warm-dark and light, so that
-// whichever of the two ordinary ones somebody prefers, there is an alternative to
-// it rather than three variations on the other one.
+// desktop itself offers. The rest are split evenly, four light and four dark, so
+// that whichever of the ordinary two somebody prefers there are alternatives to it
+// rather than to the other one. Each of the eight has an accent of its own —
+// only Light and Dark share one, libadwaita's blue — because two themes that
+// differ only in how dark the grey is are one theme.
+//
+// Secondary is always the theme's accent_bg_color, which TestSwatchIsTheAccent
+// holds it to: the circle is a promise about what the buttons and switches will be,
+// and a preview that is a shade off is a small lie.
 var Themes = []Theme{
 	{
 		ID:      "light",
@@ -110,15 +123,16 @@ var Themes = []Theme{
 			"dialog_fg_color":    "#eceff4",
 			"popover_bg_color":   "#3b4252",
 			"popover_fg_color":   "#eceff4",
-			"accent_bg_color":    "#5e81ac",
-			"accent_fg_color":    "#eceff4",
-			// accent_color is the one used for text and icons rather than for
-			// filled buttons, so it has to carry against the background on its
-			// own — the lighter frost shade, not the one the buttons use.
-			"accent_color":  "#88c0d0",
-			"warning_color": "#ebcb8b",
-			"error_color":   "#bf616a",
-			"success_color": "#a3be8c",
+			// Frost buttons with polar-night labels. Nord's darker blue, #5e81ac,
+			// with light text is what most Nord themes use, and it is 3.5:1 —
+			// under what a button label needs to be read rather than recognised.
+			// The lighter frost with dark text is 6.2:1 and just as much Nord.
+			"accent_bg_color": "#88c0d0",
+			"accent_fg_color": "#2e3440",
+			"accent_color":    "#88c0d0",
+			"warning_color":   "#ebcb8b",
+			"error_color":     "#bf616a",
+			"success_color":   "#a3be8c",
 		},
 	},
 	{
@@ -146,12 +160,15 @@ var Themes = []Theme{
 			"dialog_fg_color":    "#ede4dc",
 			"popover_bg_color":   "#2a2523",
 			"popover_fg_color":   "#ede4dc",
-			"accent_bg_color":    "#b86f28",
-			"accent_fg_color":    "#ffffff",
-			"accent_color":       "#e8913a",
-			"warning_color":      "#e0a458",
-			"error_color":        "#d4675a",
-			"success_color":      "#a3a55c",
+			// Amber with a dark label rather than a burnt orange with a white
+			// one. The white-on-#b86f28 buttons this shipped with were 3.9:1;
+			// this is 7.1:1, and the button is now the colour the circle shows.
+			"accent_bg_color": "#e8913a",
+			"accent_fg_color": "#1c1917",
+			"accent_color":    "#e8913a",
+			"warning_color":   "#e0a458",
+			"error_color":     "#d4675a",
+			"success_color":   "#a3a55c",
 		},
 	},
 	{
@@ -163,7 +180,7 @@ var Themes = []Theme{
 		// off a bright room without going grey, and a muted green accent that
 		// does not fight the chart colours.
 		Primary:   "#f4f3ec",
-		Secondary: "#5c8a5e",
+		Secondary: "#4e7850",
 		colors: map[string]string{
 			"window_bg_color":    "#f4f3ec",
 			"window_fg_color":    "#2d3a2e",
@@ -187,13 +204,189 @@ var Themes = []Theme{
 			"success_color":      "#3f6641",
 		},
 	},
+	{
+		ID:      "dracula",
+		Name:    "Dracula",
+		Summary: "Deep grey, purple accent",
+		Dark:    true,
+		// The Dracula palette as its authors publish it. Its purple is light
+		// enough that a white label on it would be 2.3:1, so the buttons take the
+		// dark background colour for their text instead — which is also how the
+		// palette's own reference themes draw them.
+		Primary:   "#282a36",
+		Secondary: "#bd93f9",
+		colors: map[string]string{
+			"window_bg_color":    "#282a36",
+			"window_fg_color":    "#f8f8f2",
+			"view_bg_color":      "#21222c",
+			"view_fg_color":      "#f8f8f2",
+			"sidebar_bg_color":   "#21222c",
+			"sidebar_fg_color":   "#f8f8f2",
+			"headerbar_bg_color": "#282a36",
+			"headerbar_fg_color": "#f8f8f2",
+			"card_bg_color":      "#343746",
+			"card_fg_color":      "#f8f8f2",
+			"dialog_bg_color":    "#282a36",
+			"dialog_fg_color":    "#f8f8f2",
+			"popover_bg_color":   "#343746",
+			"popover_fg_color":   "#f8f8f2",
+			"accent_bg_color":    "#bd93f9",
+			"accent_fg_color":    "#21222c",
+			"accent_color":       "#bd93f9",
+			"warning_color":      "#ffb86c",
+			"error_color":        "#ff5555",
+			"success_color":      "#50fa7b",
+		},
+	},
+	{
+		ID:      "rose",
+		Name:    "Rose",
+		Summary: "Light, warm with a rose accent",
+		Dark:    false,
+		// After Rosé Pine's Dawn variant: warm off-white, muted violet-grey text.
+		// Its "love" rose is #b4637a, which carries a white label at 4.2:1; this
+		// is a step deeper at 5.1:1, close enough that nobody would call it a
+		// different colour.
+		Primary:   "#faf4ed",
+		Secondary: "#a5566d",
+		colors: map[string]string{
+			"window_bg_color":    "#faf4ed",
+			"window_fg_color":    "#575279",
+			"view_bg_color":      "#fffaf3",
+			"view_fg_color":      "#575279",
+			"sidebar_bg_color":   "#f2e9e1",
+			"sidebar_fg_color":   "#575279",
+			"headerbar_bg_color": "#f2e9e1",
+			"headerbar_fg_color": "#575279",
+			"card_bg_color":      "#fffaf3",
+			"card_fg_color":      "#575279",
+			"dialog_bg_color":    "#fffaf3",
+			"dialog_fg_color":    "#575279",
+			"popover_bg_color":   "#fffaf3",
+			"popover_fg_color":   "#575279",
+			"accent_bg_color":    "#a5566d",
+			"accent_fg_color":    "#ffffff",
+			"accent_color":       "#9c4f66",
+			"warning_color":      "#9a6412",
+			// A true red rather than the palette's rose, so that an error still
+			// looks like an error next to an accent that is already pinkish-red.
+			"error_color":   "#b42318",
+			"success_color": "#2d7a4f",
+		},
+	},
+	{
+		ID:      "solarized",
+		Name:    "Solarized",
+		Summary: "The classic light palette, teal accent",
+		Dark:    false,
+		// Solarized Light's base3 background. Its accents are designed for text,
+		// not for filling buttons, and its cyan (#2aa198) under a white label is
+		// 3.0:1, so the accent is that cyan taken darker until the label reads.
+		// Body text is base02 rather than the palette's usual base01, which is
+		// deliberately soft and too soft for small numbers in a dense table.
+		Primary:   "#fdf6e3",
+		Secondary: "#1f7f78",
+		colors: map[string]string{
+			"window_bg_color":    "#fdf6e3",
+			"window_fg_color":    "#073642",
+			"view_bg_color":      "#fffdf6",
+			"view_fg_color":      "#073642",
+			"sidebar_bg_color":   "#eee8d5",
+			"sidebar_fg_color":   "#073642",
+			"headerbar_bg_color": "#eee8d5",
+			"headerbar_fg_color": "#073642",
+			"card_bg_color":      "#fffdf6",
+			"card_fg_color":      "#073642",
+			"dialog_bg_color":    "#fdf6e3",
+			"dialog_fg_color":    "#073642",
+			"popover_bg_color":   "#fffdf6",
+			"popover_fg_color":   "#073642",
+			"accent_bg_color":    "#1f7f78",
+			"accent_fg_color":    "#ffffff",
+			"accent_color":       "#1a6f69",
+			"warning_color":      "#8a6800",
+			"error_color":        "#c42b28",
+			"success_color":      "#5f6e00",
+		},
+	},
+	{
+		ID:      "ink",
+		Name:    "Ink",
+		Summary: "Near-monochrome, graphite accent",
+		Dark:    false,
+		// No colour at all except where something is wrong. Everything a theme
+		// would normally tint — the switches, the selection ring, the links — is
+		// graphite, which leaves the chart colours and the warning colours as the
+		// only colour on the screen, and so the only things that draw the eye.
+		Primary:   "#f6f6f4",
+		Secondary: "#2b2b2b",
+		colors: map[string]string{
+			"window_bg_color":    "#f6f6f4",
+			"window_fg_color":    "#1a1a1a",
+			"view_bg_color":      "#ffffff",
+			"view_fg_color":      "#1a1a1a",
+			"sidebar_bg_color":   "#ececea",
+			"sidebar_fg_color":   "#1a1a1a",
+			"headerbar_bg_color": "#ececea",
+			"headerbar_fg_color": "#1a1a1a",
+			"card_bg_color":      "#ffffff",
+			"card_fg_color":      "#1a1a1a",
+			"dialog_bg_color":    "#ffffff",
+			"dialog_fg_color":    "#1a1a1a",
+			"popover_bg_color":   "#ffffff",
+			"popover_fg_color":   "#1a1a1a",
+			"accent_bg_color":    "#2b2b2b",
+			"accent_fg_color":    "#ffffff",
+			"accent_color":       "#2b2b2b",
+			"warning_color":      "#9a6700",
+			"error_color":        "#c0322b",
+			"success_color":      "#2d7a3e",
+		},
+	},
+	{
+		ID:      "contrast",
+		Name:    "Contrast",
+		Summary: "Black and white, yellow accent",
+		Dark:    true,
+		// As legible as colour alone can make it: pure black, pure white, and a
+		// yellow accent that reads at 14:1 against the background. It is last
+		// because it is the one with a job to do rather than a mood.
+		//
+		// It is not libadwaita's high-contrast mode, which also thickens borders
+		// and outlines. That follows the desktop's accessibility setting and
+		// still applies on top of this if it is on.
+		Primary:   "#000000",
+		Secondary: "#ffd60a",
+		colors: map[string]string{
+			"window_bg_color":    "#000000",
+			"window_fg_color":    "#ffffff",
+			"view_bg_color":      "#0a0a0a",
+			"view_fg_color":      "#ffffff",
+			"sidebar_bg_color":   "#0f0f0f",
+			"sidebar_fg_color":   "#ffffff",
+			"headerbar_bg_color": "#000000",
+			"headerbar_fg_color": "#ffffff",
+			"card_bg_color":      "#161616",
+			"card_fg_color":      "#ffffff",
+			"dialog_bg_color":    "#0a0a0a",
+			"dialog_fg_color":    "#ffffff",
+			"popover_bg_color":   "#161616",
+			"popover_fg_color":   "#ffffff",
+			"accent_bg_color":    "#ffd60a",
+			"accent_fg_color":    "#000000",
+			"accent_color":       "#ffd60a",
+			"warning_color":      "#ff9f1a",
+			"error_color":        "#ff6b6b",
+			"success_color":      "#3ddc84",
+		},
+	},
 }
 
 // Follow is the setting's value when no theme has been chosen: Atlas tracks the
 // desktop, which is what it did before any of this existed. Choosing a theme
-// replaces it, and there is no way back to it from the picker on purpose — a
-// sixth circle for "whatever the desktop says" would be a different kind of thing
-// from the five beside it.
+// replaces it. There is deliberately no circle for it in the picker — "whatever
+// the desktop says" is not a palette, and would be a different kind of thing from
+// the ten beside it — so it is a plain button underneath instead.
 const Follow = ""
 
 // ByID returns a theme by its settings value.

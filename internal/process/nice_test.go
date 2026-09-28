@@ -5,6 +5,11 @@ import (
 	"testing"
 )
 
+// The two tests here are about the contract, not the mechanism: what a priority
+// reads as, and what a pid that has gone reads as. Both platforms have to answer
+// the same way, so they are not Linux-only — see nice_linux_test.go for the
+// /proc/[pid]/stat parsing.
+
 // TestNiceReadsOurOwn checks the field arithmetic against a process whose
 // priority this test controls.
 func TestNiceReadsOurOwn(t *testing.T) {
@@ -22,33 +27,5 @@ func TestNiceReadsOurOwn(t *testing.T) {
 func TestNiceOnAMissingProcess(t *testing.T) {
 	if _, ok := Nice(1 << 30); ok {
 		t.Error("a pid that does not exist reported a priority")
-	}
-}
-
-// TestCommWithSpacesAndBrackets is the reason the line is split from the last
-// bracket: a process can be called ") (" and the naive split would land in the
-// middle of its name.
-func TestCommWithSpacesAndBrackets(t *testing.T) {
-	line := []byte("1234 (we ) ird) S 1 1234 1234 0 -1 4194560 100 0 0 0 5 6 0 0 20 7 1 0 0")
-	close := lastIndexByte(line, ')')
-	if close < 0 {
-		t.Fatal("no bracket found")
-	}
-	// Seventeenth field after the name is the nice value, 7 in this line.
-	rest := line[close+2:]
-	field, start := 0, 0
-	var got string
-	for i := 0; i <= len(rest); i++ {
-		if i == len(rest) || rest[i] == ' ' {
-			field++
-			if field == 17 {
-				got = string(rest[start:i])
-				break
-			}
-			start = i + 1
-		}
-	}
-	if got != "7" {
-		t.Errorf("parsed nice as %q, want 7 — the field offset is wrong", got)
 	}
 }

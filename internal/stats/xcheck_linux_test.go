@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -82,6 +83,33 @@ func freeFigures(t *testing.T) (mem, swap map[string]uint64) {
 // tools read straight out of /proc/meminfo — and then checks our Used against
 // free's *available* column, not its used column.
 func TestMemoryAgreesWithFree(t *testing.T) {
+	// A single comparison can fail on a machine that is only busy. The
+	// bracketing below absorbs memory that moves steadily, but not a spike
+	// that comes and goes between our reads — and go test ./... runs the other
+	// packages alongside this one, some of them allocating and freeing
+	// gigabytes, so free(1) can catch a moment neither of our reads saw. That
+	// has happened: Available off by 1.6 GiB, then agreeing on the next run.
+	//
+	// Noise like that does not repeat. A real disagreement — a field read from
+	// the wrong line — fails every time. So the comparison is retried, and the
+	// test fails only if no attempt agrees.
+	const attempts = 3
+	var problems []string
+	for i := 1; i <= attempts; i++ {
+		if problems = compareMemoryWithFree(t); len(problems) == 0 {
+			return
+		}
+		t.Logf("attempt %d of %d disagreed: %s", i, attempts, strings.Join(problems, "; "))
+	}
+	for _, p := range problems {
+		t.Error(p)
+	}
+}
+
+// compareMemoryWithFree makes one comparison for TestMemoryAgreesWithFree and
+// returns what did not agree.
+func compareMemoryWithFree(t *testing.T) (problems []string) {
+	t.Helper()
 	// Bracket free(1) between two of our own reads. On a machine that is
 	// actively allocating — a parallel build, say — MemAvailable can move by a
 	// gigabyte between two reads of /proc/meminfo, and that is the machine
@@ -92,18 +120,17 @@ func TestMemoryAgreesWithFree(t *testing.T) {
 	sample(t, 2, func(s *Stats) { second = s.Mem })
 
 	if first.Total != mem["total"] {
-		t.Errorf("Mem.Total = %d, free says %d", first.Total, mem["total"])
+		problems = append(problems, fmt.Sprintf("Mem.Total = %d, free says %d", first.Total, mem["total"]))
 	}
 	// Total is fixed; the moving figures are checked against the range our two
 	// reads saw, with a little slack outside it.
 	const slack = 64 << 20
 	within := func(name string, lo, hi, want uint64) {
-		t.Helper()
 		if lo > hi {
 			lo, hi = hi, lo
 		}
 		if want+slack < lo || want > hi+slack {
-			t.Errorf("%s: free says %d, outside the [%d, %d] range our reads bracketed", name, want, lo, hi)
+			problems = append(problems, fmt.Sprintf("%s: free says %d, outside the [%d, %d] range our reads bracketed", name, want, lo, hi))
 		}
 	}
 	within("Available", first.Available, second.Available, mem["available"])
@@ -111,12 +138,13 @@ func TestMemoryAgreesWithFree(t *testing.T) {
 	within("Used", first.Used, second.Used, mem["total"]-mem["available"])
 	if swap != nil {
 		if first.SwapTotal != swap["total"] {
-			t.Errorf("Mem.SwapTotal = %d, free says %d", first.SwapTotal, swap["total"])
+			problems = append(problems, fmt.Sprintf("Mem.SwapTotal = %d, free says %d", first.SwapTotal, swap["total"]))
 		}
 		within("SwapUsed", first.SwapUsed, second.SwapUsed, swap["used"])
 	}
 	t.Logf("total=%d used=%d avail=%d cached=%d swap=%d/%d",
 		first.Total, first.Used, first.Available, first.Cached, first.SwapUsed, first.SwapTotal)
+	return problems
 }
 
 // TestMemoryInvariants checks the figures are internally consistent, which the

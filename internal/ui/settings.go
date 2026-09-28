@@ -41,9 +41,6 @@ func ShowSettings(parent gtk.Widgetter, s *config.Settings, h SettingsHooks) {
 	dlg.SetContentWidth(840)
 	dlg.SetContentHeight(620)
 
-	toolbar := adw.NewToolbarView()
-	toolbar.AddTopBar(adw.NewHeaderBar())
-
 	stack := gtk.NewStack()
 	stack.SetHExpand(true)
 	stack.SetVExpand(true)
@@ -70,11 +67,79 @@ func ShowSettings(parent gtk.Widgetter, s *config.Settings, h SettingsHooks) {
 	ap := newAppPage(s, h)
 	stack.AddNamed(ap.page, "app")
 	addSettingsRow(sidebar, "App", "app")
+
+	// One page needs no list of pages. Without the assistant compiled in, App is
+	// all there is, and a sidebar holding a single highlighted row that goes
+	// nowhere is width spent on nothing.
+	if !aiCompiledIn {
+		toolbar := adw.NewToolbarView()
+		toolbar.AddTopBar(adw.NewHeaderBar())
+		ap.page.SetHExpand(true)
+		ap.page.SetVExpand(true)
+		toolbar.SetContent(ap.page)
+		dlg.SetChild(toolbar)
+		connectSettingsClosed(dlg, s, h, mp, qp)
+		dlg.Present(parent)
+		return
+	}
+
+	// The list of pages and the page itself, as a split view that folds.
+	//
+	// It used to be a fixed 200px column beside the content in a plain box. On a
+	// window narrower than about 560px the dialog becomes a sheet the width of
+	// the window, the column kept its 200px, and the page was cut off down its
+	// right-hand side — the theme names, the rows' values, the end of every
+	// description. Folded, the list is one screen and each page another, with a
+	// back button between them, which is how libadwaita's own preferences behave.
+	titles := map[string]string{"model": "Model & Prompt", "prompts": "Quick Prompts", "app": "App"}
+
+	sidebarScroll := gtk.NewScrolledWindow()
+	sidebarScroll.SetChild(sidebar)
+	sidebarScroll.SetPolicy(gtk.PolicyNever, gtk.PolicyAutomatic)
+
+	sidebarBar := adw.NewToolbarView()
+	sidebarBar.AddTopBar(adw.NewHeaderBar())
+	sidebarBar.SetContent(sidebarScroll)
+
+	contentBar := adw.NewToolbarView()
+	contentBar.AddTopBar(adw.NewHeaderBar())
+	contentBar.SetContent(stack)
+
+	contentPage := adw.NewNavigationPage(contentBar, titles["model"])
+	split := adw.NewNavigationSplitView()
+	split.SetSidebar(adw.NewNavigationPage(sidebarBar, "Settings"))
+	split.SetContent(contentPage)
+	// The list is sized in pixels, as the fixed column it replaces was. Its
+	// default unit scales with the text, and on a desktop with large fonts that
+	// takes the width from the page, which is the part with something to read.
+	split.SetSidebarWidthUnit(adw.LengthUnitPx)
+	split.SetMinSidebarWidth(180)
+	split.SetMaxSidebarWidth(220)
+
+	// Fold below 500sp. The unit matters, and so does staying clear of the
+	// dialog's own width: sp scales with the text, and at a 1.5x text scale —
+	// 144 DPI, which is what the machine this was built on runs — 560sp is
+	// exactly 840px, the width the floating dialog is given. A max-width
+	// condition matches at its boundary, so at 560 the dialog folded itself on a
+	// window a thousand pixels wide. 500sp is 750px at that scale; at 2x it is a
+	// thousand, and folding there is right, because the text needs the room.
+	bp := adw.NewBreakpoint(adw.NewBreakpointConditionLength(
+		adw.BreakpointConditionMaxWidth, 500, adw.LengthUnitSp))
+	bp.ConnectApply(func() { split.SetCollapsed(true) })
+	bp.ConnectUnapply(func() { split.SetCollapsed(false) })
+	dlg.AddBreakpoint(bp)
+
 	sidebar.ConnectRowSelected(func(row *gtk.ListBoxRow) {
 		if row != nil {
 			stack.SetVisibleChildName(row.Name())
+			contentPage.SetTitle(titles[row.Name()])
 		}
 	})
+	// Selecting a row switches the page; activating one — a click or Enter —
+	// also moves to it when folded. They are separate because opening the dialog
+	// selects the first row, and on a phone that should land on the list, not
+	// jump straight past it into Model & Prompt.
+	sidebar.ConnectRowActivated(func(*gtk.ListBoxRow) { split.SetShowContent(true) })
 	// Dev aid, alongside ATLAS_OPEN_SETTINGS and ATLAS_VIEW: open the dialog on a
 	// named page. Screenshotting the theme picker otherwise means opening the
 	// dialog and clicking, which a capture script cannot do.
@@ -92,20 +157,20 @@ func ShowSettings(parent gtk.Widgetter, s *config.Settings, h SettingsHooks) {
 		}
 	}
 	sidebar.SelectRow(sidebar.RowAtIndex(selected))
+	if selected != 0 {
+		split.SetShowContent(true) // asked for a page, so show it even when folded
+	}
+	dlg.SetChild(split)
+	connectSettingsClosed(dlg, s, h, mp, qp)
+	dlg.Present(parent)
+}
 
-	sidebarScroll := gtk.NewScrolledWindow()
-	sidebarScroll.SetChild(sidebar)
-	sidebarScroll.SetPolicy(gtk.PolicyNever, gtk.PolicyAutomatic)
-	sidebarScroll.SetSizeRequest(200, -1)
-
-	hbox := gtk.NewBox(gtk.OrientationHorizontal, 0)
-	hbox.Append(sidebarScroll)
-	hbox.Append(gtk.NewSeparator(gtk.OrientationVertical))
-	hbox.Append(stack)
-	toolbar.SetContent(hbox)
-	dlg.SetChild(toolbar)
-
-	// Persist apply-rows that weren't explicitly confirmed when the dialog closes.
+// connectSettingsClosed persists the apply-rows that were not explicitly
+// confirmed, when the dialog closes. Both layouts — the split view and the
+// single page — need it, and mp and qp are nil when the assistant is not
+// compiled in.
+func connectSettingsClosed(dlg *adw.Dialog, s *config.Settings, h SettingsHooks,
+	mp *modelPromptPage, qp *quickPromptsPage) {
 	dlg.ConnectClosed(func() {
 		if mp != nil {
 			s.AssistantTitle = nonEmpty(strings.TrimSpace(mp.name.Text()), config.Defaults().AssistantTitle)
@@ -123,8 +188,6 @@ func ShowSettings(parent gtk.Widgetter, s *config.Settings, h SettingsHooks) {
 		_ = config.Save(*s)
 		fire(h.OnChange)
 	})
-
-	dlg.Present(parent)
 }
 
 // addSettingsRow adds a sidebar row whose widget name is the stack page it
@@ -446,7 +509,18 @@ func themeGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 	g := adw.NewPreferencesGroup()
 	g.SetTitle("Theme")
 
-	row := gtk.NewBox(gtk.OrientationHorizontal, 18)
+	// Two rows of five rather than one of ten. Ten circles and their names are
+	// wider than the dialog is at its narrowest — it becomes a bottom sheet on a
+	// phone-width window — and a FlowBox wraps to fewer per line there instead of
+	// forcing the dialog wider or clipping the names.
+	row := gtk.NewFlowBox()
+	row.SetSelectionMode(gtk.SelectionNone)
+	row.SetActivateOnSingleClick(false)
+	row.SetMaxChildrenPerLine(5)
+	row.SetMinChildrenPerLine(1)
+	row.SetHomogeneous(true)
+	row.SetColumnSpacing(18)
+	row.SetRowSpacing(12)
 	row.SetHAlign(gtk.AlignCenter)
 	row.SetMarginTop(6)
 	row.SetMarginBottom(6)
@@ -494,6 +568,12 @@ func themeGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 		t := t
 
 		swatch := gtk.NewToggleButton()
+		// Centred, not filled. A button fills its cell by default, and the cell
+		// is as wide as the name under it — so every theme with a name longer
+		// than the circle ("Ember", "Dracula", "Solarized") was drawn as an oval,
+		// and the ring round the chosen one with it.
+		swatch.SetHAlign(gtk.AlignCenter)
+		swatch.SetVAlign(gtk.AlignCenter)
 		swatch.AddCSSClass("am-swatch")
 		swatch.AddCSSClass(theme.SwatchClass(t.ID))
 		swatch.SetTooltipText(t.Name + " — " + t.Summary)
@@ -510,6 +590,12 @@ func themeGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 		cell.Append(swatch)
 		cell.Append(name)
 		row.Append(cell)
+		// The FlowBox wraps each cell in a child of its own that takes keyboard
+		// focus, which would put two tab stops in front of every circle — one
+		// that does nothing, then the button. Only the button should take it.
+		if child := row.ChildAtIndex(len(buttons)); child != nil {
+			child.SetFocusable(false)
+		}
 
 		swatch.ConnectToggled(func() {
 			if syncing {
@@ -550,11 +636,12 @@ func themeGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 func perfGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 	g := adw.NewPreferencesGroup()
 	g.SetTitle("Performance")
-	g.SetDescription("Atlas draws its charts on the CPU by default, which keeps the graphics driver stack — " +
-		"Mesa, the Vulkan loader and LLVM — out of the process entirely. Loading it costs memory: on the " +
-		"machine this was measured on, about 27 MiB pinned to one card, or about 63 MiB if GTK is left to " +
-		"load every driver installed. Switch to GPU if you want smoother window resizing on a high-refresh " +
-		"display.")
+	// Two sentences. It was a five-line paragraph explaining Mesa, the Vulkan
+	// loader and what each mode cost on the machine it was measured on — which
+	// pushed the rows it describes below the fold, and repeated what those rows'
+	// own subtitles already say ("~27 MiB more"). What is left is the trade.
+	g.SetDescription("Software keeps graphics drivers out of Atlas, which saves memory. " +
+		"GPU makes resizing smoother on high-refresh displays.")
 
 	labels := make([]string, len(gfx.Modes))
 	selected := 0
@@ -671,22 +758,14 @@ func refreshDetail(seconds int) string {
 		strconv.Itoa(seconds) + " minutes"
 }
 
-// selfMemory reports this process's resident set, read straight from
-// /proc/self/statm — the same figure a task manager shows for Atlas.
+// selfMemory reports this process's resident set — the same figure a task manager
+// shows for Atlas. Where it comes from is per-platform; see internal/sysmem.
 func selfMemory() string {
-	b, err := os.ReadFile("/proc/self/statm")
-	if err != nil {
+	n, ok := sysmem.Resident()
+	if !ok {
 		return "unavailable"
 	}
-	fields := strings.Fields(string(b))
-	if len(fields) < 2 {
-		return "unavailable"
-	}
-	pages, err := strconv.ParseUint(fields[1], 10, 64)
-	if err != nil {
-		return "unavailable"
-	}
-	return format.Bytes(pages*uint64(os.Getpagesize())) + " resident"
+	return format.Bytes(n) + " resident"
 }
 
 func channelName(ch string) string {

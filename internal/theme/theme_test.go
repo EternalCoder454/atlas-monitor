@@ -1,6 +1,7 @@
 package theme
 
 import (
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -13,8 +14,8 @@ var hex = regexp.MustCompile(`^#[0-9a-f]{6}$`)
 // wrong — an empty Primary is a transparent half-circle in the picker, and a
 // missing Name is a blank label under it.
 func TestEveryThemeIsComplete(t *testing.T) {
-	if len(Themes) != 5 {
-		t.Errorf("got %d themes, want 5", len(Themes))
+	if len(Themes) != 10 {
+		t.Errorf("got %d themes, want 10", len(Themes))
 	}
 	seen := map[string]bool{}
 	for _, th := range Themes {
@@ -129,7 +130,8 @@ func TestResolveFallsBackToTheDesktop(t *testing.T) {
 
 	// A known id is used whatever the desktop is set to: choosing one is the
 	// point at which Atlas stops following.
-	for _, id := range []string{"light", "dark", "nord", "ember", "sage"} {
+	for _, th := range Themes {
+		id := th.ID
 		if IsFollowing(id) {
 			t.Errorf("IsFollowing(%q) = true", id)
 		}
@@ -165,6 +167,7 @@ func TestSwatchCSSCoversEveryTheme(t *testing.T) {
 // if they are all dark, because then somebody who prefers a light window has
 // nothing to move to.
 func TestThereIsAnAlternativeToBothDefaults(t *testing.T) {
+	// And evenly: four of each, so neither preference gets the leftovers.
 	var extraLight, extraDark int
 	for _, th := range Themes {
 		if th.ID == "light" || th.ID == "dark" {
@@ -182,6 +185,116 @@ func TestThereIsAnAlternativeToBothDefaults(t *testing.T) {
 	if extraDark == 0 {
 		t.Error("every added theme is light; there is no alternative to Dark")
 	}
+	if extraLight != extraDark {
+		t.Errorf("%d added light themes and %d dark; the split is meant to be even", extraLight, extraDark)
+	}
+}
+
+// TestSwatchIsTheAccent: the circle's second half is a promise about what the
+// buttons, switches and selection ring will be, so it has to be the colour they
+// actually get. Sage's circle was a shade lighter than its buttons until this.
+func TestSwatchIsTheAccent(t *testing.T) {
+	for _, th := range Themes {
+		if len(th.colors) == 0 {
+			continue // libadwaita's own; its accent is not in the table
+		}
+		if got := th.colors["accent_bg_color"]; got != th.Secondary {
+			t.Errorf("%s: the circle shows %s but the buttons are %s", th.ID, th.Secondary, got)
+		}
+		if got := th.colors["window_bg_color"]; got != th.Primary {
+			t.Errorf("%s: the circle shows %s but the window is %s", th.ID, th.Primary, got)
+		}
+	}
+}
+
+// TestEachThemeHasItsOwnAccent: two themes that differ only in the shade of their
+// grey are one theme twice. Light and Dark are exempt, being libadwaita's own and
+// sharing its blue by definition.
+func TestEachThemeHasItsOwnAccent(t *testing.T) {
+	seen := map[string]string{}
+	for _, th := range Themes {
+		if th.ID == "light" || th.ID == "dark" {
+			continue
+		}
+		if other, dup := seen[th.Secondary]; dup {
+			t.Errorf("%s and %s share the accent %s", th.ID, other, th.Secondary)
+		}
+		seen[th.Secondary] = th.ID
+	}
+}
+
+// TestPalettesAreReadable holds every palette to WCAG 2.1's contrast minimums.
+//
+// Text needs 4.5:1 and non-text marks — status icons, the selection ring — need
+// 3:1. The case that matters most is the one a screenshot hides: the label on an
+// accent-filled button. Nord and Ember both shipped at 3.5:1 and 3.9:1 there, and
+// both looked fine, because a button is recognised long before it is read.
+func TestPalettesAreReadable(t *testing.T) {
+	type pair struct {
+		what    string
+		fg, bg  string
+		minimum float64
+	}
+	for _, th := range Themes {
+		c := th.colors
+		if len(c) == 0 {
+			continue
+		}
+		for _, p := range []pair{
+			{"body text", "window_fg_color", "window_bg_color", 4.5},
+			{"list text", "view_fg_color", "view_bg_color", 4.5},
+			{"sidebar text", "sidebar_fg_color", "sidebar_bg_color", 4.5},
+			{"card text", "card_fg_color", "card_bg_color", 4.5},
+			{"dialog text", "dialog_fg_color", "dialog_bg_color", 4.5},
+			{"popover text", "popover_fg_color", "popover_bg_color", 4.5},
+			{"button label", "accent_fg_color", "accent_bg_color", 4.5},
+			{"link text", "accent_color", "window_bg_color", 4.5},
+			{"link text on a card", "accent_color", "card_bg_color", 4.5},
+			{"selection ring", "accent_bg_color", "window_bg_color", 3},
+			{"warning", "warning_color", "window_bg_color", 3},
+			{"error", "error_color", "window_bg_color", 3},
+			{"success", "success_color", "window_bg_color", 3},
+		} {
+			fg, bg := c[p.fg], c[p.bg]
+			if fg == "" || bg == "" {
+				t.Errorf("%s: %s or %s is missing", th.ID, p.fg, p.bg)
+				continue
+			}
+			if r := contrast(t, fg, bg); r < p.minimum {
+				t.Errorf("%s: %s is %.2f:1 (%s on %s), under the %.1f:1 minimum",
+					th.ID, p.what, r, fg, bg, p.minimum)
+			}
+		}
+	}
+}
+
+// contrast is WCAG 2.1's contrast ratio between two #rrggbb colours.
+func contrast(t *testing.T, a, b string) float64 {
+	t.Helper()
+	la, lb := relativeLuminance(t, a), relativeLuminance(t, b)
+	if la < lb {
+		la, lb = lb, la
+	}
+	return (la + 0.05) / (lb + 0.05)
+}
+
+// relativeLuminance is WCAG's, with the sRGB transfer curve undone first — not
+// the rough perceived brightness above, which is enough to tell dark from light
+// but not to put a number on how far apart two colours are.
+func relativeLuminance(t *testing.T, c string) float64 {
+	t.Helper()
+	n, err := strconv.ParseUint(c[1:], 16, 32)
+	if err != nil {
+		t.Fatalf("parsing %q: %v", c, err)
+	}
+	channel := func(v uint64) float64 {
+		s := float64(v) / 255
+		if s <= 0.03928 {
+			return s / 12.92
+		}
+		return math.Pow((s+0.055)/1.055, 2.4)
+	}
+	return 0.2126*channel(n>>16&0xff) + 0.7152*channel(n>>8&0xff) + 0.0722*channel(n&0xff)
 }
 
 // TestDarkThemesAreActuallyDark checks the flag against the palette.

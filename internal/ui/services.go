@@ -91,6 +91,7 @@ type servicesView struct {
 	cells map[uintptr]svcCell
 
 	search         string
+	searchEntry    *gtk.SearchEntry
 	problemsOnly   bool
 	problemsToggle *gtk.ToggleButton
 	servicesOnly   bool
@@ -134,8 +135,13 @@ func newServicesView() *servicesView {
 	scroller.SetVExpand(true)
 	v.root.Append(scroller)
 
-	if v.client == nil {
-		v.setBanner("systemd D-Bus unavailable — service control is disabled.")
+	switch {
+	case v.client == nil:
+		v.setBanner("Could not reach the service manager — this page is empty and " +
+			"service control is off.")
+	case !v.client.CanControl():
+		v.setBanner("Listing only: changing a service needs administrator rights, " +
+			"which Atlas does not have.")
 	}
 	return v
 }
@@ -156,11 +162,23 @@ func (v *servicesView) buildToolbar() *adw.WrapBox {
 		bar.Append(b)
 		return b
 	}
-	mkBtn("Start", func(n string) error { return v.client.Start(n) })
-	mkBtn("Stop", func(n string) error { return v.client.Stop(n) })
-	mkBtn("Restart", func(n string) error { return v.client.Restart(n) })
-	mkBtn("Enable", func(n string) error { return v.client.Enable(n) })
-	mkBtn("Disable", func(n string) error { return v.client.Disable(n) })
+	actions := []*gtk.Button{
+		mkBtn("Start", func(n string) error { return v.client.Start(n) }),
+		mkBtn("Stop", func(n string) error { return v.client.Stop(n) }),
+		mkBtn("Restart", func(n string) error { return v.client.Restart(n) }),
+		mkBtn("Enable", func(n string) error { return v.client.Enable(n) }),
+		mkBtn("Disable", func(n string) error { return v.client.Disable(n) }),
+	}
+	// Where changing a service is not something Atlas can do — Windows, where it
+	// needs administrator rights the app does not have and should not ask for —
+	// the buttons are left visible but dead, and the banner says why. Hiding them
+	// would make the page look like it was missing features rather than like the
+	// machine was withholding them.
+	if v.client == nil || !v.client.CanControl() {
+		for _, b := range actions {
+			b.SetSensitive(false)
+		}
+	}
 
 	refresh := gtk.NewButtonWithLabel("Refresh")
 	refresh.ConnectClicked(func() { v.refresh() })
@@ -186,6 +204,7 @@ func (v *servicesView) buildToolbar() *adw.WrapBox {
 	bar.Append(problemsToggle)
 
 	search := gtk.NewSearchEntry()
+	v.searchEntry = search
 	search.SetHExpand(true) // take the slack, rather than sitting as a sliver
 	search.SetPlaceholderText("Search services")
 	search.ConnectSearchChanged(func() {
@@ -197,6 +216,9 @@ func (v *servicesView) buildToolbar() *adw.WrapBox {
 }
 
 func (v *servicesView) Root() gtk.Widgetter { return v.root }
+
+// captureKeysFrom is the searcher interface.
+func (v *servicesView) captureKeysFrom(from gtk.Widgetter) { v.searchEntry.SetKeyCaptureWidget(from) }
 
 // Update lazily loads the service list the first time the view is shown.
 func (v *servicesView) Update() {

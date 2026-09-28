@@ -1,16 +1,15 @@
 package stats
 
-import (
-	"bufio"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
-	"syscall"
-	"time"
+// The part of disk reporting that is the same everywhere: turning two cumulative
+// byte counters into a rate, deciding which disk to show first, and throttling
+// how often free space is re-measured.
+//
+// Where the numbers come from is not shared at all. Linux enumerates block
+// devices under /sys/block, reads sector counts from /proc/diskstats and asks
+// statfs about each mountpoint. Windows lists drive letters and asks each volume
+// for its own counters. Both end up filling the same DiskStats.
 
-	"atlas-monitor/internal/sysfs"
-)
+import "time"
 
 // diskRank orders disks: root (primary) first, swap last, others in between.
 func diskRank(d *DiskStats) int {
@@ -24,71 +23,19 @@ func diskRank(d *DiskStats) int {
 	}
 }
 
-// sectorSize is the fixed unit used by /proc/diskstats sector counters.
-const sectorSize = 512
-
-// discoverDisks enumerates whole block devices from /sys/block (skipping
-// loop/ram pseudo-devices) and maps each to its mounted partitions.
-func (c *Collector) discoverDisks() {
-	c.diskStat = sysfs.OpenSize("/proc/diskstats", 8192)
-	entries, _ := os.ReadDir("/sys/block")
-	mounts := readMounts()
-
-	var disks []*DiskStats
-	for _, e := range entries {
-		name := e.Name()
-		if strings.HasPrefix(name, "loop") || strings.HasPrefix(name, "ram") {
-			continue
-		}
-		d := &DiskStats{
-			Name:      name,
-			ReadHist:  NewRingBuffer(),
-			WriteHist: NewRingBuffer(),
-		}
-		if v, ok := sysfs.ReadUint(filepath.Join("/sys/block", name, "size")); ok {
-			d.SizeBytes = v * sectorSize
-		}
-		if strings.HasPrefix(name, "zram") {
-			d.IsSwap = true
-		} else if model := sysfs.ReadString(filepath.Join("/sys/block", name, "device", "model")); model != "" {
-			d.Model = strings.Join(strings.Fields(model), " ") // collapse padding whitespace
-		}
-		d.mounts = mountsForDisk(name, mounts)
-		for _, mp := range d.mounts {
-			if mp == "/" {
-				d.IsRoot = true
-				break
-			}
-		}
-		disks = append(disks, d)
-	}
-
-	// Primary disk (root filesystem) first, swap last, otherwise larger first.
-	sort.SliceStable(disks, func(i, j int) bool {
-		if ri, rj := diskRank(disks[i]), diskRank(disks[j]); ri != rj {
-			return ri < rj
-		}
-		return disks[i].SizeBytes > disks[j].SizeBytes
-	})
-
-	// The collector goroutine keeps its own handle on the list so it can read
-	// each disk's mountpoints — fixed at discovery — without the lock.
-	c.disks = disks
-	c.diskSpace = make([][2]uint64, len(disks))
-	c.write(func(s *Stats) { s.Disks = disks })
-}
-
 // spaceEvery is how often free space is re-measured, in ticks. Throughput has
 // to be sampled every tick to be a rate at all, but capacity moves slowly and
 // each check is a statfs per mounted filesystem.
 const spaceEvery = 5
 
-// collectDisks updates throughput (from /proc/diskstats) and space (statfs).
+// collectDisks updates throughput and free space from whatever the platform
+// reports — see readDiskBytes and diskSpace, which are the only parts of this
+// that differ between Linux and Windows.
 //
-// statfs deliberately runs before the lock is taken. It can block for as long
-// as the filesystem takes to answer — indefinitely, on a network mount whose
-// server has gone away — and holding the stats lock across that would freeze
-// every reader, which means the whole UI.
+// Measuring free space deliberately runs before the lock is taken. It can block
+// for as long as the filesystem takes to answer — indefinitely, on a network
+// mount or an unreachable share — and holding the stats lock across that would
+// freeze every reader, which means the whole UI.
 func (c *Collector) collectDisks() {
 	now := time.Now()
 	dt := now.Sub(c.diskLast).Seconds()
@@ -97,7 +44,7 @@ func (c *Collector) collectDisks() {
 	}
 	c.diskLast = now
 
-	stats := c.readDiskstats()
+	stats := c.readDiskBytes()
 
 	c.diskTick++
 	measureSpace := c.diskTick%spaceEvery == 1
@@ -111,8 +58,7 @@ func (c *Collector) collectDisks() {
 		for i, d := range s.Disks {
 			ds, ok := stats[d.Name]
 			if ok {
-				rd := ds[0] * sectorSize
-				wr := ds[1] * sectorSize
+				rd, wr := ds[0], ds[1]
 				if d.havePrev {
 					d.ReadRate = rateOf(rd, d.prevRead, dt)
 					d.WriteRate = rateOf(wr, d.prevWrite, dt)
@@ -140,95 +86,4 @@ func rateOf(cur, prev uint64, dt float64) float64 {
 		return 0
 	}
 	return float64(cur-prev) / dt
-}
-
-// readDiskstats returns name -> [sectorsRead, sectorsWritten], reusing the
-// collector's buffer and map so a tick allocates nothing.
-func (c *Collector) readDiskstats() map[string][2]uint64 {
-	out := c.diskStats
-	clear(out)
-	data, ok := c.diskStat.Bytes()
-	if !ok {
-		return out
-	}
-	for len(data) > 0 {
-		var line []byte
-		line, data = nextLine(data)
-		name := field(line, 2)
-		rd, wr := field(line, 5), field(line, 9)
-		if name == nil || rd == nil || wr == nil {
-			continue
-		}
-		// The device name is the only allocation, and only for a device we have
-		// not seen before — the map key is reused on every later tick.
-		key := string(name)
-		out[key] = [2]uint64{parseUintBytes(rd), parseUintBytes(wr)}
-	}
-	return out
-}
-
-// readMounts returns device -> mountpoint for /dev-backed mounts.
-func readMounts() map[string]string {
-	out := make(map[string]string)
-	f, err := os.Open("/proc/mounts")
-	if err != nil {
-		return out
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) < 2 || !strings.HasPrefix(fields[0], "/dev/") {
-			continue
-		}
-		dev := filepath.Base(fields[0])
-		if _, seen := out[dev]; !seen {
-			out[dev] = fields[1]
-		}
-	}
-	return out
-}
-
-// mountsForDisk returns mountpoints belonging to a whole disk: the disk itself
-// or any of its partitions (e.g. nvme0n1 -> nvme0n1p1).
-func mountsForDisk(disk string, mounts map[string]string) []string {
-	var mps []string
-	for dev, mp := range mounts {
-		if dev == disk || isPartitionOf(disk, dev) {
-			mps = append(mps, mp)
-		}
-	}
-	return mps
-}
-
-// isPartitionOf reports whether dev is a partition of disk.
-func isPartitionOf(disk, dev string) bool {
-	if !strings.HasPrefix(dev, disk) || len(dev) <= len(disk) {
-		return false
-	}
-	rest := dev[len(disk):]
-	// nvme0n1p3 / mmcblk0p1 use a 'p' separator; sda1 does not.
-	if rest[0] == 'p' {
-		rest = rest[1:]
-	}
-	for _, r := range rest {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return len(rest) > 0
-}
-
-// diskSpace sums used/free bytes across the given mountpoints via statfs.
-func diskSpace(mounts []string) (used, free uint64) {
-	for _, mp := range mounts {
-		var st syscall.Statfs_t
-		if syscall.Statfs(mp, &st) != nil {
-			continue
-		}
-		bs := uint64(st.Bsize)
-		free += st.Bavail * bs
-		used += (st.Blocks - st.Bfree) * bs
-	}
-	return used, free
 }

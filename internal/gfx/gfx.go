@@ -51,8 +51,9 @@ var Modes = []struct{ Value, Label, Detail string }{
 	// Labels and details both stay short. A combo row lays its value out beside
 	// the subtitle, and a subtitle long enough to fill the row on one line takes
 	// the width the value needed — which is how "Sharp (hinted)" came to be
-	// displayed as "Shar…" in the font-rendering row. The full explanation is in
-	// the group description above these rows, where it has room.
+	// displayed as "Shar…" in the font-rendering row. The cost of each mode is
+	// here rather than in the group description, which says only what the trade
+	// is: the number belongs next to the choice it is the price of.
 	{ModeSoftware, "Software", "Cairo. No graphics driver loaded."},
 	{ModeGPU, "GPU", "One driver via Vulkan. ~27 MiB more."},
 	{ModeSystem, "System default", "Every driver GTK finds. ~63 MiB more."},

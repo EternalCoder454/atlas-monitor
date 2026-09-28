@@ -94,8 +94,17 @@ func (in Install) Prefix() string {
 }
 
 // SelfUpdatable says whether Atlas can install over itself: it needs somewhere
-// it is allowed to write, and no package manager keeping track of what is there.
+// it is allowed to write, no package manager keeping track of what is there, and
+// a platform where rebuilding from source is something the app can actually do.
+//
+// That last condition is what canSelfInstall covers, and it is false on Windows.
+// The update path there would be to pull the source and run scripts/update.sh,
+// which needs make, a C toolchain and a POSIX shell — none of which a machine
+// that downloaded a packaged exe has any reason to have.
 func (in Install) SelfUpdatable() bool {
+	if !canSelfInstall {
+		return false
+	}
 	switch in.Kind {
 	case FromSource:
 		return true

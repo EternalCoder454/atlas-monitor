@@ -7,6 +7,8 @@
 // every page it ever peaked at.
 package sysmem
 
+import ()
+
 /*
 #include <stdlib.h>
 
