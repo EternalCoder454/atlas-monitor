@@ -63,3 +63,34 @@ func TestGPUClientsAreFound(t *testing.T) {
 		t.Skip("nothing on this machine holds a /dev/dri handle")
 	}
 }
+
+// BenchmarkScanFDs is one pass over every process's open descriptors, counting
+// sockets and looking for GPU handles — what a tick costs when the network is
+// busy enough to attribute and the GPU sweep is due at the same time. The
+// profile put this at over half of the collector's own time on the Apps page.
+func BenchmarkScanFDs(b *testing.B) {
+	c := New()
+	pids := procPIDs(b)
+	sockets := 0
+	for _, pid := range pids {
+		n, _, _ := c.scanFDs(pid, true, false)
+		sockets += n
+	}
+	b.Logf("%d processes, %d sockets", len(pids), sockets)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, pid := range pids {
+			c.scanFDs(pid, true, true)
+		}
+	}
+}
+
+// procPIDs lists the processes this benchmark can see.
+func procPIDs(tb testing.TB) []int {
+	pids, ok := New().listPIDs(nil)
+	if !ok {
+		tb.Skip("no /proc")
+	}
+	return pids
+}

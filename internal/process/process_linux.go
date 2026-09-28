@@ -10,10 +10,13 @@ package process
 
 import (
 	"bytes"
+	"encoding/binary"
+	"io"
 	"os"
 	"strconv"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"atlas-monitor/internal/sysfs"
 )
@@ -33,17 +36,11 @@ func (c *Collector) collect() {
 	}
 	c.lastTime = now
 
-	// Readdirnames rather than ReadDir: /proc has ~700 entries and we only need
-	// the names, so this skips building a DirEntry per process and sorting them.
-	procDir, err := os.Open("/proc")
-	if err != nil {
+	pids, ok := c.listPIDs(c.pids[:0])
+	if !ok {
 		return
 	}
-	entries, err := procDir.Readdirnames(-1)
-	procDir.Close()
-	if err != nil {
-		return
-	}
+	c.pids = pids
 
 	netRx, netTx := c.totalNet()
 	netDt := now.Sub(c.lastNetTime).Seconds()
@@ -86,18 +83,7 @@ func (c *Collector) collect() {
 	procs := c.scratch[:0]
 	totalSockets := 0
 
-	for _, name := range entries {
-		// Only /proc/<pid> is a process. Checking the first byte first keeps
-		// Atoi — and the error it would allocate — away from the two dozen
-		// named entries in /proc.
-		if len(name) == 0 || name[0] < '0' || name[0] > '9' {
-			continue
-		}
-		pid, err := strconv.Atoi(name)
-		if err != nil {
-			continue
-		}
-
+	for _, pid := range pids {
 		if !c.readStat(pid, &c.stat) {
 			continue
 		}
@@ -107,16 +93,22 @@ func (c *Collector) collect() {
 		if c.stat.kernel && !c.includeKernel.Load() {
 			continue
 		}
-		// string(...) copies the name out of the read buffer, which the next
-		// read is about to overwrite.
-		p := Proc{PID: pid, Name: string(c.stat.name), Kernel: c.stat.kernel, GPU: -1}
+		// The name has to be copied out of the read buffer, which the next read
+		// is about to overwrite — but only when it is new. A process's name
+		// almost never changes, and copying every one every tick was most of
+		// what a scan allocated. (The comparison itself does not allocate.)
+		prev, hadPrev := c.prev[pid]
+		name := prev.name
+		if !hadPrev || name != string(c.stat.name) {
+			name = string(c.stat.name)
+		}
+		p := Proc{PID: pid, Name: name, Kernel: c.stat.kernel, GPU: -1}
 		p.RSS = c.readRSS(pid)
 
 		var rb, wb uint64
 		if ioWanted {
 			rb, wb = c.readIO(pid)
 		}
-		prev, hadPrev := c.prev[pid]
 		if hadPrev && !first {
 			p.CPU = float64(c.stat.jiffies-prev.cpuJiffies) / clockTick / dt * 100
 			if p.CPU < 0 {
@@ -125,7 +117,7 @@ func (c *Collector) collect() {
 			p.DiskRead = deltaRate(rb, prev.readBytes, dt)
 			p.DiskWrite = deltaRate(wb, prev.writeBytes, dt)
 		}
-		newPrev[pid] = procPrev{cpuJiffies: c.stat.jiffies, readBytes: rb, writeBytes: wb}
+		newPrev[pid] = procPrev{name: name, cpuJiffies: c.stat.jiffies, readBytes: rb, writeBytes: wb}
 
 		// Both the socket count and the GPU counters come from the same place —
 		// the process's open descriptors — so they share one walk. Done
@@ -221,10 +213,14 @@ func (c *Collector) slurpPID(pid int, name string) []byte {
 	if !c.openProc() {
 		return nil
 	}
-	c.path = strconv.AppendInt(c.path[:0], int64(pid), 10)
-	c.path = append(c.path, name...)
+	c.pidPath(pid, name, nil)
+	return c.slurpPath()
+}
 
-	fd, err := syscall.Openat(c.procFD, string(c.path), syscall.O_RDONLY|syscall.O_CLOEXEC, 0)
+// slurpPath reads the file pidPath last named. It is slurpPID's second half,
+// for callers whose file name is not a constant.
+func (c *Collector) slurpPath() []byte {
+	fd, err := openat(c.procFD, c.path, syscall.O_RDONLY|syscall.O_CLOEXEC)
 	if err != nil {
 		return nil
 	}
@@ -370,68 +366,183 @@ const gpuRescanTicks = 30
 //
 // GPU clients are deduplicated by drm-client-id: one client can be reachable
 // through several descriptors and would otherwise be counted repeatedly.
+//
+// The walk is the most syscall-heavy thing the collector does — one readlink
+// per descriptor, thousands of them across a desktop — so it is done against
+// the fd directory itself: the directory is opened once, listed with getdents
+// into a reused buffer, and each link is read relative to it. Reading
+// "/proc/<pid>/fd/<n>" by its full path made the kernel look up the process and
+// its fd directory again for every descriptor, and os.Open plus Readdirnames
+// allocated a File and a string per entry.
 func (c *Collector) scanFDs(pid int, wantSockets, wantGPU bool) (sockets int, gpuNs uint64, hasDRM bool) {
-	dir := "/proc/" + strconv.Itoa(pid) + "/fd"
-	fds, err := readdirnames(dir)
+	if !c.openProc() {
+		return 0, 0, false
+	}
+	c.pidPath(pid, "/fd", nil)
+	dir, err := openat(c.procFD, c.path, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC)
 	if err != nil {
 		return 0, 0, false
 	}
-	var seen map[uint64]bool
-	for _, fd := range fds {
-		target, ok := c.readlink(dir + "/" + fd)
-		if !ok {
-			continue
+	defer syscall.Close(dir)
+
+	cleared := false
+	for {
+		n, err := syscall.Getdents(dir, c.dents)
+		if err != nil || n <= 0 {
+			break
 		}
-		if wantSockets && bytes.HasPrefix(target, socketPrefix) {
-			sockets++
-			continue
+		for b := c.dents[:n]; len(b) > 0; {
+			var name []byte
+			if name, b = nextDirent(b); name == nil {
+				break
+			}
+			if name[0] == '.' {
+				continue // "." and ".."
+			}
+			target, ok := c.readlinkat(dir, name)
+			if !ok {
+				continue
+			}
+			if wantSockets && bytes.HasPrefix(target, socketPrefix) {
+				sockets++
+				continue
+			}
+			if !wantGPU || !bytes.HasPrefix(target, driPrefix) {
+				continue
+			}
+			hasDRM = true
+			clientID, ns, ok := c.readFdinfoGPU(pid, name[:len(name)-1])
+			if !ok {
+				continue
+			}
+			if !cleared {
+				clear(c.gpuClients) // one map for every process, emptied on first use
+				cleared = true
+			}
+			if c.gpuClients[clientID] {
+				continue // same GPU client already counted via another descriptor
+			}
+			c.gpuClients[clientID] = true
+			gpuNs += ns
 		}
-		if !wantGPU || !bytes.HasPrefix(target, driPrefix) {
-			continue
-		}
-		hasDRM = true
-		clientID, ns, ok := c.readFdinfoGPU(pid, fd)
-		if !ok {
-			continue
-		}
-		if seen == nil {
-			seen = make(map[uint64]bool)
-		}
-		if seen[clientID] {
-			continue // same GPU client already counted via another descriptor
-		}
-		seen[clientID] = true
-		gpuNs += ns
 	}
 	return sockets, gpuNs, hasDRM
 }
 
-// readlink resolves a symlink into the reusable buffer. The result aliases that
-// buffer and is only valid until the next call. A target longer than the buffer
-// is truncated, which is harmless here — callers only test its prefix.
-func (c *Collector) readlink(path string) ([]byte, bool) {
-	n, err := syscall.Readlink(path, c.link)
-	if err != nil || n <= 0 {
+// listPIDs appends the ID of every process in /proc to pids. ok is false when
+// /proc could not be read at all, which the caller must not mistake for a
+// machine with no processes.
+//
+// It lists the descriptor already held on /proc, rewound, and parses the IDs
+// straight out of the getdents buffer: the os.Open and Readdirnames it replaces
+// allocated a string for each of the seven hundred entries every tick, only for
+// each to be converted to an int and dropped.
+func (c *Collector) listPIDs(pids []int) (_ []int, ok bool) {
+	if !c.openProc() {
+		return pids, false
+	}
+	if _, err := syscall.Seek(c.procFD, 0, io.SeekStart); err != nil {
+		return pids, false
+	}
+	for {
+		n, err := syscall.Getdents(c.procFD, c.dents)
+		if err != nil {
+			return pids, false
+		}
+		if n <= 0 {
+			return pids, true
+		}
+		for b := c.dents[:n]; len(b) > 0; {
+			var name []byte
+			if name, b = nextDirent(b); name == nil {
+				break
+			}
+			// Only /proc/<pid> is a process; the two dozen named entries
+			// beside them start with a letter.
+			pid, digits := 0, 0
+			for _, ch := range name[:len(name)-1] {
+				if ch < '0' || ch > '9' {
+					digits = -1
+					break
+				}
+				pid = pid*10 + int(ch-'0')
+				digits++
+			}
+			if digits > 0 {
+				pids = append(pids, pid)
+			}
+		}
+	}
+}
+
+// The layout of struct linux_dirent64, which getdents64 fills a buffer with:
+// inode (8 bytes), offset (8), record length (2), type (1), then the name.
+const (
+	direntReclen = 16
+	direntName   = 19
+)
+
+// nextDirent splits the first record off a getdents buffer. name is the entry's
+// name including its terminating NUL, which lets it be handed to a system call
+// as it is; it is nil if the buffer does not hold a well-formed record.
+func nextDirent(b []byte) (name, rest []byte) {
+	if len(b) <= direntName {
+		return nil, nil
+	}
+	reclen := int(binary.NativeEndian.Uint16(b[direntReclen:]))
+	if reclen <= direntName || reclen > len(b) {
+		return nil, nil
+	}
+	name = b[direntName:reclen] // the name, its NUL, then padding
+	end := bytes.IndexByte(name, 0)
+	if end <= 0 {
+		return nil, nil
+	}
+	return name[:end+1], b[reclen:]
+}
+
+// pidPath sets c.path to "<pid><name><suffix>" and a terminating NUL, ready to
+// pass to openat.
+func (c *Collector) pidPath(pid int, name string, suffix []byte) {
+	c.path = strconv.AppendInt(c.path[:0], int64(pid), 10)
+	c.path = append(c.path, name...)
+	c.path = append(c.path, suffix...)
+	c.path = append(c.path, 0)
+}
+
+// openat opens path relative to dir. path must end in a NUL byte.
+//
+// This is syscall.Openat without its argument conversion: that takes a Go
+// string and copies it into a new NUL-terminated buffer, so the scan paid for
+// two allocations — the string, then the copy — on each of its thousands of
+// opens a tick, for a path it had already built in a buffer of its own.
+func openat(dir int, path []byte, flags int) (int, error) {
+	fd, _, errno := syscall.Syscall6(syscall.SYS_OPENAT, uintptr(dir),
+		uintptr(unsafe.Pointer(&path[0])), uintptr(flags), 0, 0, 0)
+	if errno != 0 {
+		return -1, errno
+	}
+	return int(fd), nil
+}
+
+// readlinkat resolves the symlink name, relative to dir, into the reusable
+// buffer. name must end in a NUL byte. The result aliases the buffer and is only
+// valid until the next call. A target longer than the buffer is truncated, which
+// is harmless here — callers only test its prefix.
+func (c *Collector) readlinkat(dir int, name []byte) ([]byte, bool) {
+	n, _, errno := syscall.Syscall6(syscall.SYS_READLINKAT, uintptr(dir),
+		uintptr(unsafe.Pointer(&name[0])), uintptr(unsafe.Pointer(&c.link[0])), uintptr(len(c.link)), 0, 0)
+	if errno != 0 || n == 0 {
 		return nil, false
 	}
 	return c.link[:n], true
 }
 
-// readdirnames lists a directory's entry names.
-func readdirnames(dir string) ([]string, error) {
-	f, err := os.Open(dir)
-	if err != nil {
-		return nil, err
-	}
-	names, err := f.Readdirnames(-1)
-	f.Close()
-	return names, err
-}
-
 // readFdinfoGPU parses one /proc/[pid]/fdinfo/[fd], returning the GPU client id
 // and the summed drm-engine-* nanoseconds (gfx + compute + decode + encode).
-func (c *Collector) readFdinfoGPU(pid int, fd string) (clientID, engineNs uint64, ok bool) {
-	b := c.slurpPID(pid, "/fdinfo/"+fd)
+func (c *Collector) readFdinfoGPU(pid int, fd []byte) (clientID, engineNs uint64, ok bool) {
+	c.pidPath(pid, "/fdinfo/", fd)
+	b := c.slurpPath()
 	if b == nil {
 		return 0, 0, false
 	}

@@ -39,6 +39,7 @@ type Proc struct {
 }
 
 type procPrev struct {
+	name                  string
 	cpuJiffies            uint64
 	readBytes, writeBytes uint64
 }
@@ -96,7 +97,8 @@ type Collector struct {
 
 	// procFD is a descriptor held on /proc so per-process files can be opened
 	// with openat and a relative path. buf is reused for every read, path for
-	// building those relative paths, and link for readlink(2) on fd entries.
+	// building those relative paths, link for readlink(2) on fd entries, dents
+	// for directory listings and pids for the list of processes they produce.
 	//
 	// These are the Linux scan's working state. Windows needs none of it — one
 	// system call returns the whole table — and leaves them unused; see
@@ -106,6 +108,12 @@ type Collector struct {
 	buf    []byte
 	path   []byte
 	link   []byte
+	dents  []byte
+	pids   []int
+
+	// gpuClients is the set of drm-client-ids one process's descriptor walk has
+	// already counted, reused from one process to the next.
+	gpuClients map[uint64]bool
 
 	// interval is the sampling period in nanoseconds, read atomically.
 	interval atomic.Int64
@@ -140,6 +148,8 @@ func New() *Collector {
 		buf:          make([]byte, 8192),
 		path:         make([]byte, 0, 32),
 		link:         make([]byte, 256),
+		dents:        make([]byte, 16384),
+		gpuClients:   make(map[uint64]bool),
 		procFD:       -1,
 	}
 	c.interval.Store(int64(time.Second))
