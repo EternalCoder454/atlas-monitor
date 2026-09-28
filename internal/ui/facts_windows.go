@@ -2,6 +2,7 @@ package ui
 
 import (
 	"os"
+	"strconv"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -43,7 +44,7 @@ func osName() string {
 // unambiguously.
 func kernelVersion() string {
 	major, minor, build := windows.RtlGetNtVersionNumbers()
-	return itoa(int(major)) + "." + itoa(int(minor)) + "." + itoa(int(build))
+	return strconv.Itoa(int(major)) + "." + strconv.Itoa(int(minor)) + "." + strconv.Itoa(int(build))
 }
 
 // userName is who is logged in. Windows sets USERNAME rather than USER.
@@ -69,18 +70,3 @@ func uptime() (time.Duration, bool) {
 
 // loadAverage has no Windows equivalent. See the note above.
 func loadAverage() string { return "" }
-
-// itoa keeps this file from importing strconv for three small numbers.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(b[i:])
-}
