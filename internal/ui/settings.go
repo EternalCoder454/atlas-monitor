@@ -550,11 +550,12 @@ func themeGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 func perfGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 	g := adw.NewPreferencesGroup()
 	g.SetTitle("Performance")
-	g.SetDescription("Atlas draws its charts on the CPU by default, which keeps the graphics driver stack — " +
-		"Mesa, the Vulkan loader and LLVM — out of the process entirely. Loading it costs memory: on the " +
-		"machine this was measured on, about 27 MiB pinned to one card, or about 63 MiB if GTK is left to " +
-		"load every driver installed. Switch to GPU if you want smoother window resizing on a high-refresh " +
-		"display.")
+	// Two sentences. It was a five-line paragraph explaining Mesa, the Vulkan
+	// loader and what each mode cost on the machine it was measured on — which
+	// pushed the rows it describes below the fold, and repeated what those rows'
+	// own subtitles already say ("~27 MiB more"). What is left is the trade.
+	g.SetDescription("Software keeps graphics drivers out of Atlas, which saves memory. " +
+		"GPU makes resizing smoother on high-refresh displays.")
 
 	labels := make([]string, len(gfx.Modes))
 	selected := 0
