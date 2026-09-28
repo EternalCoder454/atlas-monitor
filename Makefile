@@ -15,10 +15,15 @@ ICONS   := cpu memory disk gpu assistant network wifi battery apps services sett
 # TAGS is passed to the Go build. `noai` drops the Assistant page, the Ollama
 # client and the Markdown renderer — see `make build-lean`.
 TAGS    ?=
-.PHONY: build build-lean run install install-lean uninstall clean vet test test-race setup-ai
+.PHONY: build build-lean build-profile run install install-lean uninstall clean vet test test-race setup-ai
 
 build:
 	go build -tags "$(TAGS)" -trimpath -ldflags="-s -w" -o $(BINDIR)/$(BINARY) .
+
+# For measuring, not shipping: records a pprof profile when ATLAS_CPUPROFILE or
+# ATLAS_MEMPROFILE is set, and ends the run on SIGTERM. See main_profile.go.
+build-profile:
+	$(MAKE) build TAGS="$(TAGS) profile" BINARY=atlas-monitor-profile
 
 # A monitor and nothing else: no assistant, no Ollama client, no Markdown.
 build-lean:
