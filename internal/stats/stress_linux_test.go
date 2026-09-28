@@ -49,7 +49,7 @@ func histHead(c *Collector) int {
 // minimised and restored. Sampling must actually stop, actually restart, and
 // leave no goroutine parked on the condition variable.
 func TestPauseResumeCycles(t *testing.T) {
-	t.Parallel()
+	// Not parallel: see TestStopReleasesDescriptors.
 	c := New(gpu.NewReader())
 	c.Start()
 	defer c.Stop()
@@ -210,12 +210,14 @@ func TestStopIsIdempotent(t *testing.T) {
 // 0.7.0 replaced per-tick opens with descriptors kept for the process's life, so
 // this is the regression that change could have introduced.
 //
-// Not parallel, and neither is TestStopIsIdempotent: both reason about this
-// process's descriptor table, which every other test's collector is opening and
-// closing. The rest of the package's slow tests run in parallel — they sleep
-// through real one-second samples on collectors of their own, and one after
-// another they were a minute of CI — and Go holds them back until the
-// sequential tests, these two included, have finished.
+// Not parallel, and neither are TestStopIsIdempotent and TestPauseResumeCycles:
+// all three count something the whole process shares — its descriptor table,
+// its goroutines — which every other test's collector is adding to and taking
+// from. TestPauseResumeCycles was briefly parallel, and CI caught it counting
+// six goroutines that belonged to its neighbours. The rest of the package's
+// slow tests run in parallel — they sleep through real one-second samples on
+// collectors of their own, and one after another they were a minute of CI — and
+// Go holds them back until the sequential tests have finished.
 func TestStopReleasesDescriptors(t *testing.T) {
 	before := selfFDs(t)
 
