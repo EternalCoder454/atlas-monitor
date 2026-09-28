@@ -91,6 +91,7 @@ type servicesView struct {
 	cells map[uintptr]svcCell
 
 	search         string
+	searchEntry    *gtk.SearchEntry
 	problemsOnly   bool
 	problemsToggle *gtk.ToggleButton
 	servicesOnly   bool
@@ -203,6 +204,7 @@ func (v *servicesView) buildToolbar() *adw.WrapBox {
 	bar.Append(problemsToggle)
 
 	search := gtk.NewSearchEntry()
+	v.searchEntry = search
 	search.SetHExpand(true) // take the slack, rather than sitting as a sliver
 	search.SetPlaceholderText("Search services")
 	search.ConnectSearchChanged(func() {
@@ -214,6 +216,9 @@ func (v *servicesView) buildToolbar() *adw.WrapBox {
 }
 
 func (v *servicesView) Root() gtk.Widgetter { return v.root }
+
+// captureKeysFrom is the searcher interface.
+func (v *servicesView) captureKeysFrom(from gtk.Widgetter) { v.searchEntry.SetKeyCaptureWidget(from) }
 
 // Update lazily loads the service list the first time the view is shown.
 func (v *servicesView) Update() {

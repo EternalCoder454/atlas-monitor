@@ -57,6 +57,11 @@ type Window struct {
 	split        *adw.OverlaySplitView
 	menuBtn      *gtk.ToggleButton
 
+	// keys is the widget whose unclaimed typing goes to the open page's search
+	// box, and capturing the page currently taking it. See searcher.
+	keys      *adw.BreakpointBin
+	capturing searcher
+
 	// The alert badge, and what it is reporting. failedSvc is refreshed on a
 	// timer of its own because it costs a D-Bus round trip, unlike everything
 	// else here which is already in the snapshot.
@@ -224,6 +229,7 @@ func (w *Window) Build() gtk.Widgetter {
 
 	bin := adw.NewBreakpointBin()
 	bin.SetChild(split)
+	w.keys = bin
 	// BreakpointBin refuses to shrink below its own minimum, so it is told one
 	// small enough for the breakpoint to be reachable at all.
 	bin.SetSizeRequest(360, 320)
@@ -259,14 +265,32 @@ func (w *Window) Build() gtk.Widgetter {
 	w.selectView(initial)
 
 	// And again once the window is on screen. GTK gives initial focus to the
-	// first focusable widget, which is the first sidebar row, and a GtkListBox
-	// selects the row that receives focus — after Build has run. Without this
-	// the hardware list came up with CPU highlighted whatever page was open,
-	// which is what anyone reopening Atlas on Apps or Services saw, since it
-	// restores the page you left. Re-asserting from an idle callback runs after
-	// focus has landed, so the content stays the thing that decides.
+	// first focusable widget, and a GtkListBox selects the row that receives
+	// focus — after Build has run. Without this the hardware list came up with
+	// CPU highlighted whatever page was open, which is what anyone reopening
+	// Atlas on Apps or Services saw, since it restores the page you left.
+	// Re-asserting from an idle callback runs after focus has landed, so the
+	// content stays the thing that decides.
+	//
+	// The first time, focus is also put somewhere deliberate: on the open
+	// page's row. Left to GTK it went to whatever came first in the focus
+	// chain, and on Apps and Services that is the search box, whose blinking
+	// cursor redraws the window at the frame rate — see searcher. Only the
+	// first time, because on a later map (back from the tray) the user's own
+	// focus is where it should stay.
+	placed := false
 	bin.ConnectMap(func() {
-		glib.IdleAdd(func() { w.sidebar.selectView(w.active) })
+		glib.IdleAdd(func() {
+			if !placed {
+				placed = true
+				if !w.sidebar.focusView(w.active) {
+					if root := bin.Root(); root != nil {
+						root.SetFocus(nil)
+					}
+				}
+			}
+			w.sidebar.selectView(w.active)
+		})
 	})
 	return bin
 }
@@ -390,6 +414,16 @@ func (w *Window) selectView(name string) {
 	}
 	w.active = name
 	w.stack.SetVisibleChildName(name)
+	// Typing goes to the search on the page that is showing, never to one
+	// on a page that is not.
+	if w.capturing != nil {
+		w.capturing.captureKeysFrom(nil)
+		w.capturing = nil
+	}
+	if s, ok := lv.view.(searcher); ok && w.keys != nil {
+		s.captureKeysFrom(w.keys)
+		w.capturing = s
+	}
 	if w.split != nil && w.split.Collapsed() {
 		w.split.SetShowSidebar(false)
 	}

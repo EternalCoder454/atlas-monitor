@@ -233,6 +233,7 @@ type appsView struct {
 	pending  []int // indices into the snapshot with no row yet
 
 	search      string
+	searchEntry *gtk.SearchEntry
 	grouped     bool
 	showKernel  bool
 	needRebuild bool
@@ -264,6 +265,7 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 	// Toolbar: search + group toggle.
 	toolbar := gtk.NewBox(gtk.OrientationHorizontal, 8)
 	searchEntry := gtk.NewSearchEntry()
+	v.searchEntry = searchEntry
 	searchEntry.SetHExpand(true)
 	searchEntry.SetPlaceholderText("Search by name or PID")
 	searchEntry.ConnectSearchChanged(func() {
@@ -1006,6 +1008,9 @@ func foldByte(c byte) byte {
 // applyWants is the wanter interface: the table's columns decide what the scan
 // gathers while it is the page on screen.
 func (v *appsView) applyWants() { v.applyHidden() }
+
+// captureKeysFrom is the searcher interface.
+func (v *appsView) captureKeysFrom(from gtk.Widgetter) { v.searchEntry.SetKeyCaptureWidget(from) }
 
 // applyHidden puts the saved column choices into effect, and tells the scan
 // which of the expensive figures anything is still showing.

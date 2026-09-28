@@ -231,3 +231,24 @@ func (id procIdent) same() bool {
 type wanter interface {
 	applyWants()
 }
+
+// searcher is a view with a search box that typing should reach without the
+// box having to be focused first.
+//
+// Nothing on these pages takes focus on purpose. A focused text box blinks its
+// cursor, and GTK 4 fades the cursor in and out rather than toggling it, which
+// redraws the window at the display's frame rate for as long as the blinking
+// lasts — ten seconds after the last keystroke, by default. When the window
+// opened on Apps, GTK handed its initial focus to the search box, and every
+// launch there spent its first ten seconds drawing thirty-odd full frames a
+// second: 150 to 490 ms of CPU each second, against about 35 once it stopped.
+//
+// Capturing keys instead keeps typing-to-search, which is all that focus was
+// giving anyone. The capture only takes keys the focused widget does not use
+// itself — letters that land on a sidebar row or the table, say — and the box
+// takes focus the moment it receives one.
+type searcher interface {
+	// captureKeysFrom routes unclaimed typing inside from to the search box,
+	// or stops routing it when from is nil.
+	captureKeysFrom(from gtk.Widgetter)
+}
