@@ -51,6 +51,10 @@ type App struct {
 	// changing theme can replace its contents instead of stacking another
 	// provider on the display for every change.
 	themeCSS *gtk.CSSProvider
+	// appliedTheme is the setting last put into effect, so applyTheme can tell
+	// when there is nothing to do. See applyTheme for why that matters.
+	appliedTheme string
+	themeApplied bool
 }
 
 // New creates the application. css is the embedded stylesheet contents and
@@ -316,6 +320,20 @@ func (a *App) applyTheme() {
 	if mgr == nil {
 		return
 	}
+
+	// Only when the choice has changed. This runs on every settings change —
+	// every switch flipped, and closing the dialog — and reloading a CSS
+	// provider invalidates the style of every widget in the window, whether or
+	// not a single colour in it is different. Reloading the same theme is a full
+	// restyle that changes nothing.
+	want := a.settings.Theme
+	if theme.IsFollowing(want) {
+		want = theme.Follow
+	}
+	if a.themeApplied && want == a.appliedTheme {
+		return
+	}
+	a.themeApplied, a.appliedTheme = true, want
 
 	if theme.IsFollowing(a.settings.Theme) {
 		mgr.SetColorScheme(adw.ColorSchemeDefault)

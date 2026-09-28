@@ -69,10 +69,13 @@ type Window struct {
 	lastSvc     time.Time
 	svc         *services.Client
 
-	active   string
-	visible  bool
-	tick     glib.SourceHandle
-	lastTrim time.Time
+	active  string
+	visible bool
+	tick    glib.SourceHandle
+	// tickEvery is the period the running timer was installed with, so a
+	// settings change that leaves the interval alone does not reset it.
+	tickEvery time.Duration
+	lastTrim  time.Time
 
 	// Network rows are reordered live so the active interface stays first.
 	netExp     *adw.ExpanderRow
@@ -298,10 +301,16 @@ func (w *Window) StartRefresh() {
 
 // SetRefreshInterval re-times the UI tick and both collectors after the
 // interval is changed in Settings.
+//
+// The timer is only replaced when the interval actually changes. This is called
+// on every settings change, and tearing the timer down and starting it again
+// resets its phase: the next update waited a whole interval from whenever Settings
+// was closed, so the numbers on screen paused for up to a refresh period each time,
+// for nothing.
 func (w *Window) SetRefreshInterval(d time.Duration) {
 	w.col.SetInterval(d)
 	w.proc.SetInterval(d)
-	if w.tick != 0 {
+	if w.tick != 0 && d != w.tickEvery {
 		w.installTick()
 	}
 }
@@ -313,6 +322,7 @@ func (w *Window) installTick() {
 		w.tick = 0
 	}
 	every := w.refreshInterval()
+	w.tickEvery = every
 	w.tick = glib.TimeoutAdd(uint(every/time.Millisecond), func() bool {
 		if !w.visible {
 			return true
