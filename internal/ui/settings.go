@@ -41,9 +41,6 @@ func ShowSettings(parent gtk.Widgetter, s *config.Settings, h SettingsHooks) {
 	dlg.SetContentWidth(840)
 	dlg.SetContentHeight(620)
 
-	toolbar := adw.NewToolbarView()
-	toolbar.AddTopBar(adw.NewHeaderBar())
-
 	stack := gtk.NewStack()
 	stack.SetHExpand(true)
 	stack.SetVExpand(true)
@@ -70,11 +67,79 @@ func ShowSettings(parent gtk.Widgetter, s *config.Settings, h SettingsHooks) {
 	ap := newAppPage(s, h)
 	stack.AddNamed(ap.page, "app")
 	addSettingsRow(sidebar, "App", "app")
+
+	// One page needs no list of pages. Without the assistant compiled in, App is
+	// all there is, and a sidebar holding a single highlighted row that goes
+	// nowhere is width spent on nothing.
+	if !aiCompiledIn {
+		toolbar := adw.NewToolbarView()
+		toolbar.AddTopBar(adw.NewHeaderBar())
+		ap.page.SetHExpand(true)
+		ap.page.SetVExpand(true)
+		toolbar.SetContent(ap.page)
+		dlg.SetChild(toolbar)
+		connectSettingsClosed(dlg, s, h, mp, qp)
+		dlg.Present(parent)
+		return
+	}
+
+	// The list of pages and the page itself, as a split view that folds.
+	//
+	// It used to be a fixed 200px column beside the content in a plain box. On a
+	// window narrower than about 560px the dialog becomes a sheet the width of
+	// the window, the column kept its 200px, and the page was cut off down its
+	// right-hand side — the theme names, the rows' values, the end of every
+	// description. Folded, the list is one screen and each page another, with a
+	// back button between them, which is how libadwaita's own preferences behave.
+	titles := map[string]string{"model": "Model & Prompt", "prompts": "Quick Prompts", "app": "App"}
+
+	sidebarScroll := gtk.NewScrolledWindow()
+	sidebarScroll.SetChild(sidebar)
+	sidebarScroll.SetPolicy(gtk.PolicyNever, gtk.PolicyAutomatic)
+
+	sidebarBar := adw.NewToolbarView()
+	sidebarBar.AddTopBar(adw.NewHeaderBar())
+	sidebarBar.SetContent(sidebarScroll)
+
+	contentBar := adw.NewToolbarView()
+	contentBar.AddTopBar(adw.NewHeaderBar())
+	contentBar.SetContent(stack)
+
+	contentPage := adw.NewNavigationPage(contentBar, titles["model"])
+	split := adw.NewNavigationSplitView()
+	split.SetSidebar(adw.NewNavigationPage(sidebarBar, "Settings"))
+	split.SetContent(contentPage)
+	// The list is sized in pixels, as the fixed column it replaces was. Its
+	// default unit scales with the text, and on a desktop with large fonts that
+	// takes the width from the page, which is the part with something to read.
+	split.SetSidebarWidthUnit(adw.LengthUnitPx)
+	split.SetMinSidebarWidth(180)
+	split.SetMaxSidebarWidth(220)
+
+	// Fold below 500sp. The unit matters, and so does staying clear of the
+	// dialog's own width: sp scales with the text, and at a 1.5x text scale —
+	// 144 DPI, which is what the machine this was built on runs — 560sp is
+	// exactly 840px, the width the floating dialog is given. A max-width
+	// condition matches at its boundary, so at 560 the dialog folded itself on a
+	// window a thousand pixels wide. 500sp is 750px at that scale; at 2x it is a
+	// thousand, and folding there is right, because the text needs the room.
+	bp := adw.NewBreakpoint(adw.NewBreakpointConditionLength(
+		adw.BreakpointConditionMaxWidth, 500, adw.LengthUnitSp))
+	bp.ConnectApply(func() { split.SetCollapsed(true) })
+	bp.ConnectUnapply(func() { split.SetCollapsed(false) })
+	dlg.AddBreakpoint(bp)
+
 	sidebar.ConnectRowSelected(func(row *gtk.ListBoxRow) {
 		if row != nil {
 			stack.SetVisibleChildName(row.Name())
+			contentPage.SetTitle(titles[row.Name()])
 		}
 	})
+	// Selecting a row switches the page; activating one — a click or Enter —
+	// also moves to it when folded. They are separate because opening the dialog
+	// selects the first row, and on a phone that should land on the list, not
+	// jump straight past it into Model & Prompt.
+	sidebar.ConnectRowActivated(func(*gtk.ListBoxRow) { split.SetShowContent(true) })
 	// Dev aid, alongside ATLAS_OPEN_SETTINGS and ATLAS_VIEW: open the dialog on a
 	// named page. Screenshotting the theme picker otherwise means opening the
 	// dialog and clicking, which a capture script cannot do.
@@ -92,20 +157,20 @@ func ShowSettings(parent gtk.Widgetter, s *config.Settings, h SettingsHooks) {
 		}
 	}
 	sidebar.SelectRow(sidebar.RowAtIndex(selected))
+	if selected != 0 {
+		split.SetShowContent(true) // asked for a page, so show it even when folded
+	}
+	dlg.SetChild(split)
+	connectSettingsClosed(dlg, s, h, mp, qp)
+	dlg.Present(parent)
+}
 
-	sidebarScroll := gtk.NewScrolledWindow()
-	sidebarScroll.SetChild(sidebar)
-	sidebarScroll.SetPolicy(gtk.PolicyNever, gtk.PolicyAutomatic)
-	sidebarScroll.SetSizeRequest(200, -1)
-
-	hbox := gtk.NewBox(gtk.OrientationHorizontal, 0)
-	hbox.Append(sidebarScroll)
-	hbox.Append(gtk.NewSeparator(gtk.OrientationVertical))
-	hbox.Append(stack)
-	toolbar.SetContent(hbox)
-	dlg.SetChild(toolbar)
-
-	// Persist apply-rows that weren't explicitly confirmed when the dialog closes.
+// connectSettingsClosed persists the apply-rows that were not explicitly
+// confirmed, when the dialog closes. Both layouts — the split view and the
+// single page — need it, and mp and qp are nil when the assistant is not
+// compiled in.
+func connectSettingsClosed(dlg *adw.Dialog, s *config.Settings, h SettingsHooks,
+	mp *modelPromptPage, qp *quickPromptsPage) {
 	dlg.ConnectClosed(func() {
 		if mp != nil {
 			s.AssistantTitle = nonEmpty(strings.TrimSpace(mp.name.Text()), config.Defaults().AssistantTitle)
@@ -123,8 +188,6 @@ func ShowSettings(parent gtk.Widgetter, s *config.Settings, h SettingsHooks) {
 		_ = config.Save(*s)
 		fire(h.OnChange)
 	})
-
-	dlg.Present(parent)
 }
 
 // addSettingsRow adds a sidebar row whose widget name is the stack page it
