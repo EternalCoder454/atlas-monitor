@@ -17,6 +17,7 @@ import (
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
 	"atlas-monitor/internal/config"
+	"atlas-monitor/internal/desktop"
 	"atlas-monitor/internal/format"
 	"atlas-monitor/internal/process"
 )
@@ -61,6 +62,13 @@ type renderFunc func(dst []byte, p *process.Proc) []byte
 type procCell struct {
 	label  *gtk.Label
 	render renderFunc
+
+	// image, iconOf and icon are the Name column's application icon: the widget,
+	// how to pick the icon for a row, and which icon the widget is showing.
+	// Other columns leave all three unset.
+	image  *gtk.Image
+	iconOf func(*process.Proc) string
+	icon   string
 	row    *procRow // nil while the cell is unbound (off screen)
 	buf    []byte   // render scratch
 	cur    []byte   // text currently displayed
@@ -87,6 +95,14 @@ type procCell struct {
 func (c *procCell) refresh() {
 	if c.row == nil {
 		return
+	}
+	// Before the text: a recycled row can take on a process with the same name
+	// and a different application, which changes the icon and not the words.
+	if c.iconOf != nil {
+		if ic := c.iconOf(&c.row.proc); ic != c.icon {
+			c.icon = ic
+			setIcon(c.image, ic)
+		}
 	}
 	c.buf = c.render(c.buf[:0], &c.row.proc)
 	if c.set && bytes.Equal(c.buf, c.cur) {
@@ -189,12 +205,12 @@ type appsView struct {
 	popover          *gtk.PopoverMenu
 
 	// Stable row registry and current model order (parallel to the model).
-	// Ungrouped rows are keyed by pid, grouped rows by process name, so the
-	// per-tick diff never has to build a key string.
-	byPID  map[int]*procRow
-	byName map[string]*procRow
-	order  []*procRow
-	gen    uint64
+	// Ungrouped rows are keyed by pid, grouped rows by groupKey, so the per-tick
+	// diff never has to build a key string.
+	byPID map[int]*procRow
+	byKey map[groupKey]*procRow
+	order []*procRow
+	gen   uint64
 
 	// sortFor maps a column to its comparer. The table is sorted by GTK, which
 	// re-sorts when the model changes — but the rows are mutated in place, so
@@ -228,7 +244,14 @@ type appsView struct {
 	// Scratch reused across ticks.
 	snap     []process.Proc
 	grouping []process.Proc
-	groups   map[string]int
+	groups   map[groupKey]int
+	// lastSnap is the latest snapshot after the kernel-thread filter and before
+	// grouping: the processes behind the rows, which is where a grouped row's
+	// members are found when the menu or the details panel needs them.
+	lastSnap []process.Proc
+
+	// apps says which application a process belongs to, and what to call it.
+	apps     *appResolver
 	appended []*procRow
 	pending  []int // indices into the snapshot with no row yet
 
@@ -237,23 +260,30 @@ type appsView struct {
 	grouped     bool
 	showKernel  bool
 	needRebuild bool
-	targetName  string
 	// target is the process the context menu was opened on. The menu acts some
 	// seconds after it was opened and pids are reused, so the signal is only
 	// sent while this still names the same process — otherwise Atlas would
 	// eventually kill something that merely inherited the number.
 	target procIdent
+	// targets is every process a grouped row stands for, each identified the
+	// same way. End Task on "Firefox" has to end Firefox, not whichever of its
+	// processes happened to be counted first.
+	targets []procIdent
+	// targetRow is the row the menu was opened on, for Details.
+	targetRow process.Proc
+	memberBuf []process.Proc
 }
 
 func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settings) *appsView {
 	v := &appsView{
 		proc:    proc,
 		byPID:   make(map[int]*procRow),
-		byName:  make(map[string]*procRow),
+		byKey:   make(map[groupKey]*procRow),
 		cells:   make(map[uintptr]*procCell),
 		sortFor: make(map[*gtk.ColumnViewColumn]*gtk.Sorter),
 		byLabel: make(map[uintptr]*procCell),
-		groups:  make(map[string]int),
+		groups:  make(map[groupKey]int),
+		apps:    newAppResolver(desktop.Default()),
 	}
 
 	v.root = gtk.NewBox(gtk.OrientationVertical, 8)
@@ -322,10 +352,9 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 	// the scan gathering it — per-process disk, GPU and network are the three
 	// expensive parts of a tick, and each is now only paid for while something
 	// is showing it.
-	cv.AppendColumn(v.textColumn("Name", true, 0,
-		func(dst []byte, p *process.Proc) []byte { return append(dst, p.Name...) },
+	cv.AppendColumn(v.textColumn("Name", true, 0, appendName,
 		func(a, b *process.Proc) bool { return lessFold(a.Name, b.Name) },
-		colOpts{minChars: 16}))
+		colOpts{minChars: 16, icon: v.iconOf}))
 
 	cpuCol := v.textColumn("CPU %", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendPercent1(dst, p.CPU) },
@@ -335,8 +364,7 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 	hide := func(title string, col *gtk.ColumnViewColumn, note string) {
 		v.optional = append(v.optional, optionalColumn{title: title, col: col, note: note})
 	}
-	pidCol := v.textColumn("PID", false, 1,
-		func(dst []byte, p *process.Proc) []byte { return strconv.AppendInt(dst, int64(p.PID), 10) },
+	pidCol := v.textColumn("PID", false, 1, appendPID,
 		func(a, b *process.Proc) bool { return a.PID < b.PID })
 	hide("PID", pidCol, "")
 	cv.AppendColumn(pidCol)
@@ -410,6 +438,18 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 	v.root.Append(v.scroller)
 
 	v.buildContextMenu(cv)
+
+	// Double-click, or Enter, opens the Details panel, as it does in every other
+	// file and process list.
+	cv.ConnectActivate(func(position uint) {
+		obj := cv.Model().Item(position)
+		if obj == nil {
+			return
+		}
+		if row := gioutil.ObjectValue[*procRow](obj); row != nil && row.live {
+			v.showDetails(row.proc)
+		}
+	})
 	return v
 }
 
@@ -431,8 +471,9 @@ func (v *appsView) Update() {
 	if !v.showKernel {
 		snap = withoutKernelThreads(snap)
 	}
+	v.lastSnap = snap
 	if v.grouped {
-		snap = v.groupByName(snap)
+		snap = v.groupByApp(snap)
 	}
 	v.applyRows(snap)
 
@@ -553,14 +594,14 @@ func withoutKernelThreads(procs []process.Proc) []process.Proc {
 // lookup finds the stable row for p under the current grouping mode.
 func (v *appsView) lookup(p *process.Proc) *procRow {
 	if v.grouped {
-		return v.byName[p.Name]
+		return v.byKey[v.keyOf(p)]
 	}
 	return v.byPID[p.PID]
 }
 
 func (v *appsView) register(row *procRow) {
 	if v.grouped {
-		v.byName[row.proc.Name] = row
+		v.byKey[v.keyOf(&row.proc)] = row
 	} else {
 		v.byPID[row.proc.PID] = row
 	}
@@ -568,7 +609,7 @@ func (v *appsView) register(row *procRow) {
 
 func (v *appsView) unregister(row *procRow) {
 	if v.grouped {
-		delete(v.byName, row.proc.Name)
+		delete(v.byKey, v.keyOf(&row.proc))
 	} else {
 		delete(v.byPID, row.proc.PID)
 	}
@@ -581,7 +622,7 @@ func (v *appsView) unregister(row *procRow) {
 // app" a few dozen times would otherwise cost as much as an hour on the page.
 func (v *appsView) clearModel() {
 	clear(v.byPID)
-	clear(v.byName)
+	clear(v.byKey)
 	v.free = v.free[:0]
 	hidden := false
 	for _, row := range v.order {
@@ -620,6 +661,12 @@ func (v *appsView) matchesRow(r *procRow) bool {
 	if containsFold(r.proc.Name, v.search) {
 		return true
 	}
+	// A process of an application answers to the application's name too:
+	// searching "discord" should find Discord's helpers, whatever they call
+	// themselves.
+	if a := v.apps.of(r.proc.Unit); a != nil && containsFold(a.name, v.search) {
+		return true
+	}
 	var digits [20]byte
 	return containsBytes(strconv.AppendInt(digits[:0], int64(r.proc.PID), 10), v.search)
 }
@@ -643,6 +690,17 @@ type colOpts struct {
 	// expands, so it was always the one that collapsed — a table of "electr…"
 	// and "youtu…" beside four columns of zeroes with room to spare.
 	minChars int
+	// icon, when set, puts an icon before the text, chosen per row.
+	icon func(*process.Proc) string
+}
+
+// cellParts are the widgets of one cell, pooled together: the label every
+// column has, and for the Name column the box and icon around it.
+type cellParts struct {
+	root  gtk.Widgetter
+	label *gtk.Label
+	box   *gtk.Box
+	image *gtk.Image
 }
 
 func (v *appsView) textColumn(title string, expand bool, xalign float64,
@@ -672,30 +730,50 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 	// are created, and the pinning stops growing with them. The pool is a plain
 	// slice in this closure: one per column, only ever touched from the UI
 	// thread.
-	var pool []*gtk.Label
+	var pool []cellParts
 
 	factory := gtk.NewSignalListItemFactory()
 	factory.ConnectSetup(func(obj *coreglib.Object) {
 		cell := obj.Cast().(*gtk.ColumnViewCell)
-		var label *gtk.Label
+		var parts cellParts
 		if n := len(pool); n > 0 {
-			label, pool = pool[n-1], pool[:n-1]
-			label.SetText("")
+			parts, pool = pool[n-1], pool[:n-1]
+			parts.label.SetText("")
 		} else {
-			label = gtk.NewLabel("")
+			label := gtk.NewLabel("")
 			label.SetXAlign(float32(xalign))
-			label.SetEllipsize(3)
+			label.SetEllipsize(3) // PANGO_ELLIPSIZE_END
 			if o.minChars > 0 {
 				label.SetWidthChars(o.minChars)
-			} // PANGO_ELLIPSIZE_END
+			}
 			if numeric {
 				label.AddCSSClass("am-num")
 			}
+			parts = cellParts{root: label, label: label}
+			if o.icon != nil {
+				// Sized even when empty, so names line up whether or not their
+				// row has an application to show.
+				img := gtk.NewImage()
+				img.SetPixelSize(16)
+				img.SetSizeRequest(16, 16)
+				label.SetHExpand(true)
+				box := gtk.NewBox(gtk.OrientationHorizontal, 8)
+				box.Append(img)
+				box.Append(label)
+				parts.root, parts.box, parts.image = box, box, img
+			}
 		}
-		cell.SetChild(label)
-		c := &procCell{label: label, render: render, dim: dim, heat: o.heat}
+		cell.SetChild(parts.root)
+		c := &procCell{label: parts.label, render: render, dim: dim, heat: o.heat,
+			image: parts.image, iconOf: o.icon}
 		v.cells[cell.Native()] = c
-		v.byLabel[label.Object.Native()] = c
+		v.byLabel[parts.label.Object.Native()] = c
+		if parts.box != nil {
+			// A click can land on the icon or the gap beside it; either way it
+			// has to resolve to this cell. See cellAt.
+			v.byLabel[parts.box.Object.Native()] = c
+			v.byLabel[parts.image.Object.Native()] = c
+		}
 	})
 	factory.ConnectBind(func(obj *coreglib.Object) {
 		cell := obj.Cast().(*gtk.ColumnViewCell)
@@ -716,15 +794,23 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 		cell := obj.Cast().(*gtk.ColumnViewCell)
 		if c := v.cells[cell.Native()]; c != nil && c.label != nil {
 			delete(v.byLabel, c.label.Object.Native())
-			// Take the label off the cell before the cell goes, and keep it for
-			// the next one. Without the unparent GTK would complain about a
+			parts := cellParts{root: c.label, label: c.label}
+			if c.image != nil {
+				box := c.label.Parent().(*gtk.Box)
+				delete(v.byLabel, box.Object.Native())
+				delete(v.byLabel, c.image.Object.Native())
+				c.image.Clear()
+				parts = cellParts{root: box, label: c.label, box: box, image: c.image}
+			}
+			// Take the widgets off the cell before the cell goes, and keep them
+			// for the next one. Without the unparent GTK would complain about a
 			// widget with a parent being added elsewhere.
 			cell.SetChild(nil)
 			if c.dimmed {
 				c.label.RemoveCSSClass("am-zero")
 				c.dimmed = false
 			}
-			pool = append(pool, c.label)
+			pool = append(pool, parts)
 		}
 		delete(v.cells, cell.Native())
 	})
@@ -775,12 +861,16 @@ func (v *appsView) buildContextMenu(parent gtk.Widgetter) {
 	add("stop", func() { v.act(process.Suspend) })
 	add("cont", func() { v.act(process.Resume) })
 	add("open", v.openLocation)
+	add("details", v.openDetails)
 
 	if w, ok := parent.(*gtk.ColumnView); ok {
 		w.InsertActionGroup("proc", group)
 	}
 
 	menu := gio.NewMenu()
+	top := gio.NewMenu()
+	top.Append("Details", "proc.details")
+	menu.AppendSection("", top)
 	menu.Append("End Task", "proc.term")
 	menu.Append("Kill", "proc.kill")
 	menu.Append("Stop", "proc.stop")
@@ -817,7 +907,13 @@ func (v *appsView) attachContextMenu(cv *gtk.ColumnView) {
 		if c == nil || c.row == nil {
 			return
 		}
-		v.target, v.targetName = identOf(c.row.proc.PID), c.row.proc.Name
+		v.target, v.targetRow = identOf(c.row.proc.PID), c.row.proc
+		v.targets = v.targets[:0]
+		if v.grouped {
+			for _, p := range v.membersOf(&c.row.proc) {
+				v.targets = append(v.targets, identOf(p.PID))
+			}
+		}
 		rect := gdk.NewRectangle(int(x), int(y), 1, 1)
 		v.popover.SetPointingTo(&rect)
 		v.popover.Popup()
@@ -845,10 +941,55 @@ func (v *appsView) cellAt(cv *gtk.ColumnView, x, y float64) *procCell {
 // the menu used to speak in Unix signals, and two of the four have no equivalent
 // constant on Windows at all.
 func (v *appsView) act(a process.Action) {
+	if len(v.targets) > 0 {
+		// A grouped row: every process it stood for when the menu opened, each
+		// checked on its own. Some may have exited in the meantime, and their
+		// numbers may already belong to something else.
+		for _, t := range v.targets {
+			if t.same() {
+				_ = process.Signal(t.pid, a)
+			}
+		}
+		return
+	}
 	if !v.targetIsStillTheSameProcess() {
 		return
 	}
 	_ = process.Signal(v.target.pid, a)
+}
+
+// openDetails shows the Details panel for the row the menu was opened on.
+func (v *appsView) openDetails() {
+	v.showDetails(v.targetRow)
+}
+
+// showDetails opens the panel for a row: the process, or for a grouped row the
+// application and its processes.
+func (v *appsView) showDetails(row process.Proc) {
+	if !v.grouped {
+		showProcessDetails(v.root, row.PID, v.apps)
+		return
+	}
+	members := append([]process.Proc(nil), v.membersOf(&row)...)
+	if len(members) == 1 {
+		showProcessDetails(v.root, members[0].PID, v.apps)
+		return
+	}
+	showGroupDetails(v.root, row.Name, v.apps.of(row.Unit), members, v.apps)
+}
+
+// membersOf returns the processes a grouped row stands for, from the snapshot
+// the row was built from. The result aliases a scratch slice.
+func (v *appsView) membersOf(row *process.Proc) []process.Proc {
+	want := v.keyOf(row)
+	out := v.memberBuf[:0]
+	for i := range v.lastSnap {
+		if v.keyOf(&v.lastSnap[i]) == want {
+			out = append(out, v.lastSnap[i])
+		}
+	}
+	v.memberBuf = out
+	return out
 }
 
 // targetIsStillTheSameProcess re-checks that the PID the context menu was opened
@@ -896,20 +1037,51 @@ func appendGPU(dst []byte, p *process.Proc) []byte {
 	return format.AppendPercent(dst, p.GPU)
 }
 
-// groupByName aggregates processes sharing a name into a single row, reusing
-// the view's scratch slice and index map.
-func (v *appsView) groupByName(procs []process.Proc) []process.Proc {
+// groupKey names a row of the grouped table: an application by its ID, or, for
+// a process that belongs to no application, its own name. The two are kept
+// apart so that a process which merely shares an application's name cannot fold
+// into its row.
+type groupKey struct {
+	app  bool
+	name string
+}
+
+// keyOf is the grouped row a process belongs to. A grouped row carries its first
+// member's unit and its application's name, so it maps to its own key too.
+func (v *appsView) keyOf(p *process.Proc) groupKey {
+	if a := v.apps.of(p.Unit); a != nil {
+		return groupKey{app: true, name: a.id}
+	}
+	return groupKey{name: p.Name}
+}
+
+// groupByApp folds processes into one row per application, or per name for
+// processes that are not an application's, reusing the view's scratch slice and
+// index map.
+//
+// Applications come from the systemd unit each process runs in (see
+// internal/desktop). That is what puts "firefox", "Isolated Web Co",
+// "WebExtensions" and the rest into one row called Firefox, where grouping by
+// name made a row for each and left none of them looking like Firefox.
+func (v *appsView) groupByApp(procs []process.Proc) []process.Proc {
 	out := v.grouping[:0]
 	clear(v.groups)
 	for i := range procs {
 		p := &procs[i]
-		idx, ok := v.groups[p.Name]
+		k := v.keyOf(p)
+		idx, ok := v.groups[k]
 		if !ok {
-			v.groups[p.Name] = len(out)
-			out = append(out, *p)
+			v.groups[k] = len(out)
+			g := *p
+			g.Count = 1
+			if k.app {
+				g.Name = v.apps.of(p.Unit).name
+			}
+			out = append(out, g)
 			continue
 		}
 		g := &out[idx]
+		g.Count++
 		g.CPU += p.CPU
 		g.RSS += p.RSS
 		g.NetIn += p.NetIn
@@ -926,6 +1098,48 @@ func (v *appsView) groupByName(procs []process.Proc) []process.Proc {
 	sort.Slice(out, func(i, j int) bool { return out[i].CPU > out[j].CPU })
 	v.grouping = out
 	return out
+}
+
+// appendName renders the Name column: the name, and for a grouped row of more
+// than one process, how many it stands for.
+func appendName(dst []byte, p *process.Proc) []byte {
+	dst = append(dst, p.Name...)
+	if p.Count > 1 {
+		dst = append(dst, " ("...)
+		dst = strconv.AppendInt(dst, int64(p.Count), 10)
+		dst = append(dst, ')')
+	}
+	return dst
+}
+
+// appendPID renders the PID column. A row that stands for several processes has
+// no one PID, and showing the first member's would invite acting on it.
+func appendPID(dst []byte, p *process.Proc) []byte {
+	if p.Count > 1 {
+		return append(dst, "—"...)
+	}
+	return strconv.AppendInt(dst, int64(p.PID), 10)
+}
+
+// iconOf is the Name column's icon for a row: its application's, or none.
+func (v *appsView) iconOf(p *process.Proc) string {
+	if a := v.apps.of(p.Unit); a != nil {
+		return a.icon
+	}
+	return ""
+}
+
+// setIcon shows an icon by theme name or file path, or clears the image.
+func setIcon(img *gtk.Image, icon string) {
+	switch {
+	case img == nil:
+	case icon == "":
+		img.Clear()
+	case filepath.IsAbs(icon):
+		img.SetFromGIcon(gio.NewFileIcon(gio.NewFileForPath(icon)))
+	default:
+		img.SetFromIconName(icon)
+	}
 }
 
 // lowerASCII lower-cases a search string. Process names are ASCII.
