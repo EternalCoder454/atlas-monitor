@@ -158,6 +158,14 @@ func (s *sidebar) selectView(name string) {
 	}
 }
 
+// focusView gives keyboard focus to the row for a page, and reports whether it
+// took: pages inside the Disk and Network expanders have no row at this level,
+// and nothing in the sidebar can take focus while it is hidden.
+func (s *sidebar) focusView(name string) bool {
+	row, ok := s.rows[name]
+	return ok && row.GrabFocus()
+}
+
 // update refreshes the readings beside the hardware rows. It runs every tick
 // whatever page is open, which is the point of them, and costs three label
 // comparisons — liveLabel only touches GTK when the text actually changes.

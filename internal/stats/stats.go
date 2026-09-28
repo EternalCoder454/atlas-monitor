@@ -58,6 +58,11 @@ type DiskStats struct {
 	mounts              []string
 	prevRead, prevWrite uint64
 	havePrev            bool
+
+	// Windows only: a volume's counters come from the local storage stack, so a
+	// network share has none and is not asked for them every tick. See
+	// disk_windows.go. Unused on Linux, where a block device is a block device.
+	isRemote bool
 }
 
 // Label is the human-friendly device name: "Swap" for zram, the hardware model
@@ -74,15 +79,24 @@ func (d *DiskStats) Label() string {
 
 // NetStats is one interface's addresses + throughput.
 type NetStats struct {
-	Name, Display    string // Display is a friendly label, e.g. "Wi-Fi"
-	MAC, IPv4, IPv6  string
-	SpeedMbit        int // -1 if unknown
+	Name, Display   string // Display is a friendly label, e.g. "Wi-Fi"
+	MAC, IPv4, IPv6 string
+	SpeedMbit       int // -1 if unknown
+	// Wireless is set for a Wi-Fi interface. It is decided here, where the
+	// platform is already known, rather than left for the UI to work out — which
+	// it used to do by looking for /sys/class/net/<name>/wireless, a path that
+	// only exists on one of the two operating systems Atlas now runs on.
+	Wireless         bool
 	RxTotal, TxTotal uint64
 	RxRate, TxRate   float64 // bytes/sec
 	DownHist, UpHist *RingBuffer
 
 	prevRx, prevTx uint64
 	havePrev       bool
+	// loopback keeps the interface at the bottom of the list. It is a flag
+	// rather than a name test because the two platforms do not agree on the
+	// name: Linux calls it "lo", Windows "Loopback Pseudo-Interface 1".
+	loopback bool
 }
 
 // Label is the friendly interface name, falling back to the kernel name.

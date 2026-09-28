@@ -2,10 +2,14 @@
 
 [![CI](https://github.com/EternalCoder454/atlas-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/EternalCoder454/atlas-monitor/actions/workflows/ci.yml)
 
-A native Linux system monitor for GNOME / Fedora, written in Go with GTK4 and
-libadwaita. It is a lighter-weight alternative to Mission Center with a fixed
-two-pane layout (the sidebar never overlaps the content) and first-class AMD GPU
-support read straight from sysfs.
+A system monitor written in Go with GTK4 and libadwaita. It is a lighter-weight
+alternative to Mission Center with a fixed two-pane layout (the sidebar never
+overlaps the content) and first-class AMD GPU support read straight from sysfs.
+
+Linux is where it is developed and where everything works. There is a
+[Windows build](#windows) too, which covers the processor, memory, disks,
+network, processes, services, startup entries and battery — see that section for
+what it cannot do and why.
 
 **This is the `minimal` branch: the monitor, and nothing else.** The AI
 assistant, its Ollama client, the quick prompts and the Markdown renderer are
@@ -205,6 +209,61 @@ rather than writing over `/usr/bin` behind pacman's back. See
 
 An RPM spec lives in [`packaging/`](packaging/atlas-monitor.spec) for COPR or a
 local `rpmbuild`.
+
+## Windows
+
+Download `atlas-monitor-<version>-minimal-windows-x86_64.zip` from a
+[Minimal release](https://github.com/EternalCoder454/atlas-monitor/releases?q=minimal&expanded=true), unpack it
+anywhere, and run `atlas-monitor.exe`. There is nothing to install and no runtime
+to fetch separately: the zip carries GTK, libadwaita and their dependencies, so it
+runs from a folder on a machine that has never seen MSYS2.
+
+What works, and what does not:
+
+| | Windows |
+| --- | --- |
+| Processor — per-core load, clock, cache, topology | Yes |
+| Memory — physical, cache, page file | Yes, with the page file estimated from the commit charge |
+| Disks — space and throughput | Yes, one row per drive letter rather than per physical device |
+| Network — per-interface rates, addresses, link speed | Yes |
+| Apps — processes with CPU, memory and disk I/O | Yes |
+| Services | Listing only; changing one needs administrator rights |
+| Startup | Yes, including switching entries off |
+| Battery — charge, time remaining | Yes |
+| Energy Saver | Yes, and here it can be undone |
+| Processor temperature | No — see below |
+| Battery health and cycle count | No — see below |
+| GPU | No — see below |
+| Disk health (SMART) | No — see below |
+
+The four gaps are deliberate rather than unfinished:
+
+- **Processor temperature.** Windows has no general interface for it. The ones that
+  exist are per-vendor, and the one that is not — WMI's thermal zone — is absent or
+  administrator-only on most machines. Atlas reports it as unavailable rather than
+  showing a plausible zero.
+- **Battery health.** Design capacity and cycle count live behind the battery device
+  IOCTLs, reached through SetupAPI. Until those are read, the health line is hidden
+  rather than derived from the percentage, which would be making it up.
+- **GPU.** The per-process figures Atlas shows on Linux come from each process's DRM
+  fdinfo. The Windows equivalent is behind ETW, which means running an event-tracing
+  session to fill a table column.
+- **Disk health.** Comes from udisks2 on Linux. The Windows equivalent is a WMI
+  query, and is not wired up yet.
+
+Updating is the other real difference. Atlas cannot replace itself on Windows —
+the file is locked while it is running — so the update check still works and offers
+the download page instead of installing. See [Updating](#updating).
+
+To build it yourself, in an [MSYS2](https://www.msys2.org/) MINGW64 shell:
+
+```sh
+pacman -S --needed mingw-w64-x86_64-{go,gcc,pkgconf,gtk4,libadwaita,gobject-introspection,librsvg,adwaita-icon-theme} git zip
+bash packaging/stage-windows.sh
+```
+
+That produces `dist/atlas-monitor-<version>-windows-x86_64.zip`, the same way CI
+does — both call the same script.
 
 ## Build dependencies
 

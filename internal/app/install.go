@@ -231,11 +231,8 @@ func (a *App) relaunch() {
 // trimmed forward to a character, and then to a line, so it never opens on half
 // of either.
 func updateLogTail(n int) string {
-	base := os.Getenv("XDG_STATE_HOME")
-	if base == "" {
-		base = filepath.Join(os.Getenv("HOME"), ".local", "state")
-	}
-	b, err := os.ReadFile(filepath.Join(base, "atlas-monitor", "update.log"))
+	b, err := os.ReadFile(filepath.Join(
+		atlasDir("XDG_STATE_HOME", filepath.Join(".local", "state")), "update.log"))
 	if err != nil {
 		return ""
 	}

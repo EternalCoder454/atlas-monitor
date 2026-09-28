@@ -15,10 +15,15 @@ ICONS   := cpu memory disk gpu network wifi battery apps services settings updat
 # TAGS is passed to the Go build. Nothing here needs one; it is kept so an
 # in-app update rebuilds with whatever the install was built with.
 TAGS    ?=
-.PHONY: build run install uninstall clean vet test test-race
+.PHONY: build build-profile run install uninstall clean vet test test-race
 
 build:
 	go build -tags "$(TAGS)" -trimpath -ldflags="-s -w" -o $(BINDIR)/$(BINARY) .
+
+# For measuring, not shipping: records a pprof profile when ATLAS_CPUPROFILE or
+# ATLAS_MEMPROFILE is set, and ends the run on SIGTERM. See main_profile.go.
+build-profile:
+	$(MAKE) build TAGS="$(TAGS) profile" BINARY=atlas-monitor-profile
 
 run: build
 	./$(BINDIR)/$(BINARY)

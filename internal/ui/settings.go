@@ -2,9 +2,7 @@ package ui
 
 import (
 	"fmt"
-	"os"
 	"strconv"
-	"strings"
 
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
@@ -201,7 +199,18 @@ func themeGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 	g := adw.NewPreferencesGroup()
 	g.SetTitle("Theme")
 
-	row := gtk.NewBox(gtk.OrientationHorizontal, 18)
+	// Two rows of five rather than one of ten. Ten circles and their names are
+	// wider than the dialog is at its narrowest — it becomes a bottom sheet on a
+	// phone-width window — and a FlowBox wraps to fewer per line there instead of
+	// forcing the dialog wider or clipping the names.
+	row := gtk.NewFlowBox()
+	row.SetSelectionMode(gtk.SelectionNone)
+	row.SetActivateOnSingleClick(false)
+	row.SetMaxChildrenPerLine(5)
+	row.SetMinChildrenPerLine(1)
+	row.SetHomogeneous(true)
+	row.SetColumnSpacing(18)
+	row.SetRowSpacing(12)
 	row.SetHAlign(gtk.AlignCenter)
 	row.SetMarginTop(6)
 	row.SetMarginBottom(6)
@@ -249,6 +258,12 @@ func themeGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 		t := t
 
 		swatch := gtk.NewToggleButton()
+		// Centred, not filled. A button fills its cell by default, and the cell
+		// is as wide as the name under it — so every theme with a name longer
+		// than the circle ("Ember", "Dracula", "Solarized") was drawn as an oval,
+		// and the ring round the chosen one with it.
+		swatch.SetHAlign(gtk.AlignCenter)
+		swatch.SetVAlign(gtk.AlignCenter)
 		swatch.AddCSSClass("am-swatch")
 		swatch.AddCSSClass(theme.SwatchClass(t.ID))
 		swatch.SetTooltipText(t.Name + " — " + t.Summary)
@@ -265,6 +280,12 @@ func themeGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 		cell.Append(swatch)
 		cell.Append(name)
 		row.Append(cell)
+		// The FlowBox wraps each cell in a child of its own that takes keyboard
+		// focus, which would put two tab stops in front of every circle — one
+		// that does nothing, then the button. Only the button should take it.
+		if child := row.ChildAtIndex(len(buttons)); child != nil {
+			child.SetFocusable(false)
+		}
 
 		swatch.ConnectToggled(func() {
 			if syncing {
@@ -305,11 +326,12 @@ func themeGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 func perfGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 	g := adw.NewPreferencesGroup()
 	g.SetTitle("Performance")
-	g.SetDescription("Atlas draws its charts on the CPU by default, which keeps the graphics driver stack — " +
-		"Mesa, the Vulkan loader and LLVM — out of the process entirely. Loading it costs memory: on the " +
-		"machine this was measured on, about 27 MiB pinned to one card, or about 63 MiB if GTK is left to " +
-		"load every driver installed. Switch to GPU if you want smoother window resizing on a high-refresh " +
-		"display.")
+	// Two sentences. It was a five-line paragraph explaining Mesa, the Vulkan
+	// loader and what each mode cost on the machine it was measured on — which
+	// pushed the rows it describes below the fold, and repeated what those rows'
+	// own subtitles already say ("~27 MiB more"). What is left is the trade.
+	g.SetDescription("Software keeps graphics drivers out of Atlas, which saves memory. " +
+		"GPU makes resizing smoother on high-refresh displays.")
 
 	labels := make([]string, len(gfx.Modes))
 	selected := 0
@@ -426,22 +448,14 @@ func refreshDetail(seconds int) string {
 		strconv.Itoa(seconds) + " minutes"
 }
 
-// selfMemory reports this process's resident set, read straight from
-// /proc/self/statm — the same figure a task manager shows for Atlas.
+// selfMemory reports this process's resident set — the same figure a task manager
+// shows for Atlas. Where it comes from is per-platform; see internal/sysmem.
 func selfMemory() string {
-	b, err := os.ReadFile("/proc/self/statm")
-	if err != nil {
+	n, ok := sysmem.Resident()
+	if !ok {
 		return "unavailable"
 	}
-	fields := strings.Fields(string(b))
-	if len(fields) < 2 {
-		return "unavailable"
-	}
-	pages, err := strconv.ParseUint(fields[1], 10, 64)
-	if err != nil {
-		return "unavailable"
-	}
-	return format.Bytes(pages*uint64(os.Getpagesize())) + " resident"
+	return format.Bytes(n) + " resident"
 }
 
 func channelName(string) string { return "Minimal" }

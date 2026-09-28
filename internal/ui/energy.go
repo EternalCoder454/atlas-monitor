@@ -49,9 +49,16 @@ func newEnergyView(proc *process.Collector) *energyView {
 	caption.text("Programs working hardest right now")
 	box.Append(headBox)
 
+	// The last sentence is not true everywhere. Linux needs CAP_SYS_NICE to raise
+	// a priority back, so easing off is a one-way door; Windows lets you put a
+	// process you own back where it was. The page says whichever is the case.
+	undo := "This lasts until the program is restarted, and cannot be undone " +
+		"without administrator rights."
+	if process.EaseOffReversible {
+		undo = "This lasts until the program is restarted, and can be undone."
+	}
 	note := gtk.NewLabel("Easing a program off puts it behind everything else on the processor. " +
-		"It keeps running and keeps its work; it just stops winning. This lasts until the " +
-		"program is restarted, and cannot be undone without administrator rights.")
+		"It keeps running and keeps its work; it just stops winning. " + undo)
 	note.SetWrap(true)
 	note.SetXAlign(0)
 	note.AddCSSClass("am-subtle")
