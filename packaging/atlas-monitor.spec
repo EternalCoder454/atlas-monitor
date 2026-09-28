@@ -1,6 +1,12 @@
 # RPM spec for Atlas Monitor. Suitable for COPR: the build needs network access
 # for the Go module cache, so enable it on the COPR project
 # (`copr-cli modify --enable-net on`) or run rpmbuild with modules pre-fetched.
+
+# No debuginfo subpackage. The binary is linked with -s -w, which leaves no debug
+# information to split out, and Fedora's rpmbuild then fails the whole build on
+# an empty debugsourcefiles.list rather than skipping the subpackage.
+%global debug_package %{nil}
+
 Name:           atlas-monitor
 Version:        %{?_version}%{!?_version:0.11.2}
 Release:        1%{?dist}
@@ -37,7 +43,10 @@ through the generic DRM interfaces.
 
 %build
 export CGO_ENABLED=1
-go build -trimpath -ldflags="-s -w" -o %{name} .
+# Position-independent, as Fedora's packaging guidelines expect of every
+# executable, so address-space randomisation applies to it; Go's default on
+# linux/amd64 is a fixed-address binary, which rpmlint flags.
+go build -buildmode=pie -trimpath -ldflags="-s -w" -o %{name} .
 
 %install
 install -Dm755 %{name}                       %{buildroot}%{_bindir}/%{name}
@@ -102,8 +111,8 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/com.atlas.Monitor.des
 - Per-core readings, a capacity bar on Storage, live figures in the sidebar
 - Idle readings in the process table are dimmed so activity stands out
 
-* Wed Sep 24 2026 EternalHell <77252745+EternalCoder454@users.noreply.github.com> - 0.7.0-1
+* Thu Sep 24 2026 EternalHell <77252745+EternalCoder454@users.noreply.github.com> - 0.7.0-1
 - Halve the CPU and cut read syscalls by two thirds in the collectors
 
-* Tue Sep 23 2026 EternalHell <77252745+EternalCoder454@users.noreply.github.com> - 0.6.1-1
+* Wed Sep 23 2026 EternalHell <77252745+EternalCoder454@users.noreply.github.com> - 0.6.1-1
 - New CPU, memory, disk and GPU icons
