@@ -3,6 +3,21 @@
 Written for the people who use Atlas Monitor rather than the people who build
 it. One short line per change, no jargon — this is what the update prompt shows.
 
+## 0.11.2
+
+- Atlas now runs on Windows: download the zip, unpack it anywhere and run it
+- Ten colour themes in Settings, each shown as a circle of its two colours
+- Every theme keeps its text and buttons easy to read; Nord's and Ember's
+  buttons were hard to read before
+- Settings fits a narrow window, showing one page at a time instead of
+  cutting its pages off
+- Opening Atlas on the Apps page no longer keeps the processor busy for its
+  first ten seconds
+- The Apps and Services lists take less work to draw and to keep up to date
+- Changing a setting no longer makes the window stutter or pauses the
+  readings
+- The rendering setting's description is two sentences instead of five lines
+
 ## 0.11.1
 
 - Updating now works however Atlas was installed, not only from a source
