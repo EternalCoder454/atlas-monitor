@@ -45,8 +45,13 @@ jobs:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: fedora-go-${{ hashFiles('go.sum') }}
+          key: fedora-go-${{ hashFiles('go.sum', '.github/go-cache.sh') }}
           restore-keys: fedora-go-
+
+      # Nothing is saved here, but a trim at the end of one go command could
+      # still delete what the next one needs. See .github/go-cache.sh.
+      - name: Hold Go's cache trim
+        run: bash .github/go-cache.sh hold
 
       # See ci.yml: git refuses a checkout owned by another uid, which breaks
       # the VCS stamping `go build` does.
@@ -185,8 +190,11 @@ jobs:
           path: |
             ${{ runner.temp }}/go-build
             ${{ runner.temp }}/go-mod
-          key: windows-go-${{ steps.toolchain.outputs.key }}-${{ hashFiles('go.sum') }}
+          key: windows-go-${{ steps.toolchain.outputs.key }}-${{ hashFiles('go.sum', '.github/go-cache.sh') }}
           restore-keys: windows-go-${{ steps.toolchain.outputs.key }}-
+
+      - name: Hold Go's cache trim
+        run: bash .github/go-cache.sh hold
 
       - name: Resolve the tag
         id: tag

@@ -26,9 +26,18 @@ const netScanThreshold = 8192
 
 // Proc is a single process snapshot for the Apps table.
 type Proc struct {
-	PID       int
-	Name      string
-	Kernel    bool    // a kernel thread (kworker, ksoftirqd, …) rather than a program
+	PID    int
+	Name   string
+	Kernel bool // a kernel thread (kworker, ksoftirqd, …) rather than a program
+	// Unit is the systemd unit the process runs in — "app-org.kde.dolphin@….service",
+	// "pipewire.service" — or "" where there is none (Windows, a container, a
+	// kernel thread). Desktops start each application in a unit of its own, so
+	// this is what tells one application's processes from another's; see
+	// internal/desktop for turning it into a name.
+	Unit string
+	// Count is how many processes this entry stands for, set by callers that
+	// fold several into one. Zero for a single process.
+	Count     int
 	CPU       float64 // percent of one core (may exceed 100 for threaded procs)
 	RSS       uint64  // resident bytes
 	GPU       float64 // percent of GPU engine time; -1 if the process holds no GPU handle
@@ -40,6 +49,7 @@ type Proc struct {
 
 type procPrev struct {
 	name                  string
+	unit                  string
 	cpuJiffies            uint64
 	readBytes, writeBytes uint64
 }
@@ -83,6 +93,10 @@ type Collector struct {
 	gpuPids        map[int]bool
 	gpuPidsSpare   map[int]bool
 	gpuScanCounter int
+
+	// unitScanCounter paces the re-reading of every process's unit; see
+	// unitRescanTicks.
+	unitScanCounter int
 
 	// What the UI is actually showing. Both default to true so a caller that
 	// never says otherwise gets every figure, as before.

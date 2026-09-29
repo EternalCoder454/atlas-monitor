@@ -111,8 +111,12 @@ jobs:
           path: |
             ${{ runner.temp }}/go-build
             ${{ runner.temp }}/go-mod
-          key: windows-go-${{ steps.toolchain.outputs.key }}-${{ hashFiles('go.sum') }}
+          key: windows-go-${{ steps.toolchain.outputs.key }}-${{ hashFiles('go.sum', '.github/go-cache.sh') }}
           restore-keys: windows-go-${{ steps.toolchain.outputs.key }}-
+
+      # See .github/go-cache.sh, and ci.yml, which does the same.
+      - name: Hold Go's cache trim
+        run: bash .github/go-cache.sh hold
 
       - name: Trust the checkout
         run: git config --global --add safe.directory "$(pwd)"
@@ -221,3 +225,6 @@ jobs:
           name: ${{ steps.stage.outputs.name }}
           path: dist/*.zip*
           if-no-files-found: error
+
+      - name: Prune the Go build cache
+        run: bash .github/go-cache.sh prune

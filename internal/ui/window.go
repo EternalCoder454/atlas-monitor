@@ -9,8 +9,10 @@ import (
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
 	"atlas-monitor/internal/config"
+	"atlas-monitor/internal/ease"
 	"atlas-monitor/internal/health"
 	"atlas-monitor/internal/process"
+	"atlas-monitor/internal/sensors"
 	"atlas-monitor/internal/services"
 	"atlas-monitor/internal/stats"
 	"atlas-monitor/internal/sysmem"
@@ -24,12 +26,13 @@ import (
 // GTK objects for pages the user may never look at. The sidebar row is cheap,
 // so navigation is unaffected.
 //
-// The reverse — tearing a page down again when the user leaves it — does not
-// work and is deliberately not attempted. Destroying a GTK page reclaims
-// nothing: gotk4 keeps each signal handler's Go closure alive for the widget's
-// lifetime and those closures reference the page, so the two hold each other
-// up. Rebuilding one simply costs its memory a second time. Not building it
-// until it is asked for is the saving that actually lands.
+// The reverse — tearing a page down again when the user leaves it — is not
+// attempted. Before gotk4 0.4.1 it reclaimed nothing: gotk4 kept each signal
+// handler's Go closure alive for good, and those closures referenced the page,
+// so the two held each other up. 0.4.1 would release it, but a page left is
+// usually a page returned to, and rebuilding it each time would trade a few
+// megabytes held for work and a flicker on every visit. Not building it until
+// it is asked for is the saving that lands either way.
 type lazyView struct {
 	build func() View
 	view  View
@@ -52,6 +55,11 @@ type Window struct {
 	sidebar  *sidebar
 	split    *adw.OverlaySplitView
 	menuBtn  *gtk.ToggleButton
+
+	// easer is Energy Saver's automatic half, owned by the application; nil
+	// with easeErr saying why where the system cannot support it.
+	easer   *ease.Controller
+	easeErr error
 
 	// keys is the widget whose unclaimed typing goes to the open page's search
 	// box, and capturing the page currently taking it. See searcher.
@@ -155,8 +163,13 @@ func (w *Window) Build() gtk.Widgetter {
 		}
 	}
 
+	sensorsAvail := sensors.Available()
+	if sensorsAvail {
+		w.addView("sensors", func() View { return newSensorsView() })
+	}
+
 	w.addView("apps", func() View { return newAppsView(w.proc, gpuAvail, w.settings) })
-	w.addView("energy", func() View { return newEnergyView(w.proc) })
+	w.addView("energy", func() View { return newEnergyView(w.proc, w.easer, w.easeErr, w.settings) })
 	w.addView("startup", func() View { return newStartupView() })
 	w.addView("services", func() View { return newServicesView() })
 
@@ -166,7 +179,7 @@ func (w *Window) Build() gtk.Widgetter {
 	}
 	orderedNets := orderByActive(nets, activeNet)
 
-	sb := buildSidebar(disks, orderedNets, packs, gpuAvail, batteryAvail, w.selectView)
+	sb := buildSidebar(disks, orderedNets, packs, gpuAvail, batteryAvail, sensorsAvail, w.selectView)
 	w.sidebar = sb
 	w.netExp = sb.netExp
 	w.netRows = sb.netRows
@@ -276,6 +289,12 @@ func (w *Window) Build() gtk.Widgetter {
 		})
 	})
 	return bin
+}
+
+// SetEnergy hands the window Energy Saver's automatic half, before Build. c is
+// nil where it is not available, and err then says why.
+func (w *Window) SetEnergy(c *ease.Controller, err error) {
+	w.easer, w.easeErr = c, err
 }
 
 // StartRefresh installs the UI tick that updates the active view, at whatever
