@@ -3,6 +3,24 @@
 Written for the people who use Atlas Monitor rather than the people who build
 it. One short line per change, no jargon — this is what the update prompt shows.
 
+## 0.12.0
+
+- A new look, modelled on the Windows 11 Task Manager, with Settings at the
+  bottom of the sidebar
+- Charts have a grid and a time scale, and the Apps list shades programs by
+  how busy they are
+- A Sensors page with every temperature, fan, voltage and power reading, named
+  for what it is
+- Group by app groups by application, with its icon; End Task on a group ends
+  all of it
+- Every program has a Details window: double-click it, or right-click and
+  choose Details
+- Energy Saver can ease busy apps off by itself, and never touches anything
+  playing sound
+- Memory use stays flat over long sessions: closed windows and dialogs are now
+  freed
+- A reading such as the memory total no longer opens highlighted
+
 ## 0.11.2
 
 - Ten colour themes in Settings, each shown as a circle of its two colours

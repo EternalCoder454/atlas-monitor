@@ -8,7 +8,7 @@
 %global debug_package %{nil}
 
 Name:           atlas-monitor
-Version:        %{?_version}%{!?_version:0.11.2}
+Version:        %{?_version}%{!?_version:0.12.0}
 Release:        1%{?dist}
 Summary:        Lightweight system monitor for GNOME — CPU, memory, disk, network, GPU
 
@@ -73,6 +73,14 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/com.atlas.Monitor.des
 %{_datadir}/icons/hicolor/scalable/actions/atlas-*-symbolic.svg
 
 %changelog
+* Tue Sep 29 2026 EternalHell <77252745+EternalCoder454@users.noreply.github.com> - 0.12.0-1
+- A new look modelled on the Windows 11 Task Manager
+- The Apps list shades busy programs by how busy they are
+- A Sensors page with every temperature, fan, voltage and power reading
+- Group by app groups by application, and every program has a Details window
+- Energy Saver can ease busy apps off by itself, never one playing sound
+- Closed windows and dialogs are freed, so memory stays flat over long sessions
+
 * Mon Sep 28 2026 EternalHell <77252745+EternalCoder454@users.noreply.github.com> - 0.11.2-1
 - Ten colour themes, each held to readable contrast for text and buttons
 - Opening on the Apps page no longer keeps the processor busy for ten seconds
