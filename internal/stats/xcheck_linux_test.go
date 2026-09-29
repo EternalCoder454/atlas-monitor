@@ -481,58 +481,65 @@ func TestActiveNetIsRoutable(t *testing.T) {
 
 // ---------------------------------------------------------------- cpu
 
-// TestCPUUsageAgreesWithProcStat brackets a run of the collector with two
-// direct /proc/stat reads and checks the samples average out to the same busy
-// percentage the kernel's own counters imply over that window.
+// TestCPUUsageAgreesWithProcStat checks every CPU reading the collector makes
+// against /proc/stat, read with a parser independent of cpu.go's.
+//
+// It runs the collector's CPU tick itself instead of starting the collector, so
+// that it knows when each reading was taken: /proc/stat is read just before and
+// just after every tick, and the tick's own read lies between the two. Counters
+// only rise, so that brackets the figure the collector can have computed, and
+// its reading must fall inside the bracket however busy the machine is. The
+// bracket is as tight as the machine lets the reads be, which is a fraction of
+// a point when nothing preempts them.
+//
+// It used to compare the mean of ten readings with the average over their ten
+// seconds, which checks sampling rather than arithmetic: CI's race job, running
+// nine test binaries at once, put the two 9.5 points apart with nothing wrong.
 func TestCPUUsageAgreesWithProcStat(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("takes several seconds")
-	}
-	idle0, total0, ok := procStatTotals()
-	if !ok {
-		t.Skip("cannot read /proc/stat")
-	}
-	start := time.Now()
+	c := New(nil)
+	c.initCPUStatic()
+	defer c.closeCPU()
 
-	c := New(gpu.NewReader())
-	c.Start()
-	defer c.Stop()
+	type counters struct{ idle, total int64 }
+	read := func() counters {
+		idle, total, ok := procStatTotals()
+		if !ok {
+			t.Skip("cannot read /proc/stat")
+		}
+		return counters{int64(idle), int64(total)}
+	}
+	type tick struct{ before, after counters }
+	collect := func() tick {
+		before := read()
+		c.collectCPU()
+		return tick{before, read()}
+	}
 
-	const samples = 10
-	var sum float64
-	var n int
-	for i := 0; i < samples; i++ {
-		time.Sleep(time.Second)
-		c.Read(func(s *Stats) {
-			if s.CPU.Usage >= 0 {
-				sum += s.CPU.Usage
-				n++
-			}
-		})
-	}
-	elapsed := time.Since(start)
-	idle1, total1, _ := procStatTotals()
+	prev := collect() // the first tick only gives the collector its baseline
+	for i := 0; i < 5; i++ {
+		time.Sleep(500 * time.Millisecond)
+		cur := collect()
+		var got float64
+		c.Read(func(s *Stats) { got = s.CPU.Usage })
 
-	if n == 0 || total1 <= total0 {
-		t.Skip("no usable samples")
-	}
-	want := 100 * (1 - float64(idle1-idle0)/float64(total1-total0))
-	got := sum / float64(n)
-	// Our sample mean is a mean of instantaneous readings over the same window,
-	// so it tracks the window average — but only as well as sampling allows. On
-	// a machine whose load is swinging between idle and pegged, ten point
-	// samples cannot reconstruct the average, so the tolerance widens with how
-	// busy the window was. This stays tight on a quiet machine, which is where
-	// a real disagreement would show.
-	tol := 8.0
-	if want > 50 {
-		tol = 20.0
-	}
-	if d := got - want; d > tol || d < -tol {
-		t.Errorf("mean CPU usage %.2f%% over %v, /proc/stat implies %.2f%% (diff %.2f, tolerance %.0f)", got, elapsed.Round(time.Millisecond), want, d, tol)
-	} else {
-		t.Logf("mean CPU usage %.2f%% over %v, /proc/stat implies %.2f%% (diff %.2f)", got, elapsed.Round(time.Millisecond), want, d)
+		// The collector's differences lie between the narrowest and the widest
+		// pairing of the two brackets' ends.
+		idleLo, idleHi := cur.before.idle-prev.after.idle, cur.after.idle-prev.before.idle
+		totalLo, totalHi := cur.before.total-prev.after.total, cur.after.total-prev.before.total
+		prev = cur
+		if totalLo <= 0 {
+			t.Logf("tick %d: no time passed between the reads, nothing to check", i)
+			continue
+		}
+		lo := max(0, 100*(1-float64(idleHi)/float64(totalLo)))
+		hi := min(100, 100*(1-float64(idleLo)/float64(totalHi)))
+		const rounding = 0.01
+		if got < lo-rounding || got > hi+rounding {
+			t.Errorf("tick %d: CPU usage %.2f%%, but /proc/stat puts it between %.2f%% and %.2f%%", i, got, lo, hi)
+		} else {
+			t.Logf("tick %d: CPU usage %.2f%%, /proc/stat puts it between %.2f%% and %.2f%%", i, got, lo, hi)
+		}
 	}
 }
 

@@ -18,9 +18,9 @@ func newTestAppsView() *appsView {
 	v := &appsView{
 		model:  gioutil.NewListModel[*procRow](),
 		byPID:  make(map[int]*procRow),
-		byName: make(map[string]*procRow),
+		byKey:  make(map[groupKey]*procRow),
 		cells:  make(map[uintptr]*procCell),
-		groups: make(map[string]int),
+		groups: make(map[groupKey]int),
 	}
 	v.filter = gtk.NewCustomFilter(v.matches)
 	return v

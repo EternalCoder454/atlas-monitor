@@ -11,14 +11,14 @@ import (
 // that running it twice over different input does not carry state forward — the
 // slice and index map are reused between ticks.
 func TestGroupByNameReusesBuffers(t *testing.T) {
-	v := &appsView{groups: make(map[string]int)}
+	v := &appsView{groups: make(map[groupKey]int)}
 
 	first := []process.Proc{
 		{PID: 1, Name: "chrome", CPU: 10, RSS: 100, GPU: -1, NetIn: 1, DiskRead: 5},
 		{PID: 2, Name: "chrome", CPU: 5, RSS: 50, GPU: 3, NetIn: 2, DiskRead: 1},
 		{PID: 3, Name: "bash", CPU: 1, RSS: 10, GPU: -1},
 	}
-	got := v.groupByName(first)
+	got := v.groupByApp(first)
 	if len(got) != 2 {
 		t.Fatalf("grouped %d rows, want 2: %+v", len(got), got)
 	}
@@ -38,15 +38,15 @@ func TestGroupByNameReusesBuffers(t *testing.T) {
 
 	// A second pass with completely different input must not see the first.
 	second := []process.Proc{{PID: 9, Name: "vim", CPU: 2, RSS: 20, GPU: -1}}
-	got = v.groupByName(second)
+	got = v.groupByApp(second)
 	if len(got) != 1 || got[0].Name != "vim" || got[0].CPU != 2 || got[0].RSS != 20 {
 		t.Fatalf("second pass = %+v, want one vim row with CPU 2 / RSS 20", got)
 	}
 }
 
 func TestGroupByNameEmpty(t *testing.T) {
-	v := &appsView{groups: make(map[string]int)}
-	if got := v.groupByName(nil); len(got) != 0 {
+	v := &appsView{groups: make(map[groupKey]int)}
+	if got := v.groupByApp(nil); len(got) != 0 {
 		t.Errorf("grouping nothing produced %d rows", len(got))
 	}
 }

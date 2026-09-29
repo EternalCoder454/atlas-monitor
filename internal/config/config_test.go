@@ -348,3 +348,26 @@ func TestShowIOColumnsMigrates(t *testing.T) {
 		t.Errorf("a settings file with neither key should use the default, got %v", got)
 	}
 }
+
+// TestEnergyAutoDefaultsOn: settings saved before the option existed have no
+// energy_auto key, and have to come out with it on — the default — not the zero
+// value; one saved with it off stays off.
+func TestEnergyAutoDefaultsOn(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(path()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path(), []byte(`{"theme":"nord"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if s := Load(); !s.EnergyAuto {
+		t.Error("an older settings file loaded with automatic Energy Saver off")
+	}
+	if err := os.WriteFile(path(), []byte(`{"energy_auto":false,"energy_never":["org.kde.konsole"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := Load()
+	if s.EnergyAuto || len(s.EnergyNever) != 1 || s.EnergyNever[0] != "org.kde.konsole" {
+		t.Errorf("loaded %+v", s)
+	}
+}

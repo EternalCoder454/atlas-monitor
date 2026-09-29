@@ -73,11 +73,31 @@ bindings and can take a few minutes; rebuilds are cached and fast.
 - **Battery** — charge and power-draw graphs, time remaining, pack health
   against its design capacity, charge cycles and adapter state. The page only
   appears on machines that have a battery.
+- **Sensors** — every temperature, fan, voltage and power reading the hardware
+  offers through hwmon, named for what it is rather than by driver: each drive
+  by its model, each memory module by its slot, the graphics card's edge,
+  hotspot and memory temperatures, the network adapters, the motherboard. The
+  CPU's per-core temperatures fold away behind the package reading.
 - **Apps** — a virtualised process table (`GtkColumnView`) with click-to-sort
-  columns, live search, a right-click menu (End Task / Kill / Stop / Continue /
-  Open file location), and *Group by app*. A **Power** column rates each process
+  columns, live search, a right-click menu (Details / End Task / Kill / Stop /
+  Continue / Open file location), and *Group by app*. Grouping is by the
+  application a process really belongs to — the systemd unit the desktop starts
+  it in — so Firefox's dozen processes are one row called Firefox, with its icon,
+  and End Task on it ends all of them. A **Power** column rates each process
   Very low → High the way Task Manager does, and kernel worker threads — about
   three quarters of `/proc` — are hidden behind a toggle.
+- **Details** — double-click a process for what the table cannot say: its
+  command line, what started it, who owns it, when, its threads and open files,
+  and its memory three ways (resident, proportional, private). For a grouped
+  application, its processes, each one a click away.
+- **Energy Saver** — the programs working hardest, and a way to put one behind
+  the rest. With *Ease off busy apps automatically* on, an app that keeps a core
+  busy for half a minute is eased by itself and put back when it calms down. It
+  is done through the app's CPU weight, which is reversible and applies to every
+  process the app has; it only matters when something else wants the processor;
+  and anything playing or recording sound, the app you are using, and terminals
+  are left alone. Everything eased automatically is put back when Atlas closes,
+  and after a crash, the next time it starts.
 - **Services** — systemd units over D-Bus with status dots and
   Start/Stop/Restart/Enable/Disable actions (polkit-authenticated).
 - **Assistant** — an optional local AI (via [Ollama](https://ollama.com)) that
@@ -277,7 +297,7 @@ Arch Linux:
 sudo pacman -S --needed base-devel go gtk4 libadwaita
 ```
 
-You need Go 1.22 or newer. The first build compiles the gotk4 cgo bindings and
+You need Go 1.24 or newer. The first build compiles the gotk4 cgo bindings and
 can take several minutes; subsequent builds are cached and fast.
 
 ## Build & install
@@ -449,7 +469,10 @@ main.go                embeds the stylesheet, starts the app
 internal/app/          AdwApplication, window, two-pane wiring
 internal/ui/           sidebar, content stack, the individual views
 internal/stats/        /proc + /sys collectors, ring buffers, pause/resume
-internal/process/      per-process /proc/[pid] collection
+internal/process/      per-process /proc/[pid] collection, and the Details panel's reads
+internal/desktop/      which application a process belongs to, from its systemd unit
+internal/sensors/      hwmon: every temperature, fan, voltage and power sensor
+internal/ease/         Energy Saver's automatic easing, through CPU weights
 internal/gpu/          GPU readers: amdgpu sysfs, NVIDIA NVML, generic DRM
 internal/power/        battery and AC adapter from /sys/class/power_supply
 internal/services/     systemd D-Bus client

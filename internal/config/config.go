@@ -117,6 +117,12 @@ type Settings struct {
 	// section is not drawn and, where the work is its own, not done either.
 	CollapsedSections []string `json:"collapsed_sections"`
 
+	// EnergyAuto lets Energy Saver ease off busy applications by itself, and put
+	// them back when they calm down or start playing sound. See internal/ease.
+	EnergyAuto bool `json:"energy_auto"`
+	// EnergyNever are applications, by ID, never to ease off automatically.
+	EnergyNever []string `json:"energy_never"`
+
 	// HiddenColumns are the Apps table columns put away, by their titles. The
 	// two disk ones start hidden: they count blocks that reach the drive, which
 	// on anything with a page cache is nothing for nearly every process.
@@ -141,6 +147,7 @@ func Defaults() Settings {
 		WindowWidth:    DefaultWindowWidth,
 		WindowHeight:   DefaultWindowHeight,
 		HiddenColumns:  []string{"Disk Read", "Disk Write"},
+		EnergyAuto:     true,
 		QuickPrompts:   DefaultQuickPrompts(),
 	}
 }
