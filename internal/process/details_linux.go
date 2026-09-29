@@ -34,6 +34,12 @@ func Details(pid int) (Info, error) {
 		}
 	}
 	if b, err := os.ReadFile(dir + "smaps_rollup"); err == nil {
+		// RSS from the same walk of the page tables as PSS and Private, so the
+		// three agree. status's VmRSS is the kernel's running counter, batched
+		// per CPU, and can sit below a PSS read an instant later.
+		if rss := kBField(b, "Rss:"); rss > 0 {
+			in.RSS = rss
+		}
 		in.PSS = kBField(b, "Pss:")
 		in.Private = kBField(b, "Private_Clean:") + kBField(b, "Private_Dirty:")
 		in.HaveSmaps = true
@@ -150,13 +156,17 @@ func splitCmdline(b []byte) []string {
 	return out
 }
 
-// kBField finds "key   1234 kB" in b and returns it in bytes.
+// kBField finds the line "key   1234 kB" in b and returns it in bytes. The key
+// must start the line: "Pss:" is also the tail of "SwapPss:".
 func kBField(b []byte, key string) uint64 {
-	i := bytes.Index(b, []byte(key))
-	if i < 0 {
+	var rest []byte
+	if bytes.HasPrefix(b, []byte(key)) {
+		rest = b[len(key):]
+	} else if i := bytes.Index(b, []byte("\n"+key)); i >= 0 {
+		rest = b[i+1+len(key):]
+	} else {
 		return 0
 	}
-	rest := b[i+len(key):]
 	if j := bytes.IndexByte(rest, '\n'); j >= 0 {
 		rest = rest[:j]
 	}

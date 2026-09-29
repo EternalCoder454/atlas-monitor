@@ -68,11 +68,20 @@ func TestSplitCmdline(t *testing.T) {
 }
 
 func TestKBField(t *testing.T) {
-	b := []byte("Rss:              1234 kB\nPss:               567 kB\nPrivate_Dirty:      8 kB\n")
+	// smaps_rollup's shape, with SwapPss moved ahead of Pss: a key must match
+	// only where a line starts.
+	b := []byte("55b4c7743000-7ffe005dd000 ---p 00000000 00:00 0    [rollup]\n" +
+		"Rss:              1234 kB\nSwapPss:            99 kB\nPss:               567 kB\nPrivate_Dirty:      8 kB\n")
 	if got := kBField(b, "Pss:"); got != 567*1024 {
 		t.Errorf("Pss = %d", got)
 	}
+	if got := kBField(b, "Rss:"); got != 1234*1024 {
+		t.Errorf("Rss = %d", got)
+	}
 	if got := kBField(b, "Swap:"); got != 0 {
 		t.Errorf("absent field = %d, want 0", got)
+	}
+	if got := kBField([]byte("Rss: 4 kB\n"), "Rss:"); got != 4*1024 {
+		t.Errorf("key at the very start = %d", got)
 	}
 }
