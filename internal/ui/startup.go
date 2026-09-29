@@ -34,18 +34,18 @@ func newStartupView() *startupView {
 	box.Append(headBox)
 
 	bar := adw.NewWrapBox()
-	bar.SetChildSpacing(6)
+	bar.SetChildSpacing(2)
 	bar.SetLineSpacing(6)
+	bar.AddCSSClass("am-commandbar")
 
-	refresh := gtk.NewButtonWithLabel("Refresh")
+	refresh := newCommandButton("view-refresh-symbolic", "Refresh")
 	refresh.ConnectClicked(func() { v.rebuild() })
 	bar.Append(refresh)
 
 	// The same bargain the process table makes with kernel threads: most of
 	// what is here is desktop plumbing that marks itself NoDisplay, and showing
 	// it by default buries the three entries anybody came to find.
-	sysToggle := gtk.NewToggleButton()
-	sysToggle.SetLabel("System entries")
+	sysToggle, _ := newCommandToggle("system-run-symbolic", "System entries")
 	sysToggle.SetTooltipText("Also show the desktop's own background pieces")
 	sysToggle.ConnectToggled(func() {
 		v.showSystem = sysToggle.Active()

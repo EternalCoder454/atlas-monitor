@@ -3,7 +3,11 @@
 package ui
 
 import (
+	"strings"
+
+	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
+	"github.com/diamondburned/gotk4/pkg/pango"
 
 	"atlas-monitor/internal/config"
 	"atlas-monitor/internal/process"
@@ -33,18 +37,32 @@ func newPage() (*gtk.ScrolledWindow, *gtk.Box) {
 	return sw, box
 }
 
-// newHeadline builds the large current-value number plus a muted caption below.
+// newHeadline builds the large current-value number with a muted caption on
+// the same row, pushed to the right edge, as Task Manager's Performance pages
+// do: the reading on the left and what is being read on the right. The caption
+// is the one that gives way when the window is narrow, so it ellipsizes rather
+// than pushing the number out of view.
 func newHeadline() (number, caption *liveLabel, box *gtk.Box) {
-	box = gtk.NewBox(gtk.OrientationVertical, 0)
 	n := gtk.NewLabel("—")
 	n.AddCSSClass("am-headline")
 	n.SetXAlign(0)
+	return newTitleRow(n)
+}
+
+// newTitleRow lays out lead on the left and a right-aligned, ellipsizing
+// caption beside it. newHeadline and newDeviceHeader differ only in the lead
+// label's style, so the layout is written once.
+func newTitleRow(lead *gtk.Label) (first, caption *liveLabel, box *gtk.Box) {
+	box = gtk.NewBox(gtk.OrientationHorizontal, 12)
 	c := gtk.NewLabel("")
-	c.AddCSSClass("am-subtle")
-	c.SetXAlign(0)
-	box.Append(n)
+	c.AddCSSClass("am-headline-caption")
+	c.SetHExpand(true)
+	c.SetXAlign(1)
+	c.SetEllipsize(pango.EllipsizeEnd)
+	c.SetVAlign(gtk.AlignCenter)
+	box.Append(lead)
 	box.Append(c)
-	return newLiveLabel(n), newLiveLabel(c), box
+	return newLiveLabel(lead), newLiveLabel(c), box
 }
 
 // newTitle is a medium bold heading (used by disk/network/gpu views).
@@ -65,6 +83,17 @@ func newHeader() (title, caption *liveLabel, box *gtk.Box) {
 	box.Append(t)
 	box.Append(c)
 	return newLiveLabel(t), newLiveLabel(c), box
+}
+
+// newDeviceHeader is the title row of a page about one device: the device's
+// own name on the left and a muted line about it on the right, in the same
+// layout as newHeadline. newHeader stays as it was because the pages that use
+// it put a sentence under their title, which does not fit on one row.
+func newDeviceHeader() (title, caption *liveLabel, box *gtk.Box) {
+	t := gtk.NewLabel("—")
+	t.AddCSSClass("am-device-title")
+	t.SetXAlign(0)
+	return newTitleRow(t)
 }
 
 // sectionTitle is a small bold heading used between blocks within a view.
@@ -158,7 +187,13 @@ func (s *section) save() {
 	if s.s == nil {
 		return
 	}
-	s.s.CollapsedSections = without(s.s.CollapsedSections, s.title)
+	kept := s.s.CollapsedSections[:0:0]
+	for _, t := range s.s.CollapsedSections {
+		if !strings.EqualFold(t, s.title) {
+			kept = append(kept, t)
+		}
+	}
+	s.s.CollapsedSections = kept
 	if !s.exp.Expanded() {
 		s.s.CollapsedSections = append(s.s.CollapsedSections, s.title)
 	}
@@ -169,8 +204,11 @@ func sectionCollapsed(s *config.Settings, title string) bool {
 	if s == nil {
 		return false
 	}
+	// Case-insensitively: the headings were upper case before the Task Manager
+	// restyle ("CORES", now "Cores"), and a section folded under its old name
+	// should still be folded.
 	for _, t := range s.CollapsedSections {
-		if t == title {
+		if strings.EqualFold(t, title) {
 			return true
 		}
 	}
@@ -251,4 +289,46 @@ type searcher interface {
 	// captureKeysFrom routes unclaimed typing inside from to the search box,
 	// or stops routing it when from is nil.
 	captureKeysFrom(from gtk.Widgetter)
+}
+
+// Commands, the way Task Manager's command bar has them: flat, text first, with
+// a small glyph before the words. A row of framed buttons reads as a form to
+// fill in; a row of flat commands reads as things the page can do, and leaves
+// the table below as the thing being looked at.
+
+// commandContent is the icon-and-label face shared by every kind of command.
+func commandContent(icon, label string) *adw.ButtonContent {
+	c := adw.NewButtonContent()
+	c.SetIconName(icon)
+	c.SetLabel(label)
+	return c
+}
+
+// newCommandButton is a flat command that does something once.
+func newCommandButton(icon, label string) *gtk.Button {
+	b := gtk.NewButton()
+	b.SetChild(commandContent(icon, label))
+	b.AddCSSClass("flat")
+	b.AddCSSClass("am-command")
+	return b
+}
+
+// newCommandToggle is a flat command that stays on, for a way of looking at
+// the page rather than an action on it. The face is returned for a label that
+// changes: setting the button's own label would replace the icon with it.
+func newCommandToggle(icon, label string) (*gtk.ToggleButton, *adw.ButtonContent) {
+	face := commandContent(icon, label)
+	b := gtk.NewToggleButton()
+	b.SetChild(face)
+	b.AddCSSClass("flat")
+	b.AddCSSClass("am-command")
+	return b, face
+}
+
+// newCommandSeparator divides a command bar into groups, as Task Manager's
+// thin upright rule does between "Run new task" and the rest.
+func newCommandSeparator() *gtk.Separator {
+	sep := gtk.NewSeparator(gtk.OrientationVertical)
+	sep.AddCSSClass("am-command-separator")
+	return sep
 }

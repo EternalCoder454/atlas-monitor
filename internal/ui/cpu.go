@@ -41,7 +41,7 @@ func newCPUView(col *stats.Collector, settings *config.Settings) *cpuView {
 		hist = s.CPU.UsageHist
 		logical = s.CPU.Logical
 	})
-	v.usage = graph.New("CPU", graph.ColorCPU, hist, graph.Percent, 160)
+	v.usage = graph.New("% Utilisation", graph.ColorCPU, hist, graph.Percent, 230)
 	box.Append(v.usage)
 
 	// Per-core usage bars, drawn in a single Cairo pass. On a 32-thread machine
@@ -50,11 +50,11 @@ func newCPUView(col *stats.Collector, settings *config.Settings) *cpuView {
 	v.nCores = logical
 	v.coreBuf = make([]float64, logical)
 	v.cores = newCoreGrid(logical)
-	v.coresSection = newSection("CORES", v.cores, settings)
+	v.coresSection = newSection("Cores", v.cores, settings)
 	box.Append(v.coresSection.widget())
 
 	// Stats grid.
-	box.Append(sectionTitle("DETAILS"))
+	box.Append(sectionTitle("Details"))
 	g := newStatGrid()
 	v.vBase = g.add("Base speed")
 	v.vCur = g.add("Current speed")

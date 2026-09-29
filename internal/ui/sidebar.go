@@ -34,7 +34,6 @@ type sidebar struct {
 // with a view name ("cpu", "disk:nvme0n1", ...) whenever a row is activated.
 func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, packs []string, gpuAvail, batteryAvail, sensorsAvail, withAI bool, onSelect func(string)) *sidebar {
 	outer := gtk.NewBox(gtk.OrientationVertical, 0)
-	outer.AddCSSClass("am-sidebar")
 
 	outer.Append(sectionTitle("HARDWARE"))
 	hw := newSidebarList()
@@ -111,9 +110,27 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, packs []stri
 	scroll.SetSizeRequest(200, -1)
 	scroll.SetVExpand(true)
 
-	sb.root, sb.assistantRow, sb.netExp, sb.netRows = scroll, assistantRow, netExp, netRows
+	// Settings stays at the foot of the sidebar however far the pages above
+	// scroll, where Task Manager keeps it. It opens a dialog rather than a
+	// page, so its list selects nothing: a highlighted Settings row would
+	// claim to be the page on screen.
+	footer := newSidebarList()
+	footer.SetSelectionMode(gtk.SelectionNone)
+	footer.AddCSSClass("am-sidebar-footer")
+	appendRow(footer, "Settings", "atlas-settings-symbolic", settingsEntry, onSelect)
+
+	col := gtk.NewBox(gtk.OrientationVertical, 0)
+	col.AddCSSClass("am-sidebar")
+	col.Append(scroll)
+	col.Append(footer)
+
+	sb.root, sb.assistantRow, sb.netExp, sb.netRows = col, assistantRow, netExp, netRows
 	return sb
 }
+
+// settingsEntry is the name the sidebar's Settings row reports when chosen.
+// It is not a page; selectView opens the dialog for it instead.
+const settingsEntry = "settings"
 
 func newSidebarList() *gtk.ListBox {
 	lb := gtk.NewListBox()
