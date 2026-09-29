@@ -80,25 +80,31 @@ jobs:
           echo "libadwaita  $(pkg-config --modversion libadwaita-1)"
 
       # The gotk4 cgo bindings are large and slow to compile from cold; caching
-      # the module and build caches turns a ~4 minute build into seconds.
+      # the module and build caches turns a ~4 minute build into seconds. The key
+      # includes go-cache.sh because the script decides what the saved cache
+      # holds: a change to it saves the cache once more under the new rules.
       - name: Cache Go modules and build output
         uses: actions/cache@v4
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: fedora-go-${{ hashFiles('go.sum') }}
+          key: fedora-go-${{ hashFiles('go.sum', '.github/go-cache.sh') }}
           restore-keys: fedora-go-
+
+      # Go's own cache trim can wreck a restored cache; see the script.
+      - name: Hold Go's cache trim
+        run: bash .github/go-cache.sh hold
 
       # Atlas's own code. third_party/ is upstream's, kept as upstream wrote it
       # apart from the one change scripts/vendor-adwaita.sh makes.
       - name: gofmt
         run: |
-          unformatted="$(gofmt -l $(git ls-files '*.go' ':!third_party'))"
+          unformatted="$(git ls-files -z '*.go' ':!third_party' | xargs -0r gofmt -l)"
           if [ -n "$unformatted" ]; then
             echo "These files are not gofmt'd:"
             echo "$unformatted"
-            gofmt -d $(echo "$unformatted")
+            echo "$unformatted" | xargs gofmt -d
             exit 1
           fi
 
@@ -123,6 +129,10 @@ jobs:
       # assistant is compiled in.
       - name: Test (lean, -tags noai)
         run: go test -count=1 -tags noai ./internal/ui/ ./internal/app/ .
+
+      # Last, so the cache saved after it is what this run used.
+      - name: Prune the Go build cache
+        run: bash .github/go-cache.sh prune
 
   race:
     name: race detector
@@ -180,11 +190,18 @@ jobs:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: fedora-race-${{ hashFiles('go.sum') }}
+          key: fedora-race-${{ hashFiles('go.sum', '.github/go-cache.sh') }}
           restore-keys: fedora-race-
+
+      - name: Hold Go's cache trim
+        run: bash .github/go-cache.sh hold
 
       # The collectors hand samples to the GTK thread through a mutex and a
       # double-buffered slice, so this is the suite that matters most here.
-      # See the Makefile for why the UI package is run separately.
       - name: Test with -race
         run: make test-race
+
+      # This job is a single go command, so nothing after it would rebuild what
+      # a trim broke: without the hold and this, the damage is what gets saved.
+      - name: Prune the Go build cache
+        run: bash .github/go-cache.sh prune
