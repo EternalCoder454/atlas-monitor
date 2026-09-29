@@ -7,15 +7,18 @@ func rgb(r, g, b uint8) Color {
 	return Color{float64(r) / 255, float64(g) / 255, float64(b) / 255}
 }
 
-// Semantic graph colors from the Atlas Monitor spec (GNOME palette).
+// Semantic graph colors: the series hues are the Windows Task Manager's
+// dark-mode palette, so the charts read the same as the ones people already know.
+// Where two series share a hue (download and upload, read and write) the second
+// is drawn dashed by its caller, so the pair stays distinguishable.
 var (
-	ColorCPU      = rgb(0x35, 0x84, 0xe4) // GNOME blue
-	ColorMemory   = rgb(0xe0, 0x1b, 0x24) // red
-	ColorGPU      = rgb(0xff, 0x78, 0x00) // orange
-	ColorNetDown  = rgb(0x2e, 0xc2, 0x7e) // green
-	ColorNetUp    = rgb(0xc0, 0x61, 0xcb) // purple
-	ColorDiskRead = rgb(0xf5, 0xc2, 0x11) // yellow
-	ColorDiskWr   = rgb(0xed, 0x33, 0x3b) // red-orange
+	ColorCPU      = rgb(0x39, 0xb8, 0xe3) // cyan
+	ColorMemory   = rgb(0x5c, 0x9e, 0xfa) // blue
+	ColorGPU      = rgb(0xde, 0x68, 0xf2) // magenta
+	ColorNetDown  = rgb(0xf5, 0x62, 0x8e) // pink
+	ColorNetUp    = rgb(0xf5, 0x62, 0x8e) // pink, dashed
+	ColorDiskRead = rgb(0x84, 0xc7, 0x18) // lime
+	ColorDiskWr   = rgb(0x84, 0xc7, 0x18) // lime, dashed
 	ColorBattery  = rgb(0x33, 0xd1, 0x7a) // battery green
 	ColorPowerDrw = rgb(0xf6, 0xd3, 0x2d) // draw: amber
 

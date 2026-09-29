@@ -134,32 +134,34 @@ func (a *App) activate() {
 		win.Maximize()
 	}
 
+	// The title bar the way Windows 11 draws Task Manager's: the name at the
+	// start rather than centred, on the same surface as the sidebar, so the two
+	// read as one frame around the page. The centred title is replaced by an
+	// empty widget; see brandBox.
 	header := adw.NewHeaderBar()
-	subtitle := ""
-	if a.version != "" {
-		subtitle = "v" + a.version
-	}
-	header.SetTitleWidget(adw.NewWindowTitle("Atlas Monitor", subtitle))
+	header.AddCSSClass("am-titlebar")
+	header.SetTitleWidget(gtk.NewBox(gtk.OrientationHorizontal, 0))
 
 	// Sidebar toggle first, where a hamburger belongs. It hides itself whenever
 	// the sidebar is on screen in its own right.
 	if btn := a.content.MenuButton(); btn != nil {
 		header.PackStart(btn)
 	}
-	// The alert badge sits on the right, beside the gear: it is a notice rather
-	// than navigation, and it is not there at all while the machine is fine.
+	header.PackStart(brandBox(a.version))
+	// The alert badge sits on the right: it is a notice rather than navigation,
+	// and it is not there at all while the machine is fine.
 	if btn := a.content.AlertButton(); btn != nil {
 		header.PackEnd(btn)
 	}
 
-	gear := gtk.NewButtonFromIconName("atlas-settings-symbolic")
-	gear.SetTooltipText("Settings")
-	gear.ConnectClicked(func() {
+	// Settings is the last entry in the sidebar, where Task Manager keeps it,
+	// rather than a gear in the title bar.
+	a.content.SetSettingsHandler(func() {
 		ui.ShowSettings(win, &a.settings, a.settingsHooks())
 	})
-	header.PackEnd(gear)
 
 	toolbar := adw.NewToolbarView()
+	toolbar.AddCSSClass("am-frame")
 	toolbar.AddTopBar(header)
 	toolbar.SetContent(root)
 	win.SetContent(toolbar)
@@ -187,6 +189,29 @@ func (a *App) activate() {
 			return false
 		})
 	}
+}
+
+// brandBox is the application's name at the start of the title bar: its icon,
+// the name, and the version, quieter, after it. The icon is only shown when the
+// icon theme has it — a build run from the source tree has not installed it,
+// and GTK's stand-in for a missing icon would be worse than none.
+func brandBox(version string) *gtk.Box {
+	box := gtk.NewBox(gtk.OrientationHorizontal, 8)
+	box.AddCSSClass("am-brand")
+	if d := gdk.DisplayGetDefault(); d != nil && gtk.IconThemeGetForDisplay(d).HasIcon(AppID) {
+		icon := gtk.NewImageFromIconName(AppID)
+		icon.SetPixelSize(18)
+		box.Append(icon)
+	}
+	name := gtk.NewLabel("Atlas Monitor")
+	name.AddCSSClass("am-brand-name")
+	box.Append(name)
+	if version != "" {
+		v := gtk.NewLabel("v" + version)
+		v.AddCSSClass("am-brand-version")
+		box.Append(v)
+	}
+	return box
 }
 
 // onSettingsChanged applies saved settings to the running app.

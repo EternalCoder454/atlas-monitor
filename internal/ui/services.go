@@ -94,8 +94,11 @@ type servicesView struct {
 	searchEntry    *gtk.SearchEntry
 	problemsOnly   bool
 	problemsToggle *gtk.ToggleButton
-	servicesOnly   bool
-	loaded         bool
+	// problemsFace is the toggle's icon and label; the count goes on the label,
+	// since setting the button's own label would replace the icon with it.
+	problemsFace *adw.ButtonContent
+	servicesOnly bool
+	loaded       bool
 }
 
 func newServicesView() *servicesView {
@@ -122,8 +125,12 @@ func newServicesView() *servicesView {
 	filterModel := gtk.NewFilterListModel(v.model, &v.filter.Filter)
 	v.selection = gtk.NewSingleSelection(filterModel)
 
+	// The same Task Manager table as Apps: columns divided, rows not. See
+	// am-table in assets/style.css.
 	cv := gtk.NewColumnView(v.selection)
-	cv.SetShowRowSeparators(true)
+	cv.SetShowRowSeparators(false)
+	cv.SetShowColumnSeparators(true)
+	cv.AddCSSClass("am-table")
 	cv.AppendColumn(v.statusColumn())
 	cv.AppendColumn(v.textColumn("Service", true, func(s services.Service) string { return s.Name }))
 	cv.AppendColumn(v.textColumn("Description", true, func(s services.Service) string { return s.Description }))
@@ -153,21 +160,22 @@ func (v *servicesView) buildToolbar() *adw.WrapBox {
 	// They fold onto a second line instead, which also means the page survives
 	// the narrow layout rather than losing its controls off the side.
 	bar := adw.NewWrapBox()
-	bar.SetChildSpacing(6)
+	bar.SetChildSpacing(2)
 	bar.SetLineSpacing(6)
+	bar.AddCSSClass("am-commandbar")
 
-	mkBtn := func(label string, fn func(string) error) *gtk.Button {
-		b := gtk.NewButtonWithLabel(label)
+	mkBtn := func(icon, label string, fn func(string) error) *gtk.Button {
+		b := newCommandButton(icon, label)
 		b.ConnectClicked(func() { v.doAction(fn) })
 		bar.Append(b)
 		return b
 	}
 	actions := []*gtk.Button{
-		mkBtn("Start", func(n string) error { return v.client.Start(n) }),
-		mkBtn("Stop", func(n string) error { return v.client.Stop(n) }),
-		mkBtn("Restart", func(n string) error { return v.client.Restart(n) }),
-		mkBtn("Enable", func(n string) error { return v.client.Enable(n) }),
-		mkBtn("Disable", func(n string) error { return v.client.Disable(n) }),
+		mkBtn("media-playback-start-symbolic", "Start", func(n string) error { return v.client.Start(n) }),
+		mkBtn("media-playback-stop-symbolic", "Stop", func(n string) error { return v.client.Stop(n) }),
+		mkBtn("system-reboot-symbolic", "Restart", func(n string) error { return v.client.Restart(n) }),
+		mkBtn("object-select-symbolic", "Enable", func(n string) error { return v.client.Enable(n) }),
+		mkBtn("action-unavailable-symbolic", "Disable", func(n string) error { return v.client.Disable(n) }),
 	}
 	// Where changing a service is not something Atlas can do — Windows, where it
 	// needs administrator rights the app does not have and should not ask for —
@@ -180,12 +188,13 @@ func (v *servicesView) buildToolbar() *adw.WrapBox {
 		}
 	}
 
-	refresh := gtk.NewButtonWithLabel("Refresh")
+	bar.Append(newCommandSeparator())
+	refresh := newCommandButton("view-refresh-symbolic", "Refresh")
 	refresh.ConnectClicked(func() { v.refresh() })
 	bar.Append(refresh)
 
-	problemsToggle := gtk.NewToggleButton()
-	problemsToggle.SetLabel("Problems only")
+	problemsToggle, problemsFace := newCommandToggle("dialog-warning-symbolic", "Problems only")
+	v.problemsFace = problemsFace
 	problemsToggle.SetTooltipText("Show only services that have failed")
 	problemsToggle.ConnectToggled(func() {
 		v.problemsOnly = problemsToggle.Active()
@@ -194,8 +203,7 @@ func (v *servicesView) buildToolbar() *adw.WrapBox {
 	})
 	v.problemsToggle = problemsToggle
 
-	allToggle := gtk.NewToggleButton()
-	allToggle.SetLabel("All unit types")
+	allToggle, _ := newCommandToggle("view-list-bullet-symbolic", "All unit types")
 	allToggle.ConnectToggled(func() {
 		v.servicesOnly = !allToggle.Active()
 		v.refresh()
@@ -333,6 +341,7 @@ func (v *servicesView) textColumn(title string, expand bool, render func(service
 		label := gtk.NewLabel("")
 		label.SetXAlign(0)
 		label.SetEllipsize(3) // PANGO_ELLIPSIZE_END
+		label.AddCSSClass("am-cell")
 		cell.SetChild(label)
 		v.cells[cell.Native()] = &svcTextCell{label: label, render: render}
 	})
@@ -460,11 +469,11 @@ func (v *servicesView) updateProblemCount() {
 	}
 	switch {
 	case failed == 0:
-		v.problemsToggle.SetLabel("Problems only")
+		v.problemsFace.SetLabel("Problems only")
 		v.problemsToggle.SetSensitive(false)
 		v.problemsToggle.SetTooltipText("Nothing has failed")
 	default:
-		v.problemsToggle.SetLabel(fmt.Sprintf("Problems only (%d)", failed))
+		v.problemsFace.SetLabel(fmt.Sprintf("Problems only (%d)", failed))
 		v.problemsToggle.SetSensitive(true)
 		v.problemsToggle.SetTooltipText("Show only services that have failed")
 	}
