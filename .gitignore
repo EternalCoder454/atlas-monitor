@@ -3,6 +3,7 @@
 
 # Local Claude Code session config (personal hooks, absolute paths)
 /.claude/
+/CLAUDE.md
 
 # Test binaries left behind by `go test -memprofile` and friends
 *.test
