@@ -16,7 +16,6 @@ type memView struct {
 	capBuf    []byte // "of N GiB in use", rebuilt without allocating
 	ramGraph  *graph.Graph
 	swapGraph *graph.Graph
-	swapTitle *gtk.Label
 	breakdown *capacityBar
 
 	vTotal, vUsed, vCached, vAvail *liveLabel
@@ -37,7 +36,7 @@ func newMemView(col *stats.Collector) *memView {
 		ramHist = s.Mem.UsageHist
 		swapHist = s.Mem.SwapHist
 	})
-	v.ramGraph = graph.New("RAM", graph.ColorMemory, ramHist, graph.Percent, 140)
+	v.ramGraph = graph.New("Memory usage", graph.ColorMemory, ramHist, graph.Percent, 200)
 	box.Append(v.ramGraph)
 
 	// In use / Cached / Free breakdown bar with a legend.
@@ -46,15 +45,16 @@ func newMemView(col *stats.Collector) *memView {
 	box.Append(memLegend())
 
 	// Swap is not a given. A machine with none configured was still shown a
-	// SWAP heading, a chart pinned flat at nought and two rows of "0.00 GiB" —
-	// a whole section describing something that is not there. It appears if
-	// swap does, which covers a swapfile being switched on while Atlas runs.
-	v.swapTitle = sectionTitle("SWAP")
-	box.Append(v.swapTitle)
-	v.swapGraph = graph.New("Swap", graph.ColorGPU, swapHist, graph.Percent, 80)
+	// swap chart pinned flat at nought and two rows of "0.00 GiB" — a whole
+	// section describing something that is not there. It appears if swap does,
+	// which covers a swapfile being switched on while Atlas runs.
+	// Swap is memory's overflow, so it is drawn in memory's colour, dashed,
+	// the way Task Manager draws a secondary series.
+	v.swapGraph = graph.New("Swap usage", graph.ColorMemory, swapHist, graph.Percent, 120)
+	v.swapGraph.SetDashed(true)
 	box.Append(v.swapGraph)
 
-	box.Append(sectionTitle("DETAILS"))
+	box.Append(sectionTitle("Details"))
 	g := newStatGrid()
 	v.vTotal = g.add("Total")
 	v.vUsed = g.add("Used")
@@ -86,7 +86,6 @@ func (v *memView) Update() {
 	v.vCached.gib(cached)
 	v.vAvail.gib(avail)
 	hasSwap := swapT > 0
-	v.swapTitle.SetVisible(hasSwap)
 	v.swapGraph.SetVisible(hasSwap)
 	if hasSwap {
 		v.vSwapTotal.gib(swapT)

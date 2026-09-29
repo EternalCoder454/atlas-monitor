@@ -3,13 +3,14 @@ package graph
 import (
 	"math"
 	"testing"
+	"time"
 
 	"atlas-monitor/internal/stats"
 )
 
-// The drawing itself needs a display, but the value text under each chart and
-// the Y-axis decision do not, and those are the parts that are cached — a stale
-// cache would put the wrong number under a live chart.
+// The drawing itself needs a display, but the value text on each chart, the
+// Y-axis decision and the plot's geometry do not, and the text is the part that
+// is cached — a stale cache would put the wrong number on a live chart.
 
 // TestFormatValueCacheStaysCorrect walks a sequence of values through the cached
 // formatter. The cache exists so a steady reading allocates nothing; what has to
@@ -168,6 +169,199 @@ func TestScratchBufferFitsTheHistory(t *testing.T) {
 	}
 	if n != stats.HistLen {
 		t.Errorf("a saturated ring returned %d samples, want %d", n, stats.HistLen)
+	}
+}
+
+// TestFormatSpan pins the wording of the history caption, in particular where
+// it switches from seconds to minutes and what an unset span draws.
+func TestFormatSpan(t *testing.T) {
+	cases := []struct {
+		d    time.Duration
+		want string
+	}{
+		{0, ""},
+		{-5 * time.Second, ""},
+		{time.Second, "1 second"},
+		{30 * time.Second, "30 seconds"},
+		{60 * time.Second, "60 seconds"},
+		{119 * time.Second, "119 seconds"},
+		{120 * time.Second, "2 minutes"},
+		{150 * time.Second, "3 minutes"},
+		{300 * time.Second, "5 minutes"},
+		{time.Hour, "60 minutes"},
+	}
+	for _, c := range cases {
+		if got := formatSpan(c.d); got != c.want {
+			t.Errorf("formatSpan(%v) = %q, want %q", c.d, got, c.want)
+		}
+	}
+}
+
+// TestSetHistorySpanIsSharedByEveryGraph checks the setter feeds the value the
+// graphs read, since it is a package-level store and not a per-graph one.
+func TestSetHistorySpanIsSharedByEveryGraph(t *testing.T) {
+	t.Cleanup(func() { SetHistorySpan(0) })
+	SetHistorySpan(2 * time.Minute)
+	if got := time.Duration(historySpan.Load()); got != 2*time.Minute {
+		t.Errorf("after SetHistorySpan(2m) the graphs read %v", got)
+	}
+	SetHistorySpan(0)
+	if got := historySpan.Load(); got != 0 {
+		t.Errorf("after SetHistorySpan(0) the graphs read %v", got)
+	}
+}
+
+// TestGridRows pins the row count rule: one row per 36 px of plot, rounded, kept
+// between two and ten.
+func TestGridRows(t *testing.T) {
+	cases := []struct {
+		plotH float64
+		want  int
+	}{
+		{-10, 2},
+		{0, 2},
+		{20, 2},
+		{36, 2},
+		{89, 2}, // 2.47 rounds down
+		{90, 3}, // 2.5 rounds up
+		{108, 3},
+		{144, 4},
+		{359, 10},
+		{360, 10},
+		{2000, 10},
+	}
+	for _, c := range cases {
+		if got := gridRows(c.plotH); got != c.want {
+			t.Errorf("gridRows(%v) = %d, want %d", c.plotH, got, c.want)
+		}
+	}
+	// Monotonic: a taller plot never gets fewer rows.
+	prev := gridRows(0)
+	for h := 0.0; h <= 500; h += 0.5 {
+		got := gridRows(h)
+		if got < prev {
+			t.Fatalf("gridRows(%v) = %d after %d: the count went down as the plot grew", h, got, prev)
+		}
+		prev = got
+	}
+}
+
+// TestPlotGeometry checks the two caption bands and the plot between them
+// account for the whole widget, and that a widget too short for them does not
+// end up with a negative plot.
+func TestPlotGeometry(t *testing.T) {
+	band, plotH := plotGeometry(130, 17)
+	if band != 21 {
+		t.Errorf("a 17 px line gave a %v px band, want 21 (the line plus 4)", band)
+	}
+	if plotH != 130-2*21 {
+		t.Errorf("plot height %v, want %v", plotH, 130-2*21)
+	}
+	if band+plotH+band != 130 {
+		t.Errorf("band %v + plot %v + band %v does not add up to the widget height 130", band, plotH, band)
+	}
+
+	// A larger font grows the bands and shrinks the plot instead of clipping.
+	bandBig, plotBig := plotGeometry(130, 30)
+	if bandBig <= band || plotBig >= plotH {
+		t.Errorf("a taller font gave band %v plot %v, against band %v plot %v", bandBig, plotBig, band, plotH)
+	}
+
+	if _, plotH := plotGeometry(30, 17); plotH != 0 {
+		t.Errorf("a widget shorter than its two bands got a plot height of %v, want 0", plotH)
+	}
+}
+
+// TestCrispLandsOnPixelCentres checks 1px lines are aligned so they are sharp.
+func TestCrispLandsOnPixelCentres(t *testing.T) {
+	for _, v := range []float64{0, 0.2, 0.5, 0.99, 1, 17.3, 100, 359.999} {
+		got := crisp(v)
+		if got-math.Floor(got) != 0.5 {
+			t.Errorf("crisp(%v) = %v, not the middle of a pixel", v, got)
+		}
+		if math.Abs(got-v) > 0.5+1e-9 {
+			t.Errorf("crisp(%v) = %v moved the line by more than half a pixel", v, got)
+		}
+	}
+}
+
+// TestSetDashed checks the switch chooses between a solid line and the shared
+// dash pattern, and that using it costs nothing per frame.
+func TestSetDashed(t *testing.T) {
+	g := &Graph{}
+	if g.dashes() != nil {
+		t.Error("a new graph is dashed; lines are solid unless a caller asks")
+	}
+	g.SetDashed(true)
+	d := g.dashes()
+	if len(d) != 2 || d[0] != 4 || d[1] != 3 {
+		t.Fatalf("dashed pattern is %v, want 4 on and 3 off", d)
+	}
+	if &d[0] != &dashPattern[0] {
+		t.Error("the dash pattern is not the package-level one, so something built a slice")
+	}
+	g.SetDashed(false)
+	if g.dashes() != nil {
+		t.Error("SetDashed(false) left the line dashed")
+	}
+}
+
+func TestSetDashedDoesNotAllocate(t *testing.T) {
+	g := &Graph{}
+	allocs := testingAllocs(func() {
+		g.SetDashed(true)
+		_ = g.dashes()
+		g.SetDashed(false)
+		_ = g.dashes()
+	})
+	if allocs > 0 {
+		t.Errorf("%v allocations for toggling the dashing and reading the pattern", allocs)
+	}
+}
+
+// TestFormatIntoBuildsThePeakText checks the peak caption's text, and that a
+// steady peak costs nothing, since it is built again on every frame.
+func TestFormatIntoBuildsThePeakText(t *testing.T) {
+	for _, mode := range []Mode{Percent, Bytes, Watts} {
+		g := &Graph{mode: mode}
+		got := string(g.formatInto("peak ", 42))
+		if len(got) <= len("peak ") || got[:5] != "peak " {
+			t.Errorf("mode %v: %q does not read as \"peak \" and a value", mode, got)
+		}
+		if want := "peak " + g.formatValue(42); got != want {
+			t.Errorf("mode %v: peak text %q, but the current-value formatter says %q", mode, got, want)
+		}
+		allocs := testingAllocs(func() { _ = string(g.formatInto("peak ", 42)) == g.shownPeak })
+		if allocs > 0 {
+			t.Errorf("mode %v: %v allocations for a repeat of the same peak", mode, allocs)
+		}
+	}
+}
+
+// TestSeriesColoursShareHuesOnlyWhereDashed pins the palette rule: two series
+// may have the same colour only if one of them is drawn dashed by its caller, so
+// the pairs below are deliberate and nothing else collides.
+func TestSeriesColoursShareHuesOnlyWhereDashed(t *testing.T) {
+	if ColorNetUp != ColorNetDown {
+		t.Errorf("net up %+v and down %+v differ; the pair is meant to be told apart by dashing", ColorNetUp, ColorNetDown)
+	}
+	if ColorDiskWr != ColorDiskRead {
+		t.Errorf("disk write %+v and read %+v differ; the pair is meant to be told apart by dashing", ColorDiskWr, ColorDiskRead)
+	}
+	distinct := map[string]Color{
+		"CPU": ColorCPU, "memory": ColorMemory, "GPU": ColorGPU,
+		"net": ColorNetDown, "disk": ColorDiskRead,
+		"battery": ColorBattery, "power draw": ColorPowerDrw,
+	}
+	for a, ca := range distinct {
+		for b, cb := range distinct {
+			if a < b && ca == cb {
+				t.Errorf("%s and %s share a colour but are not a dashed pair", a, b)
+			}
+		}
+	}
+	if want := rgb(0x39, 0xb8, 0xe3); ColorCPU != want {
+		t.Errorf("CPU is %+v, want the Task Manager cyan %+v", ColorCPU, want)
 	}
 }
 

@@ -104,6 +104,20 @@ func (c *procCell) refresh() {
 			setIcon(c.image, ic)
 		}
 	}
+	// Graded before the text is compared: a reading can cross a threshold
+	// without its text changing — 4.97 and 5.02 both show as 5.0% — and the
+	// shading has to follow the number, not the rounding.
+	if c.heat != nil {
+		if h := c.heat(&c.row.proc); h != c.heated {
+			for _, cls := range cellHeatClasses {
+				c.label.RemoveCSSClass(cls)
+			}
+			if h > 0 && h <= len(cellHeatClasses) {
+				c.label.AddCSSClass(cellHeatClasses[h-1])
+			}
+			c.heated = h
+		}
+	}
 	c.buf = c.render(c.buf[:0], &c.row.proc)
 	if c.set && bytes.Equal(c.buf, c.cur) {
 		return
@@ -121,31 +135,67 @@ func (c *procCell) refresh() {
 			}
 		}
 	}
-	if c.heat != nil {
-		if h := c.heat(&c.row.proc); h != c.heated {
-			for _, cls := range heatClasses {
-				c.label.RemoveCSSClass(cls)
-			}
-			if h > 0 && h <= len(heatClasses) {
-				c.label.AddCSSClass(heatClasses[h-1])
-			}
-			c.heated = h
-		}
-	}
 }
 
-// heatClasses are the styles for a busy reading, in increasing order.
+// heatClasses are the styles for a warm or hot reading shown as text, in
+// increasing order: the Sensors page colours its temperatures with them.
 var heatClasses = []string{"am-warm", "am-hot"}
+
+// cellHeatClasses shade a busy reading in the process table, in increasing
+// order. The way Task Manager does it: every cell in a resource column carries
+// a faint tint of its own (am-metric), and a cell deepens as its reading rises,
+// so the eye finds the busy rows by colour before reading a single number.
+var cellHeatClasses = []string{"am-heat-1", "am-heat-2", "am-heat-3"}
 
 // cpuHeat grades a process's CPU share. The thresholds are per core, matching
 // what the column shows: a thread pinned to one core reads 100 whatever the
-// machine has. Below a quarter of a core nothing is marked, because on a busy
-// desktop that would mark half the table and mean nothing.
-func cpuHeat(p *process.Proc) int {
+// machine has. The first step is low on purpose — a twentieth of a core is
+// already a program doing something, and shading it is what lets a quiet table
+// show where the activity is.
+func cpuHeat(p *process.Proc) int { return percentHeat(p.CPU) }
+
+// gpuHeat grades a process's share of the graphics engine on the same steps.
+// A process holding no GPU handle reads -1, which grades as nothing.
+func gpuHeat(p *process.Proc) int { return percentHeat(p.GPU) }
+
+func percentHeat(v float64) int {
 	switch {
-	case p.CPU >= 60:
+	case v >= 60:
+		return 3
+	case v >= 25:
 		return 2
-	case p.CPU >= 25:
+	case v >= 5:
+		return 1
+	}
+	return 0
+}
+
+// memHeat grades resident memory in absolute sizes rather than as a share of
+// the machine, so a program that has grown to four gigabytes looks it on any
+// machine, however much RAM there is.
+func memHeat(p *process.Proc) int {
+	const mib = 1 << 20
+	switch {
+	case p.RSS >= 4096*mib:
+		return 3
+	case p.RSS >= 1024*mib:
+		return 2
+	case p.RSS >= 256*mib:
+		return 1
+	}
+	return 0
+}
+
+// rateHeat grades a disk or network rate: a megabyte a second is a program
+// visibly moving data, ten is a download or a copy, a hundred is saturating
+// something.
+func rateHeat(v float64) int {
+	switch {
+	case v >= 100e6:
+		return 3
+	case v >= 10e6:
+		return 2
+	case v >= 1e6:
 		return 1
 	}
 	return 0
@@ -292,8 +342,9 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 	v.root.SetMarginStart(12)
 	v.root.SetMarginEnd(12)
 
-	// Toolbar: search + group toggle.
-	toolbar := gtk.NewBox(gtk.OrientationHorizontal, 8)
+	// Toolbar: search, then the page's commands.
+	toolbar := gtk.NewBox(gtk.OrientationHorizontal, 4)
+	toolbar.AddCSSClass("am-commandbar")
 	searchEntry := gtk.NewSearchEntry()
 	v.searchEntry = searchEntry
 	searchEntry.SetHExpand(true)
@@ -302,8 +353,7 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 		v.search = lowerASCII(searchEntry.Text())
 		v.filter.Changed(gtk.FilterChangeDifferent)
 	})
-	groupBtn := gtk.NewToggleButton()
-	groupBtn.SetLabel("Group by app")
+	groupBtn, _ := newCommandToggle("atlas-apps-symbolic", "Group by app")
 	groupBtn.ConnectToggled(func() {
 		v.grouped = groupBtn.Active()
 		v.needRebuild = true
@@ -312,8 +362,7 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 	// Kernel threads are three quarters of /proc on a typical machine and there
 	// is nothing a user can do with them, so they start hidden — which also
 	// keeps the table (and the widgets GTK realises for it) a quarter the size.
-	kernelBtn := gtk.NewToggleButton()
-	kernelBtn.SetLabel("Kernel threads")
+	kernelBtn, _ := newCommandToggle("system-run-symbolic", "Kernel threads")
 	kernelBtn.SetTooltipText("Show kernel worker threads (kworker, ksoftirqd, …)")
 	kernelBtn.ConnectToggled(func() {
 		v.showKernel = kernelBtn.Active()
@@ -325,10 +374,13 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 		v.Update()
 	})
 	colBtn := gtk.NewMenuButton()
-	colBtn.SetLabel("Columns")
+	colBtn.SetChild(commandContent("view-grid-symbolic", "Columns"))
+	colBtn.AddCSSClass("flat")
+	colBtn.AddCSSClass("am-command")
 	colBtn.SetTooltipText("Choose which columns the table shows")
 
 	toolbar.Append(searchEntry)
+	toolbar.Append(newCommandSeparator())
 	toolbar.Append(groupBtn)
 	toolbar.Append(kernelBtn)
 	toolbar.Append(colBtn)
@@ -339,8 +391,13 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 	v.filter = gtk.NewCustomFilter(v.matches)
 	filterModel := gtk.NewFilterListModel(v.model, &v.filter.Filter)
 
+	// Task Manager's table: columns divided, rows not, and the resource columns
+	// shaded by how busy each reading is. See cellHeatClasses and am-table in
+	// assets/style.css.
 	cv := gtk.NewColumnView(nil)
-	cv.SetShowRowSeparators(true)
+	cv.SetShowRowSeparators(false)
+	cv.SetShowColumnSeparators(true)
+	cv.AddCSSClass("am-table")
 	cv.SetReorderable(false)
 	v.columnView = cv
 
@@ -359,7 +416,7 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 	cpuCol := v.textColumn("CPU %", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendPercent1(dst, p.CPU) },
 		func(a, b *process.Proc) bool { return a.CPU < b.CPU },
-		colOpts{heat: cpuHeat})
+		colOpts{heat: cpuHeat, metric: true})
 
 	hide := func(title string, col *gtk.ColumnViewColumn, note string) {
 		v.optional = append(v.optional, optionalColumn{title: title, col: col, note: note})
@@ -371,12 +428,14 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 	cv.AppendColumn(cpuCol)
 	ramCol := v.textColumn("RAM", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendBytes(dst, p.RSS) },
-		func(a, b *process.Proc) bool { return a.RSS < b.RSS })
+		func(a, b *process.Proc) bool { return a.RSS < b.RSS },
+		colOpts{heat: memHeat, metric: true})
 	hide("RAM", ramCol, "")
 	cv.AppendColumn(ramCol)
 	if gpuAvail {
 		gpuCol := v.textColumn("GPU %", false, 1, appendGPU,
-			func(a, b *process.Proc) bool { return a.GPU < b.GPU })
+			func(a, b *process.Proc) bool { return a.GPU < b.GPU },
+			colOpts{heat: gpuHeat, metric: true})
 		hide("GPU %", gpuCol, "Finding this means walking every open file of every program.")
 		cv.AppendColumn(gpuCol)
 	}
@@ -390,20 +449,24 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 	cv.AppendColumn(powerCol)
 	netInCol := v.textColumn("Net ≈ In", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendRate(dst, p.NetIn) },
-		func(a, b *process.Proc) bool { return a.NetIn < b.NetIn })
+		func(a, b *process.Proc) bool { return a.NetIn < b.NetIn },
+		colOpts{heat: func(p *process.Proc) int { return rateHeat(p.NetIn) }, metric: true})
 	netOutCol := v.textColumn("Net ≈ Out", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendRate(dst, p.NetOut) },
-		func(a, b *process.Proc) bool { return a.NetOut < b.NetOut })
+		func(a, b *process.Proc) bool { return a.NetOut < b.NetOut },
+		colOpts{heat: func(p *process.Proc) int { return rateHeat(p.NetOut) }, metric: true})
 	hide("Net ≈ In", netInCol, "Attributing traffic means listing every open socket.")
 	hide("Net ≈ Out", netOutCol, "")
 	cv.AppendColumn(netInCol)
 	cv.AppendColumn(netOutCol)
 	readCol := v.textColumn("Disk Read", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendRate(dst, p.DiskRead) },
-		func(a, b *process.Proc) bool { return a.DiskRead < b.DiskRead })
+		func(a, b *process.Proc) bool { return a.DiskRead < b.DiskRead },
+		colOpts{heat: func(p *process.Proc) int { return rateHeat(p.DiskRead) }, metric: true})
 	writeCol := v.textColumn("Disk Write", false, 1,
 		func(dst []byte, p *process.Proc) []byte { return format.AppendRate(dst, p.DiskWrite) },
-		func(a, b *process.Proc) bool { return a.DiskWrite < b.DiskWrite })
+		func(a, b *process.Proc) bool { return a.DiskWrite < b.DiskWrite },
+		colOpts{heat: func(p *process.Proc) int { return rateHeat(p.DiskWrite) }, metric: true})
 	hide("Disk Read", readCol, "Counts only what reaches the drive, so most programs read zero.")
 	hide("Disk Write", writeCol, "")
 	cv.AppendColumn(readCol)
@@ -680,8 +743,11 @@ type colOpts struct {
 	// dim overrides the default test for an uninteresting reading, for a column
 	// whose quiet value is not a zero.
 	dim func([]byte) bool
-	// heat grades a reading as worth noticing. Only the CPU column sets it.
+	// heat grades a reading as worth noticing; see cellHeatClasses.
 	heat func(*process.Proc) int
+	// metric marks a resource column, whose cells carry the table's faint
+	// resting tint whether or not the reading is busy.
+	metric bool
 	// minChars is a floor on the column's width, in characters.
 	//
 	// Every cell label ellipsises, which means its minimum width is next to
@@ -748,6 +814,9 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 			if numeric {
 				label.AddCSSClass("am-num")
 			}
+			if o.metric {
+				label.AddCSSClass("am-metric")
+			}
 			parts = cellParts{root: label, label: label}
 			if o.icon != nil {
 				// Sized even when empty, so names line up whether or not their
@@ -761,6 +830,9 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 				box.Append(label)
 				parts.root, parts.box, parts.image = box, box, img
 			}
+			// The cell itself has no padding in an am-table; its child carries
+			// it, so a shaded cell is shaded edge to edge.
+			gtk.BaseWidget(parts.root).AddCSSClass("am-cell")
 		}
 		cell.SetChild(parts.root)
 		c := &procCell{label: parts.label, render: render, dim: dim, heat: o.heat,
@@ -805,9 +877,19 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 			// for the next one. Without the unparent GTK would complain about a
 			// widget with a parent being added elsewhere.
 			cell.SetChild(nil)
+			// The next cell to take this label starts from a clean procCell,
+			// which believes the label is plain; anything left on it would
+			// stay until that cell's own reading happened to change grade.
+			// A busy process's orange would outlive it on an idle row.
 			if c.dimmed {
 				c.label.RemoveCSSClass("am-zero")
 				c.dimmed = false
+			}
+			if c.heated != 0 {
+				for _, cls := range cellHeatClasses {
+					c.label.RemoveCSSClass(cls)
+				}
+				c.heated = 0
 			}
 			pool = append(pool, parts)
 		}

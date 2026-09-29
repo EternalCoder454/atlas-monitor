@@ -440,7 +440,7 @@ func TestCellLabelsArePooled(t *testing.T) {
 	}
 }
 
-// TestCPUHeat covers the grading behind the process table's busy markers. The
+// TestCPUHeat covers the grading behind the process table's shading. The
 // thresholds are per core, matching what the column shows: a single thread
 // pinned to one core reads 100 whatever the machine has, so the same numbers
 // mean the same thing on a laptop and a workstation.
@@ -449,9 +449,10 @@ func TestCPUHeat(t *testing.T) {
 		cpu  float64
 		want int
 	}{
-		{0, 0}, {0.5, 0}, {10, 0}, {24.9, 0},
-		{25, 1}, {40, 1}, {59.9, 1},
-		{60, 2}, {100, 2}, {800, 2}, // a threaded process can exceed one core
+		{0, 0}, {0.5, 0}, {4.9, 0},
+		{5, 1}, {10, 1}, {24.9, 1},
+		{25, 2}, {40, 2}, {59.9, 2},
+		{60, 3}, {100, 3}, {800, 3}, // a threaded process can exceed one core
 		{-1, 0}, // never negative, but do not mark it if it is
 	}
 	for _, c := range cases {
@@ -460,12 +461,37 @@ func TestCPUHeat(t *testing.T) {
 			t.Errorf("cpuHeat(%.1f%%) = %d, want %d", c.cpu, got, c.want)
 		}
 	}
-	// Every level the grader can return must have a style to go with it, or a
-	// busy process would be graded and then drawn exactly like a quiet one.
-	for _, c := range cases {
-		p := process.Proc{CPU: c.cpu}
-		if h := cpuHeat(&p); h > len(heatClasses) {
-			t.Errorf("cpuHeat returned level %d but only %d styles exist", h, len(heatClasses))
+}
+
+// TestCellHeatHasAStylePerLevel: every level a grader can return must have a
+// style to go with it, or a busy process would be graded and then drawn exactly
+// like a quiet one.
+func TestCellHeatHasAStylePerLevel(t *testing.T) {
+	const gib = 1 << 30
+	procs := []process.Proc{
+		{CPU: 1000}, {GPU: 100}, {RSS: 64 * gib},
+		{NetIn: 1e12}, {NetOut: 1e12}, {DiskRead: 1e12}, {DiskWrite: 1e12},
+	}
+	graders := map[string]func(*process.Proc) int{
+		"cpu": cpuHeat, "gpu": gpuHeat, "mem": memHeat,
+		"rate": func(p *process.Proc) int {
+			return max(rateHeat(p.NetIn), rateHeat(p.NetOut), rateHeat(p.DiskRead), rateHeat(p.DiskWrite))
+		},
+	}
+	for name, g := range graders {
+		for i := range procs {
+			if h := g(&procs[i]); h > len(cellHeatClasses) {
+				t.Errorf("%s heat returned level %d but only %d styles exist", name, h, len(cellHeatClasses))
+			}
 		}
+	}
+	if got := memHeat(&process.Proc{RSS: 300 << 20}); got != 1 {
+		t.Errorf("memHeat(300 MiB) = %d, want 1", got)
+	}
+	if got := rateHeat(20e6); got != 2 {
+		t.Errorf("rateHeat(20 MB/s) = %d, want 2", got)
+	}
+	if got := gpuHeat(&process.Proc{GPU: -1}); got != 0 {
+		t.Errorf("gpuHeat(no handle) = %d, want 0", got)
 	}
 }

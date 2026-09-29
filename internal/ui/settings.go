@@ -54,6 +54,7 @@ func ShowSettings(parent gtk.Widgetter, s *config.Settings, h SettingsHooks) {
 
 	sidebar := gtk.NewListBox()
 	sidebar.AddCSSClass("navigation-sidebar")
+	sidebar.AddCSSClass("am-nav") // the main sidebar's rows and accent pill
 	sidebar.SetVExpand(true)
 
 	if aiCompiledIn {

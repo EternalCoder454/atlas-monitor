@@ -53,7 +53,7 @@ func newDiskView(col *stats.Collector, disk *stats.DiskStats) *diskView {
 	})
 
 	var headBox *gtk.Box
-	v.title, v.caption, headBox = newHeader()
+	v.title, v.caption, headBox = newDeviceHeader()
 	v.title.text(label)
 	if isSwap {
 		v.caption.text(format.Bytes(size) + " · compressed-RAM swap (" + node + ")")
@@ -75,7 +75,7 @@ func newDiskView(col *stats.Collector, disk *stats.DiskStats) *diskView {
 	// Capacity first: how full the drive is, which is the thing you open this
 	// page to find out. Throughput matters less often and reads below.
 	if !isSwap {
-		box.Append(sectionTitle("CAPACITY"))
+		box.Append(sectionTitle("Capacity"))
 		v.capSection = gtk.NewBox(gtk.OrientationVertical, 0)
 		v.capacity = newCapacityBar(24)
 		v.capSection.Append(v.capacity)
@@ -103,19 +103,19 @@ func newDiskView(col *stats.Collector, disk *stats.DiskStats) *diskView {
 		box.Append(v.capNote)
 	}
 
-	box.Append(sectionTitle("READ SPEED"))
-	v.readGraph = graph.New("Read", graph.ColorDiskRead, readHist, graph.Bytes, 130)
+	v.readGraph = graph.New("Read speed", graph.ColorDiskRead, readHist, graph.Bytes, 170)
 	box.Append(v.readGraph)
 
-	box.Append(sectionTitle("WRITE SPEED"))
-	v.writeGraph = graph.New("Write", graph.ColorDiskWr, writeHist, graph.Bytes, 130)
+	// Writing is drawn dashed in the same colour, as Task Manager draws it.
+	v.writeGraph = graph.New("Write speed", graph.ColorDiskWr, writeHist, graph.Bytes, 170)
+	v.writeGraph.SetDashed(true)
 	box.Append(v.writeGraph)
 
 	// What the drive says about itself. Capacity and throughput describe what
 	// is happening to it; this is the only thing here that says whether to
 	// replace it, which is the same job the battery page's health line does.
 	if h, ok := diskHealth.Read(node); ok {
-		box.Append(sectionTitle("HEALTH"))
+		box.Append(sectionTitle("Health"))
 		hg := newStatGrid()
 		if h.HasWear {
 			v.vLife = hg.add("Life remaining")
@@ -152,7 +152,7 @@ func newDiskView(col *stats.Collector, disk *stats.DiskStats) *diskView {
 		}
 	}
 
-	box.Append(sectionTitle("DETAILS"))
+	box.Append(sectionTitle("Details"))
 	g := newStatGrid()
 	v.vSize = g.add("Total size")
 	v.vUsed = g.add("Used")

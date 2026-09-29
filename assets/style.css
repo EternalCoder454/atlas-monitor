@@ -3,6 +3,55 @@
    light/dark theme automatically. The only hard-coded colours live in the
    Cairo graph widget (semantic, intentional). */
 
+/* ---- The frame --------------------------------------------------------
+
+   Laid out the way Windows 11 draws Task Manager: the title bar and the
+   sidebar are one surface, and the page sits on a layer of its own above it,
+   its top-left corner rounded where the three meet and a hairline along the
+   two edges that face the frame. Every colour is still the theme's own —
+   @sidebar_bg_color for the frame, @window_bg_color for the page — so each
+   theme keeps its palette and gains the layering. */
+
+toolbarview.am-frame > .top-bar,
+toolbarview.am-frame > .top-bar:backdrop {
+  background-color: @sidebar_bg_color;
+  box-shadow: none;
+}
+
+.am-titlebar,
+.am-titlebar:backdrop {
+  background-color: transparent;
+  box-shadow: none;
+}
+
+.am-brand {
+  margin-left: 6px;
+}
+
+.am-brand-name {
+  font-size: 0.92em;
+}
+
+.am-brand-version {
+  font-size: 0.8em;
+  color: alpha(currentColor, 0.5);
+}
+
+.am-shell {
+  background-color: @sidebar_bg_color;
+}
+
+/* One colour on all four sides, with only the top and left given width: a
+   border whose sides differ in colour is drawn by GTK's software renderer as a
+   gradient mesh, the slowest thing it does (see the tables below). */
+.am-content {
+  background-color: @window_bg_color;
+  border-style: solid;
+  border-color: alpha(@window_fg_color, 0.07);
+  border-width: 1px 0 0 1px;
+  border-top-left-radius: 10px;
+}
+
 /* ---- Sidebar -------------------------------------------------------- */
 
 .am-sidebar {
@@ -13,12 +62,64 @@
   background: transparent;
 }
 
+/* Between blocks on a page: sentence case, quiet, flush with what it names —
+   Task Manager's "% Utilization" and "Memory composition". */
 .am-section-label {
-  font-size: 0.78em;
+  font-size: 0.92em;
+  color: alpha(currentColor, 0.62);
+  margin: 6px 0 0 0;
+}
+
+/* In the sidebar the same label marks a group of pages, so it keeps the small
+   capitals and the tracking of a heading rather than a caption. */
+.am-sidebar .am-section-label {
+  font-size: 0.74em;
   font-weight: bold;
-  opacity: 0.5;
-  letter-spacing: 0.06em;
-  margin: 12px 16px 2px 16px;
+  letter-spacing: 0.07em;
+  color: alpha(currentColor, 0.48);
+  margin: 14px 18px 4px 18px;
+}
+
+/* Task Manager's navigation: 38px rows with a small radius, a faint fill on
+   hover and selection, and on the selected row a short upright bar in the
+   accent colour at the left edge — the pill that says where you are. It is a
+   gradient image rather than a child widget so that no row carries an extra
+   widget for it, and it is sized and placed, not stretched, so it stays a
+   pill: 3 by 16 pixels, centred on the row. */
+.am-sidebar list > row,
+list.am-nav > row {
+  border-radius: 5px;
+}
+
+.am-sidebar list.navigation-sidebar > row {
+  margin: 0 6px 2px 6px;
+}
+
+.am-sidebar list > row > box.header {
+  min-height: 38px;
+  margin-left: 10px;
+  margin-right: 10px;
+}
+
+.am-sidebar list > row.activatable:hover,
+list.am-nav > row.activatable:hover {
+  background-color: alpha(currentColor, 0.05);
+}
+
+.am-sidebar list > row:selected,
+.am-sidebar list > row:selected:hover,
+list.am-nav > row:selected,
+list.am-nav > row:selected:hover {
+  background-color: alpha(currentColor, 0.08);
+  background-image: linear-gradient(@accent_color, @accent_color);
+  background-size: 3px 16px;
+  background-position: left center;
+  background-repeat: no-repeat;
+}
+
+.am-sidebar-footer {
+  padding-top: 4px;
+  padding-bottom: 8px;
 }
 
 /* Make the Disk/Network dropdown headers render identically to the plain rows.
@@ -31,17 +132,17 @@
 }
 
 .am-sidebar row.expander > box > list > row.header {
-  min-height: 36px;
+  min-height: 38px;
   padding: 0 8px;
-  border-radius: 9px;
+  border-radius: 5px;
 }
 
 /* The symbolic icons are drawn at a nominal 16px, which is GTK's default and
    is small on a high-density display — the sidebar reads as labels with specks
-   beside them. 20px is the next step up that still aligns with the row text.
+   beside them. 18px keeps them clear at Task Manager's tighter row height.
    The expander arrow stays small on purpose: it is punctuation, not an icon. */
 .am-sidebar row image {
-  -gtk-icon-size: 20px;
+  -gtk-icon-size: 18px;
 }
 
 .am-sidebar row.expander image.expander-row-arrow {
@@ -61,18 +162,34 @@
 
 /* ---- Headlines & captions ------------------------------------------ */
 
+/* Big figures in a light weight, the way Task Manager sets "CPU" and "1%":
+   large enough to read across the room, thin enough not to shout. */
 .am-headline {
-  font-size: 2.7em;
-  font-weight: 800;
+  font-size: 2.5em;
+  font-weight: 300;
+}
+
+/* What the headline is about — the processor, the drive — across from it at
+   the right, as Task Manager puts the model name. */
+.am-headline-caption {
+  font-size: 1.15em;
+  color: alpha(currentColor, 0.85);
+}
+
+.am-device-title {
+  font-size: 2.1em;
+  font-weight: 300;
 }
 
 .am-title {
-  font-size: 1.5em;
-  font-weight: 700;
+  font-size: 1.45em;
+  font-weight: 600;
 }
 
+/* Faded through its colour rather than opacity, which would render the label
+   into an offscreen buffer first; see .am-zero below. */
 .am-subtle {
-  opacity: 0.6;
+  color: alpha(currentColor, 0.62);
 }
 
 /* ---- Stats grid ----------------------------------------------------- */
@@ -82,7 +199,7 @@
 }
 
 .am-stat-label {
-  opacity: 0.6;
+  color: alpha(currentColor, 0.62);
 }
 
 /* Tabular figures rather than a monospace face: digits still line up column to
@@ -131,7 +248,9 @@
 
 /* ---- Graphs & breakdown bar ---------------------------------------- */
 
-.am-graph,
+/* The breakdown bar keeps a tinted track. The charts do not: like Task
+   Manager's, a chart is a bordered plot on the page itself, the border and
+   grid drawn by internal/graph. */
 .am-breakdown {
   background-color: alpha(@window_fg_color, 0.03);
   border-radius: 8px;
@@ -215,6 +334,144 @@ columnview:not(.column-separators) > listview > row > cell {
 
 columnview > listview.separators > row:not(.separator) {
   border-color: color-mix(in srgb, currentColor var(--border-opacity), transparent);
+}
+
+/* ---- Task Manager tables (Apps, Services) ----------------------------
+
+   Taller headers in the regular weight, columns divided by hairlines and rows
+   not divided at all, and every cell in a resource column shaded: faintly at
+   rest, deeper as the reading rises (see cellHeatClasses). The shading is the
+   theme's accent, so it is Task Manager's blue on a blue theme and the theme's
+   own hue on any other; the hottest step borrows the warning colour, as Task
+   Manager turns orange.
+
+   The cells lose their padding and their children carry it (.am-cell), so a
+   shaded cell is shaded edge to edge instead of inside a frame of padding. The
+   table itself is transparent, so it sits on the page's surface and the page's
+   rounded corner shows through. */
+columnview.am-table,
+columnview.am-table > listview {
+  background-color: transparent;
+}
+
+columnview.am-table > header > button {
+  padding: 10px 10px 8px 10px;
+  border-color: alpha(currentColor, 0.07);
+}
+
+columnview.am-table > header > button > box {
+  color: alpha(@window_fg_color, 0.75);
+}
+
+columnview.am-table header button label {
+  font-weight: normal;
+}
+
+/* All four sides one colour, for the reason given for the cell borders below. */
+columnview.am-table > listview > row > cell {
+  padding: 0;
+  border-color: alpha(currentColor, 0.07);
+}
+
+.am-table .am-cell {
+  padding: 6px 10px;
+}
+
+.am-table .am-dot {
+  margin: 0 10px;
+}
+
+.am-metric {
+  background-color: alpha(@accent_bg_color, 0.10);
+}
+
+.am-metric.am-heat-1 {
+  background-color: alpha(@accent_bg_color, 0.24);
+}
+
+.am-metric.am-heat-2 {
+  background-color: alpha(@accent_bg_color, 0.42);
+}
+
+.am-metric.am-heat-3 {
+  background-color: alpha(@warning_color, 0.42);
+}
+
+/* ---- Command bars ----------------------------------------------------
+
+   Task Manager's: flat commands, an icon and a word each, divided into groups
+   by a thin upright rule. A checked toggle keeps Adwaita's fill and also gives
+   its icon the accent colour, so which view is on can be read from the glyph. */
+.am-command {
+  padding: 5px 10px;
+  border-radius: 5px;
+  font-weight: normal;
+}
+
+/* libadwaita sets the label inside a button's icon-and-label content in bold on
+   its own node, so the button's weight does not reach it. */
+.am-command buttoncontent > box > label {
+  font-weight: normal;
+}
+
+.am-command:checked image {
+  color: @accent_color;
+}
+
+.am-command-separator {
+  margin: 8px 6px;
+  background-color: alpha(currentColor, 0.14);
+}
+
+/* ---- Cards -------------------------------------------------------------
+
+   The grouped rows on Sensors, Energy Saver, Startup, in Settings and the
+   Details dialog, with the smaller radius of a Windows 11 settings card. All of
+   them, dialogs included, on purpose: one radius across the app.
+
+   libadwaita rounds a boxed list in several rules — the list itself, its first
+   and last rows, and the header or nested list of an expander row open or shut
+   at either end — and a radius changed in some of them and not the rest leaves
+   a 12px corner poking out of a 7px card. So every one of its rules is here,
+   selector for selector (from libadwaita 1.9's stylesheet), at 7px. */
+list.boxed-list > row:first-child,
+list.content > row:first-child,
+list.boxed-list > row:first-child.expander row.header,
+list.content > row:first-child.expander row.header {
+  border-top-left-radius: 7px;
+  border-top-right-radius: 7px;
+}
+
+list.boxed-list > row:last-child,
+list.content > row:last-child,
+list.boxed-list > row:last-child.expander:not(:checked),
+list.boxed-list > row:last-child.expander:not(:checked) row.header,
+list.content > row:last-child.expander:not(:checked) row.header,
+list.boxed-list > row:last-child.expander:checked list.nested,
+list.content > row:last-child.expander:checked list.nested,
+list.boxed-list > row:last-child.expander:checked list.nested > row:last-child,
+list.content > row:last-child.expander:checked list.nested > row:last-child {
+  border-bottom-left-radius: 7px;
+  border-bottom-right-radius: 7px;
+}
+
+list.boxed-list-separate > row.expander row.header {
+  border-top-left-radius: 7px;
+  border-top-right-radius: 7px;
+}
+
+list.boxed-list-separate > row.expander:not(:checked) row.header,
+list.boxed-list-separate > row.expander.expander:checked list.nested,
+list.boxed-list-separate > row.expander.expander:checked list.nested > row:last-child {
+  border-bottom-left-radius: 7px;
+  border-bottom-right-radius: 7px;
+}
+
+list.boxed-list,
+list.content,
+list.boxed-list-separate > row,
+.card {
+  border-radius: 7px;
 }
 
 /* ---- Service status dots ------------------------------------------- */

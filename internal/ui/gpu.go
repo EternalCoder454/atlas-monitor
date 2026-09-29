@@ -38,15 +38,13 @@ func newGPUView(col *stats.Collector) *gpuView {
 	})
 	v.caption.text(name)
 
-	box.Append(sectionTitle("GPU UTILISATION"))
-	v.usageGraph = graph.New("GPU", graph.ColorGPU, usageHist, graph.Percent, 150)
+	v.usageGraph = graph.New("Utilisation", graph.ColorGPU, usageHist, graph.Percent, 200)
 	box.Append(v.usageGraph)
 
-	box.Append(sectionTitle("VRAM USAGE"))
-	v.vramGraph = graph.New("VRAM", graph.ColorGPU, vramHist, graph.Percent, 130)
+	v.vramGraph = graph.New("VRAM usage", graph.ColorGPU, vramHist, graph.Percent, 160)
 	box.Append(v.vramGraph)
 
-	box.Append(sectionTitle("DETAILS"))
+	box.Append(sectionTitle("Details"))
 	g := newStatGrid()
 	v.vGpuClock = g.add("GPU clock")
 	v.vMemClock = g.add("Memory clock")

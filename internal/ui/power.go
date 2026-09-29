@@ -16,14 +16,13 @@ type powerView struct {
 	col  *stats.Collector
 	// pack is the kernel name of the one battery this page shows, or "" for the
 	// summed view. A machine with a single pack only ever uses "".
-	pack      string
-	number    *liveLabel
-	caption   *liveLabel
-	capBuf    []byte
-	chargeGr  *graph.Graph
-	drawGr    *graph.Graph
-	drawTitle *gtk.Label
-	identity  *liveLabel
+	pack     string
+	number   *liveLabel
+	caption  *liveLabel
+	capBuf   []byte
+	chargeGr *graph.Graph
+	drawGr   *graph.Graph
+	identity *liveLabel
 
 	vStatus, vDraw, vRemaining  *liveLabel
 	vCharge, vHealth, vDesign   *liveLabel
@@ -50,15 +49,13 @@ func newPowerView(col *stats.Collector, pack string) *powerView {
 		b = s.Power.Battery
 	})
 
-	v.chargeGr = graph.New("Charge", graph.ColorBattery, chargeHist, graph.Percent, 150)
+	v.chargeGr = graph.New("Charge", graph.ColorBattery, chargeHist, graph.Percent, 190)
 	box.Append(v.chargeGr)
 
-	v.drawTitle = sectionTitle("POWER DRAW")
-	box.Append(v.drawTitle)
-	v.drawGr = graph.New("Draw", graph.ColorPowerDrw, drawHist, graph.Watts, 120)
+	v.drawGr = graph.New("Power draw", graph.ColorPowerDrw, drawHist, graph.Watts, 160)
 	box.Append(v.drawGr)
 
-	box.Append(sectionTitle("DETAILS"))
+	box.Append(sectionTitle("Details"))
 	g := newStatGrid()
 	v.vStatus = g.add("Status")
 	v.vDraw = g.add("Power draw")
@@ -71,7 +68,7 @@ func newPowerView(col *stats.Collector, pack string) *powerView {
 	v.vAdapter = g.add("AC adapter")
 	box.Append(g)
 
-	box.Append(sectionTitle("BATTERY"))
+	box.Append(sectionTitle("Battery"))
 	ident := gtk.NewLabel("")
 	ident.AddCSSClass("am-subtle")
 	ident.SetXAlign(0)
@@ -124,7 +121,6 @@ func (v *powerView) Update() {
 
 	// The draw graph is meaningless on a machine that never reports a rate.
 	show := b.PowerW > 0 || b.TimeLeft > 0
-	v.drawTitle.SetVisible(show)
 	v.drawGr.SetVisible(show)
 
 	v.chargeGr.Refresh()

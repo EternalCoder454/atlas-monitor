@@ -38,19 +38,19 @@ func newNetView(col *stats.Collector, n *stats.NetStats) *netView {
 	})
 
 	var headBox *gtk.Box
-	v.title, v.caption, headBox = newHeader()
+	v.title, v.caption, headBox = newDeviceHeader()
 	v.title.text(label)
 	box.Append(headBox)
 
-	box.Append(sectionTitle("DOWNLOAD"))
-	v.downGraph = graph.New("Down", graph.ColorNetDown, downHist, graph.Bytes, 130)
+	v.downGraph = graph.New("Download", graph.ColorNetDown, downHist, graph.Bytes, 170)
 	box.Append(v.downGraph)
 
-	box.Append(sectionTitle("UPLOAD"))
-	v.upGraph = graph.New("Up", graph.ColorNetUp, upHist, graph.Bytes, 130)
+	// Sending is drawn dashed in the same colour, as Task Manager draws it.
+	v.upGraph = graph.New("Upload", graph.ColorNetUp, upHist, graph.Bytes, 170)
+	v.upGraph.SetDashed(true)
 	box.Append(v.upGraph)
 
-	box.Append(sectionTitle("DETAILS"))
+	box.Append(sectionTitle("Details"))
 	g := newStatGrid()
 	g.add("Interface").text(name)
 	v.vIPv4 = g.add("IPv4")

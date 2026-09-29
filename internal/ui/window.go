@@ -11,6 +11,7 @@ import (
 	"atlas-monitor/internal/ai"
 	"atlas-monitor/internal/config"
 	"atlas-monitor/internal/ease"
+	"atlas-monitor/internal/graph"
 	"atlas-monitor/internal/health"
 	"atlas-monitor/internal/process"
 	"atlas-monitor/internal/sensors"
@@ -95,6 +96,9 @@ type Window struct {
 	netRows    map[string]*adw.ActionRow
 	netStable  []string // base order (collector order)
 	netCurrent []string // currently displayed order
+
+	// onSettings opens the settings dialog; see SetSettingsHandler.
+	onSettings func()
 }
 
 // NewWindow creates the content controller around a started collector.
@@ -215,6 +219,13 @@ func (w *Window) Build() gtk.Widgetter {
 	split := adw.NewOverlaySplitView()
 	split.SetSidebar(sb.root)
 	split.SetContent(w.stack)
+	// The page sits on its own surface, a layer above the sidebar and title
+	// bar with its top-left corner rounded where the three meet — how Windows
+	// 11 draws Task Manager. The split view is painted the sidebar's colour so
+	// that the corner has something to be rounded against. See am-shell and
+	// am-content in assets/style.css.
+	split.AddCSSClass("am-shell")
+	w.stack.AddCSSClass("am-content")
 	split.SetMinSidebarWidth(200)
 	split.SetMaxSidebarWidth(240)
 	split.SetSidebarWidthFraction(0.22)
@@ -296,6 +307,16 @@ func (w *Window) Build() gtk.Widgetter {
 		glib.IdleAdd(func() {
 			if !placed {
 				placed = true
+				// GTK's own first pick is sometimes a page's selectable value
+				// label, and a label selects all its text when it takes focus.
+				// Moving focus on leaves that selection behind, so a reading
+				// such as the memory total opened highlighted, as if the user
+				// had dragged over it. Clear it on the way out.
+				if root := bin.Root(); root != nil {
+					if l, ok := root.Focus().(*gtk.Label); ok && l.Selectable() {
+						l.SelectRegion(0, 0)
+					}
+				}
 				if !w.sidebar.focusView(w.active) {
 					if root := bin.Root(); root != nil {
 						root.SetFocus(nil)
@@ -366,6 +387,9 @@ func (w *Window) installTick() {
 	}
 	every := w.refreshInterval()
 	w.tickEvery = every
+	// The charts' bottom caption says how far back they reach, which is the
+	// history length at the current interval.
+	graph.SetHistorySpan(time.Duration(stats.HistLen) * every)
 	w.tick = glib.TimeoutAdd(uint(every/time.Millisecond), func() bool {
 		if !w.visible {
 			return true
@@ -388,6 +412,11 @@ func (w *Window) installTick() {
 func (w *Window) refreshInterval() time.Duration {
 	return time.Duration(config.NormalizeRefresh(w.settings.RefreshSeconds)) * time.Second
 }
+
+// SetSettingsHandler is what the sidebar's Settings entry does. The window does
+// not own the settings dialog — the application does, since it applies what is
+// saved — so it is handed the action rather than building the dialog itself.
+func (w *Window) SetSettingsHandler(f func()) { w.onSettings = f }
 
 // ActiveView is the page currently on screen, saved so Atlas reopens on it.
 func (w *Window) ActiveView() string { return w.active }
@@ -423,6 +452,18 @@ func (w *Window) addView(name string, build func() View) {
 }
 
 func (w *Window) selectView(name string) {
+	// Settings is an entry in the sidebar but a dialog, not a page. Chosen
+	// from the overlay sidebar of a narrow window, the overlay closes first,
+	// as it does for a page, rather than staying open behind the dialog.
+	if name == settingsEntry {
+		if w.split != nil && w.split.Collapsed() {
+			w.split.SetShowSidebar(false)
+		}
+		if w.onSettings != nil {
+			w.onSettings()
+		}
+		return
+	}
 	lv := w.views[name]
 	if lv == nil {
 		return
