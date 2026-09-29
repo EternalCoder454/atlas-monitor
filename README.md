@@ -41,7 +41,7 @@ Fedora (one line — installs build deps, then clones, builds and installs to
 
 ```sh
 sudo dnf install -y golang gtk4-devel libadwaita-devel glib2-devel gcc pkgconf-pkg-config git && \
-  git clone https://github.com/EternalCoder454/atlas-monitor.git && \
+  git clone -b minimal https://github.com/EternalCoder454/atlas-monitor.git && \
   cd atlas-monitor && make install
 ```
 
