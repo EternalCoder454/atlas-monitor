@@ -1,7 +1,6 @@
 package process
 
 import (
-	"os"
 	"strconv"
 	"syscall"
 )
@@ -20,8 +19,9 @@ const EaseOffReversible = false
 // Nice reads a process's current priority. Field 19 of /proc/[pid]/stat, which
 // is after the comm field, so the line is split from the last ')' as elsewhere.
 func Nice(pid int) (int, bool) {
-	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	if err != nil {
+	var arr [1024]byte
+	b, ok := readStatOnce(pid, arr[:])
+	if !ok {
 		return 0, false
 	}
 	close := lastIndexByte(b, ')')

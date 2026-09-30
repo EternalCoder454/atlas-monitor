@@ -12,7 +12,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
-	"os"
 	"strconv"
 	"syscall"
 	"time"
@@ -155,7 +154,8 @@ func (c *Collector) collect() {
 	// processes proportionally to their open socket count (labeled "Net ≈").
 	switch {
 	case doScan && totalSockets > 0:
-		newNet := make(map[int][2]float64, len(sockets))
+		newNet := c.lastNetSpare
+		clear(newNet)
 		for i := range procs {
 			if n, ok := sockets[procs[i].PID]; ok {
 				share := float64(n) / float64(totalSockets)
@@ -164,7 +164,7 @@ func (c *Collector) collect() {
 				newNet[procs[i].PID] = [2]float64{in, out}
 			}
 		}
-		c.lastNet = newNet
+		c.lastNet, c.lastNetSpare = newNet, c.lastNet
 	case hasTraffic:
 		// Between scans: reuse the previous attribution.
 		for i := range procs {
@@ -175,7 +175,7 @@ func (c *Collector) collect() {
 	default:
 		// Network idle: nothing to attribute.
 		if len(c.lastNet) > 0 {
-			c.lastNet = make(map[int][2]float64)
+			clear(c.lastNet)
 		}
 	}
 
@@ -699,8 +699,9 @@ func netField(b []byte, idx int) []byte {
 // say — has to check that the pair (pid, start time) is still the same process,
 // or it will eventually act on an innocent one.
 func StartTime(pid int) (uint64, bool) {
-	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	if err != nil {
+	var arr [1024]byte
+	b, ok := readStatOnce(pid, arr[:])
+	if !ok {
 		return 0, false
 	}
 	// comm is parenthesised and may contain spaces; the numbered fields resume
@@ -710,6 +711,26 @@ func StartTime(pid int) (uint64, bool) {
 		return 0, false
 	}
 	return fieldUint(b[rp+2:], 19), true
+}
+
+// readStatOnce reads the start of /proc/[pid]/stat into buf and returns what it
+// read. Everything the callers want is in the first few hundred bytes, and
+// os.ReadFile would allocate a file object and a buffer to get it.
+func readStatOnce(pid int, buf []byte) ([]byte, bool) {
+	var pb [40]byte
+	path := append(pb[:0], "/proc/"...)
+	path = strconv.AppendInt(path, int64(pid), 10)
+	path = append(path, "/stat\x00"...)
+	fd, err := openat(-100, path, syscall.O_RDONLY|syscall.O_CLOEXEC) // AT_FDCWD
+	if err != nil {
+		return nil, false
+	}
+	n, err := syscall.Read(fd, buf)
+	syscall.Close(fd)
+	if err != nil || n <= 0 {
+		return nil, false
+	}
+	return buf[:n], true
 }
 
 // closePlatform releases the descriptors the /proc scan holds open.

@@ -83,8 +83,9 @@ type Collector struct {
 
 	// Per-process network attribution is throttled and its result carried
 	// forward between scans (it is only a rough estimate).
-	scanCounter int
-	lastNet     map[int][2]float64
+	scanCounter  int
+	lastNet      map[int][2]float64
+	lastNetSpare map[int][2]float64 // double-buffered with lastNet
 
 	// Per-process GPU load via DRM fdinfo. Known GPU-client pids are scanned
 	// every tick; the full process set is rescanned periodically to find new ones.
@@ -154,6 +155,7 @@ func New() *Collector {
 		prev:         make(map[int]procPrev),
 		prevSpare:    make(map[int]procPrev),
 		lastNet:      make(map[int][2]float64),
+		lastNetSpare: make(map[int][2]float64),
 		gpuPrev:      make(map[int]uint64),
 		gpuPrevSpare: make(map[int]uint64),
 		gpuPids:      make(map[int]bool),
@@ -261,11 +263,23 @@ func (c *Collector) SnapshotInto(dst []Proc) []Proc {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if cap(dst) < len(c.procs) {
-		dst = make([]Proc, len(c.procs))
+		// Headroom, so a process count that wobbles from tick to tick does not
+		// reallocate the caller's buffer every time it ticks up by one.
+		dst = make([]Proc, len(c.procs), len(c.procs)+len(c.procs)/4+16)
 	}
 	dst = dst[:len(c.procs)]
 	copy(dst, c.procs)
 	return dst
+}
+
+// View calls fn with the latest process list while holding the collector's read
+// lock, so a caller that only reads a few fields of each process does not pay to
+// copy them all. fn must not keep the slice or write to it, and must be quick:
+// the next scan waits for it.
+func (c *Collector) View(fn func([]Proc)) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	fn(c.procs)
 }
 
 func clampPct(p float64) float64 {
