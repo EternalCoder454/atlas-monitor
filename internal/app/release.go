@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"atlas-monitor/internal/config"
 )
 
 // Finding out whether a newer version exists, without a source checkout.
@@ -66,6 +68,15 @@ func (a *App) checkRemote(channel string) (UpdateInfo, error) {
 	name := channelName(channel)
 	local := strings.TrimSpace(a.version)
 
+	// Moving between the full application and the minimal one is worth doing
+	// at the same version: it is a different build, not a newer one.
+	if (channel == config.ChannelMinimal) != config.Minimal {
+		info.Available = true
+		info.Version = version
+		info.Summary = fmt.Sprintf("Switch to %s (v%s)", name, version)
+		return info, nil
+	}
+
 	if compareVersions(version, local) <= 0 {
 		info.Summary = fmt.Sprintf("Up to date on %s (v%s)", name, local)
 		return info, nil
@@ -81,10 +92,16 @@ func (a *App) checkRemote(channel string) (UpdateInfo, error) {
 	return info, nil
 }
 
-// channelName is the word for a branch that a person would recognise. This build
-// has one channel and one only — see config.MinimalChannel — so there is nothing
-// to choose between: whatever it is asked about, the answer is Minimal.
-func channelName(string) string { return "Minimal" }
+// channelName is the word for a branch that a person would recognise.
+func channelName(channel string) string {
+	switch channel {
+	case config.ChannelBeta:
+		return "Beta"
+	case config.ChannelMinimal:
+		return "Minimal"
+	}
+	return "Release"
+}
 
 // fetchText GETs a small text file.
 func fetchText(url string) (string, error) {

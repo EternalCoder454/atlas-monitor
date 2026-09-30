@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/diamondburned/gotk4/pkg/core/gioutil"
 	coreglib "github.com/diamondburned/gotk4/pkg/core/glib"
 	"github.com/diamondburned/gotk4/pkg/gdk/v4"
 	"github.com/diamondburned/gotk4/pkg/gio/v2"
@@ -339,7 +338,7 @@ type appsView struct {
 	onColumnsChanged func()
 	root             *gtk.Box
 	proc             *process.Collector
-	model            *gioutil.ListModel[*procRow]
+	model            *rowModel
 	filter           *gtk.CustomFilter
 	scroller         *gtk.ScrolledWindow
 	columnView       *gtk.ColumnView
@@ -507,9 +506,9 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 	v.root.Append(toolbar)
 
 	// Model chain: base -> filter (search) -> sort (column headers) -> selection.
-	v.model = gioutil.NewListModel[*procRow]()
+	v.model = newRowModel()
 	v.filter = gtk.NewCustomFilter(v.matches)
-	filterModel := gtk.NewFilterListModel(v.model, &v.filter.Filter)
+	filterModel := gtk.NewFilterListModel(v.model.store, &v.filter.Filter)
 
 	// Task Manager's table, ruled: dividers between the columns and fainter
 	// lines between the rows, and the resource columns shaded by how busy each
@@ -657,7 +656,7 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 		if obj == nil {
 			return
 		}
-		if row := gioutil.ObjectValue[*procRow](obj); row != nil && row.live {
+		if row := v.model.row(obj); row != nil && row.live {
 			v.showDetails(row.proc)
 		}
 	})
@@ -837,17 +836,9 @@ func (v *appsView) applyRows(snap []process.Proc) {
 	}
 
 	if len(toAppend) > 0 {
-		first := len(v.order) - len(toAppend)
-		v.model.Splice(first, 0, toAppend...)
-		if v.ranks != nil {
-			// The sorter can only find a row's rank once its object carries the
-			// row's index, and the object exists only from the splice. Until
-			// then the new rows sort last; one more pass puts them in place.
-			for i := range toAppend {
-				tagRow(v.model.Item(uint(first+i)), first+i)
-			}
-			v.nudgeSorter()
-		}
+		// Each new item carries its index from the moment it exists, and the
+		// ranks above already cover the new rows, so GTK places them by rank.
+		v.model.Append(toAppend...)
 	}
 	v.appended = toAppend[:0] // keep the buffers for the next tick
 	v.pending = pending[:0]
@@ -949,13 +940,13 @@ func (v *appsView) clearModel() {
 // matches implements the search filter. It works directly on the row's fields,
 // with no lower-casing copy or PID-to-string conversion per item.
 func (v *appsView) matches(item *coreglib.Object) bool {
-	return v.matchesRow(gioutil.ObjectValue[*procRow](item))
+	return v.matchesRow(v.model.row(item))
 }
 
 // matchesRow is the predicate itself, separate from unwrapping the list item so
 // the tests can exercise it without a GObject.
 func (v *appsView) matchesRow(r *procRow) bool {
-	if !r.live {
+	if r == nil || !r.live {
 		return false // a retired row waiting on the free list
 	}
 	if v.search == "" {
@@ -1092,7 +1083,7 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 		if c == nil {
 			return
 		}
-		c.row = rowOf(cell)
+		c.row = v.rowOf(cell)
 		c.refresh()
 	})
 	factory.ConnectUnbind(func(obj *coreglib.Object) {
@@ -1149,12 +1140,12 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 	return col
 }
 
-func rowOf(cell *gtk.ColumnViewCell) *procRow {
+func (v *appsView) rowOf(cell *gtk.ColumnViewCell) *procRow {
 	item := cell.Item()
 	if item == nil {
 		return nil
 	}
-	return gioutil.ObjectValue[*procRow](item)
+	return v.model.row(item)
 }
 
 func (v *appsView) buildContextMenu(parent gtk.Widgetter) {
@@ -1472,6 +1463,17 @@ func (v *appsView) iconOf(p *process.Proc) string {
 
 // setIcon shows an icon by theme name or file path, or clears the image.
 func setIcon(img *gtk.Image, icon string) {
+	if img != nil && icon == "" {
+		delete(iconShown, img.Object.Native())
+	}
+	if img != nil && icon != "" {
+		if size := img.PixelSize(); size > 0 {
+			if tex := iconTexture(img, icon, size); tex != nil {
+				img.SetFromPaintable(tex)
+				return
+			}
+		}
+	}
 	switch {
 	case img == nil:
 	case icon == "":

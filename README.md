@@ -1,4 +1,4 @@
-# Atlas Monitor — Minimal
+# Atlas Monitor
 
 [![CI](https://github.com/EternalCoder454/atlas-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/EternalCoder454/atlas-monitor/actions/workflows/ci.yml)
 
@@ -11,17 +11,13 @@ Linux is where it is developed and where everything works. There is a
 network, processes, services, startup entries and battery — see that section for
 what it cannot do and why.
 
-**This is the `minimal` branch: the monitor, and nothing else.** The AI
-assistant, its Ollama client, the quick prompts and the Markdown renderer are
-not compiled out here — they are gone, along with the settings that configured
-them and the dependency on `internal/ai`. If you want them, use `main`.
-
 ## Screenshots
 
 ![Atlas Monitor — CPU view](images/cpu.png)
 
 <table>
   <tr>
+    <td width="50%"><img src="images/assistant.png" alt="Assistant view"><br><sub><b>Assistant</b> — a local Ollama model answering from live system context, rendered Markdown with tokens/sec</sub></td>
     <td width="50%"><img src="images/apps.png" alt="Apps / process table"><br><sub><b>Apps</b> — sortable process table with per-process CPU, RAM, GPU, network and disk</sub></td>
   </tr>
   <tr>
@@ -34,31 +30,59 @@ them and the dependency on `internal/ai`. If you want them, use `main`.
   </tr>
 </table>
 
-## Quick install
+## Install
 
-Fedora (one line — installs build deps, then clones, builds and installs to
-`~/.local`):
-
-```sh
-sudo dnf install -y golang gtk4-devel libadwaita-devel glib2-devel gcc pkgconf-pkg-config git && \
-  git clone -b minimal https://github.com/EternalCoder454/atlas-monitor.git && \
-  cd atlas-monitor && make install
-```
-
-Arch Linux (builds a real package and hands it to pacman — `makepkg` clones the
-branch itself):
+One line, on any Linux distribution:
 
 ```sh
-sudo pacman -S --needed base-devel go gtk4 libadwaita git && \
-  curl -O https://raw.githubusercontent.com/EternalCoder454/atlas-monitor/minimal/packaging/PKGBUILD && \
-  makepkg -si
+curl -fsSL https://raw.githubusercontent.com/EternalCoder454/atlas-monitor/main/setup.sh | bash
 ```
 
-It installs as `atlas-monitor-minimal` and conflicts with the full
-`atlas-monitor` package, since both provide the same binary.
+It installs what the build needs with your own package manager (it shows you
+the command and asks first), builds Atlas and puts it in your app menu: press
+**Super** and search "Atlas". Nothing is written outside your home folder except
+through your package manager. The first build takes a few minutes.
 
-Then press **Super** and search "Atlas". The first build compiles the gotk4 cgo
-bindings and can take a few minutes; rebuilds are cached and fast.
+Atlas is built against GTK 4.22 and libadwaita 1.9. Where your distribution has
+those, it is built with your own packages; where it has older ones, `setup.sh`
+builds and runs it in a small Fedora container instead, through
+[distrobox](https://distrobox.it). The container shares your home, your
+processes and your desktop, so Atlas still sees the whole machine, and it opens
+from the app menu like anything else.
+
+| Distribution | How `setup.sh` installs Atlas |
+| --- | --- |
+| Fedora 44 and later | Natively (dnf) |
+| Arch Linux, Manjaro, EndeavourOS, CachyOS | Natively (pacman), or with the [PKGBUILD](#arch-linux) |
+| openSUSE Tumbleweed | Natively (zypper) |
+| Ubuntu 26.04 and later, Linux Mint 23 and later | Natively (apt) |
+| Debian testing (forky) and unstable | Natively (apt) |
+| Void, Alpine, Solus and others | Natively (xbps, apk, eopkg) if their GTK is 4.22 or newer, otherwise in a container |
+| Debian 13, Ubuntu 24.04 and 25.x, Linux Mint 22, Pop!_OS, elementary OS | In a Fedora container (their GTK is older than 4.22) |
+
+Options go after `bash -s --`: `--beta` follows the Beta channel, `--minimal`
+installs the build without the assistant, `--yes` answers yes to every question,
+and `--container` or `--native` choose the route yourself.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/EternalCoder454/atlas-monitor/main/setup.sh | bash -s -- --beta
+```
+
+**Update:** the **Update** button in Settings, or
+
+```sh
+bash ~/.local/share/atlas-monitor/setup.sh update
+```
+
+**Uninstall:** close Atlas first, then
+
+```sh
+bash ~/.local/share/atlas-monitor/setup.sh uninstall            # keeps your settings
+bash ~/.local/share/atlas-monitor/setup.sh uninstall --purge    # removes them too
+```
+
+`bash setup.sh check` says what your system has, what it is missing and which
+route it would take, without changing anything.
 
 ## Features
 
@@ -107,6 +131,11 @@ bindings and can take a few minutes; rebuilds are cached and fast.
   and after a crash, the next time it starts.
 - **Services** — systemd units over D-Bus with status dots and
   Start/Stop/Restart/Enable/Disable actions (polkit-authenticated).
+- **Assistant** — an optional local AI (via [Ollama](https://ollama.com)) that
+  answers questions about your machine — specs, the top CPU/memory processes,
+  failed services — from a live system snapshot. A dropdown beside the message
+  box offers editable **quick prompts** (Detailed Overview, Top Processes, Quick
+  Check). Toggle it off any time in **Settings** (the last entry in the sidebar).
 
 ## Performance
 
@@ -176,7 +205,7 @@ Where the rest comes from:
   NVIDIA box will not match an AMD one.
 - **Pages are built the first time you open them.** A machine with three disks
   and three interfaces has a dozen pages; Atlas builds the one you are looking
-  at.
+  at. With the assistant switched off it is never built at all.
 - **Nothing is redrawn that has not changed.** Every live value remembers the
   text it last pushed, so a steady reading costs no formatting, no Go→C string
   copy and no Pango relayout. Per-tick allocation in the collectors and the
@@ -184,10 +213,9 @@ Where the rest comes from:
 - **The C heap is kept honest.** glibc is configured for a small long-running
   GUI process (capped arenas, prompt trimming) and idle memory is handed back
   once a minute — and immediately when the window is hidden.
-- **No `net/http`, and nothing that pulls it in.** `crypto/tls`, `crypto/x509`
-  and the FIPS module — a 32 MiB static buffer among them — are not in the
-  binary at all. Atlas itself never opens a socket; the optional update check
-  shells out to `git`, which does its own networking and can be switched off.
+- **No `net/http`.** The Ollama client speaks HTTP/1.1 on a socket it opens
+  itself, which keeps `crypto/tls`, `crypto/x509` and the FIPS module (a 32 MiB
+  static buffer among them) out of the binary entirely.
 - **The process table shows processes.** Kernel worker threads are roughly three
   quarters of `/proc` and there is nothing you can do with them, so they start
   hidden — which also cuts the widgets GTK realises for the table by about the
@@ -198,42 +226,56 @@ Where the rest comes from:
   and that memory is never given back — refreshing the Services list once a
   second used to take the process past 600 MiB in two and a half minutes.
 - Collection **pauses entirely while the window is hidden/minimised** (0% CPU),
-  and the expensive per-process scan only runs while the Apps page is open.
+  and the expensive per-process scan only runs while Apps or the Assistant is
+  open.
 - Graphs use fixed 60-sample ring buffers, pre-allocated at startup. The
   **refresh interval** is configurable (1–10 seconds); a slower rate costs less
   CPU and stretches the same 60 samples over a longer window.
 
-## Install without building
+## Other ways to install
 
-Each release carries a prebuilt tarball. It needs the GTK4 runtime libraries
-(not the `-devel` packages) and no Go toolchain:
+### Prebuilt tarball
+
+Each release carries a prebuilt Linux tarball. It needs only the GTK 4.22 and
+libadwaita 1.9 runtime libraries, not the `-devel` packages, and no Go toolchain:
 
 ```sh
-sudo dnf install gtk4 libadwaita        # Debian: libgtk-4-1 libadwaita-1-0
+sudo dnf install gtk4 libadwaita
 tar xf atlas-monitor-*-linux-x86_64-fedora*.tar.gz
 cd atlas-monitor-* && ./install.sh      # --system for /usr/local, --uninstall to remove
 ```
 
-The binary is dynamically linked, so the tarball is built per Fedora release —
-pick the one matching yours, or build from source below. `install.sh` checks
-what the dynamic linker cannot resolve and says so before installing anything.
+It is built on Fedora, so it runs where the libraries are at least as new:
+Fedora 44, Arch, openSUSE Tumbleweed, Ubuntu 26.04. `install.sh` asks the
+dynamic linker whether this system can run it, and says so before installing
+anything. On an older distribution, use `setup.sh` above.
 
-Arch Linux has a [`PKGBUILD`](packaging/PKGBUILD). `makepkg -si` from
-`packaging/` builds the current `minimal` branch and installs it through pacman as
-`atlas-monitor-minimal`, so `pacman -R atlas-monitor-minimal` removes it cleanly
-and updates arrive the same way as every other package. Atlas works out that
-pacman owns it — it asks pacman who owns its own binary — and its Update button
-then checks for a newer version and hands over the command that installs it,
-rather than writing over `/usr/bin` behind pacman's back. See
+### Arch Linux
+
+Arch has a [`PKGBUILD`](packaging/PKGBUILD). It builds the released version and
+installs it through pacman, so `pacman -R atlas-monitor` removes it cleanly and
+updates arrive the same way as every other package:
+
+```sh
+sudo pacman -S --needed base-devel go gtk4 libadwaita && \
+  curl -O https://raw.githubusercontent.com/EternalCoder454/atlas-monitor/main/packaging/PKGBUILD && \
+  makepkg -si
+```
+
+Atlas works out that pacman owns it (it asks pacman who owns its own binary),
+and its Update button then checks for a newer version and hands over the command
+that installs it, rather than writing over `/usr/bin` behind pacman's back. See
 [Updating](#updating).
+
+### RPM
 
 An RPM spec lives in [`packaging/`](packaging/atlas-monitor.spec) for COPR or a
 local `rpmbuild`.
 
 ## Windows
 
-Download `atlas-monitor-<version>-minimal-windows-x86_64.zip` from a
-[Minimal release](https://github.com/EternalCoder454/atlas-monitor/releases?q=minimal&expanded=true), unpack it
+Download `atlas-monitor-<version>-windows-x86_64.zip` from
+[Releases](https://github.com/EternalCoder454/atlas-monitor/releases), unpack it
 anywhere, and run `atlas-monitor.exe`. There is nothing to install and no runtime
 to fetch separately: the zip carries GTK, libadwaita and their dependencies, so it
 runs from a folder on a machine that has never seen MSYS2.
@@ -255,6 +297,7 @@ What works, and what does not:
 | Battery health and cycle count | No — see below |
 | GPU | No — see below |
 | Disk health (SMART) | No — see below |
+| Assistant | Yes, if Ollama is running |
 
 The four gaps are deliberate rather than unfinished:
 
@@ -287,20 +330,19 @@ does — both call the same script.
 
 ## Build dependencies
 
-Fedora 40+/44:
+`setup.sh` installs these for you. To do it by hand you need Go 1.24 or newer, a
+C compiler, `pkg-config`, `git`, `make`, and the development files for GTK 4.22+
+and libadwaita 1.9+:
 
 ```sh
-sudo dnf install golang gtk4-devel libadwaita-devel glib2-devel gcc pkgconf-pkg-config
+sudo dnf install golang gtk4-devel libadwaita-devel gcc pkgconf-pkg-config git make   # Fedora
+sudo pacman -S --needed go gtk4 libadwaita base-devel git pkgconf                     # Arch and family
+sudo apt install golang-go libgtk-4-dev libadwaita-1-dev build-essential pkg-config git # Debian, Ubuntu, Mint
+sudo zypper install go gtk4-devel libadwaita-devel gcc pkg-config git make             # openSUSE
 ```
 
-Arch Linux:
-
-```sh
-sudo pacman -S --needed base-devel go gtk4 libadwaita
-```
-
-You need Go 1.24 or newer. The first build compiles the gotk4 cgo bindings and
-can take several minutes; subsequent builds are cached and fast.
+The first build compiles the gotk4 cgo bindings and can take several minutes;
+later builds are cached and fast.
 
 ## Build & install
 
@@ -315,26 +357,76 @@ make clean
 
 `make install` honours `PREFIX` (default `~/.local`).
 
+### A monitor and nothing else
+
+```sh
+make build-lean     # or: make install-lean
+```
+
+Builds with `-tags noai`, which drops the Assistant page, the Ollama client and
+the Markdown renderer from the binary. The Settings page loses its Assistant
+section and the sidebar loses the Assistant row; everything else is identical.
+An in-app update remembers which flavour you installed and rebuilds the same
+one.
+
+Turning the assistant off in **Settings** gets you most of the same benefit
+without a rebuild — the page, its Ollama probe and its systemd bus connection
+are then never created.
+
+## Setting up the assistant
+
+The **Assistant** view is optional and runs a model locally through
+[Ollama](https://ollama.com) — nothing leaves your machine. The easiest way to
+set it up is one command from the source folder:
+
+```sh
+make setup-ai
+```
+
+That installs Ollama (via its official installer — it prompts first if Ollama
+isn't already present), starts the local server, and pulls the default model
+(`qwen3.5:9b`, ~5.5 GB). It is safe to re-run and only does what is missing.
+
+Prefer to do it by hand? Install Ollama, then pull the model:
+
+```sh
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull qwen3.5:9b
+```
+
+If you open the Assistant before this is done, Atlas shows an in-app panel with
+the exact commands (and a **Copy** button) and clears it automatically the
+moment Ollama is ready — no need to restart. To use a different model, set it in
+**Settings** and run `make setup-ai <model>` (or `ollama pull
+<model>`); GPU acceleration is detected automatically by Ollama's installer. You
+can turn the assistant off entirely in Settings, which hides the view and stops
+all AI activity.
+
 ## Updating
 
 Open **Settings** and use the **Update** button under **Updates**.
+Settings → Updates → **Update channel** chooses which Atlas this copy is:
 
-This build has one channel and there is nothing to choose: it always follows the
-`minimal` branch. Pulling `main` or `beta` would rebuild this install as the full
-application, assistant and all, which is the one thing someone who installed the
-minimal build has asked not to have.
+- **Release** — the full Atlas with the assistant, in its stable version (the default).
+- **Beta** — the full Atlas with the newest features and fixes, before they reach Release.
+- **Minimal** — Atlas without the AI assistant: lighter, with nothing to set up.
+
+To move to another one, choose it and press **Update**: Atlas rebuilds itself
+from that channel and restarts into it. Your settings come along, including the
+assistant's, which are kept while you are on Minimal in case you come back.
 
 What happens when you click it depends on how Atlas was installed, which it works
 out for itself:
 
 | Installed by | What the button does |
 | --- | --- |
-| `make install` (a source checkout) | Pulls the `minimal` branch, rebuilds, and relaunches into the new version. |
+| `setup.sh` or `make install` (a source checkout) | Pulls the channel, rebuilds, and relaunches into the new version. |
+| `setup.sh` in a container, on an older distribution | The same, inside the container. |
 | A release tarball or `install.sh` | Fetches the source once, then behaves like a checkout from then on. |
 | pacman, apt, dnf or zypper | Checks for a newer version and gives you the one command that installs it, with a button to copy it and another to run it in a terminal. |
 
 Checking for a new version never needs a checkout: a packaged install reads
-`VERSION` on the `minimal` branch over HTTPS, so it still finds out when something
+`VERSION` on the channel branch over HTTPS, so it still finds out when something
 is waiting.
 
 A packaged copy is deliberately never overwritten from inside the app. Writing
@@ -381,10 +473,14 @@ installs them rather than failing with a page of compiler errors.
   over the system bus, which triggers your desktop's polkit agent for
   authentication. Without authorisation the action returns an error shown in the
   view.
-- **Nothing leaves the machine.** There is no network client in this build. The
-  only outbound request Atlas can make at all is the optional update check,
-  which asks GitHub whether a newer version exists and can be turned off in
-  **Settings**. Settings persist to `~/.config/atlas-monitor/settings.json`.
+- **AI assistant**: talks to a local [Ollama](https://ollama.com) server
+  (default `http://localhost:11434`, model `qwen3.5:9b`) — see [Setting up the
+  assistant](#setting-up-the-assistant) for the one-command install. Each
+  question sends a compact live snapshot — specs, top processes, services — as
+  the system prompt; the model runs entirely on your machine. Configure the
+  model/endpoint or turn it off completely in **Settings**. With AI
+  disabled, no network calls are made and the Assistant entry is hidden.
+  Settings persist to `~/.config/atlas-monitor/settings.json`.
 
 ## Development
 
@@ -396,7 +492,8 @@ installs them rather than failing with a page of compiler errors.
   `services`, `gpu`, `power`, `memory`, `disk:nvme0n1`, `net:wlp7s0`) — handy
   for testing, and it overrides the remembered page.
 - CI runs build, `vet`, `gofmt`, the tests and the race detector on a Fedora
-  container ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+  container for both the default and `noai` builds
+  ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 
 ## Versioning
 
@@ -429,6 +526,7 @@ internal/ease/         Energy Saver's automatic easing, through CPU weights
 internal/gpu/          GPU readers: amdgpu sysfs, NVIDIA NVML, generic DRM
 internal/power/        battery and AC adapter from /sys/class/power_supply
 internal/services/     systemd D-Bus client
+internal/ai/           streaming Ollama client (minimal HTTP/1.1, no net/http)
 internal/gfx/          renderer selection; keeps the GPU driver stack out
 internal/sysmem/       C allocator tuning and returning idle memory to the OS
 internal/config/       persisted user settings (~/.config/atlas-monitor)

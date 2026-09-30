@@ -169,9 +169,7 @@ func (a *App) startUpdate(done func(ok bool)) {
 // main loop.
 func (a *App) installUpdate(status func(string), finished func(error)) {
 	in := a.install()
-	// Fixed, not chosen: see config.MinimalChannel. Pulling main or beta here
-	// would rebuild this install as the full application.
-	branch := config.MinimalChannel
+	branch := config.NormalizeChannel(a.settings.UpdateChannel)
 	// The new version installs back over the one that is running, whatever
 	// prefix that is under. Left to the Makefile's default a copy installed in
 	// /usr/local would be rebuilt into ~/.local, and which of the two launched

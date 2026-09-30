@@ -53,6 +53,17 @@ func (a *App) CheckUpdate(channel string) (UpdateInfo, error) {
 	remote, _ := git("rev-parse", "--short", "origin/"+channel)
 	name := channelName(channel)
 
+	// On another branch, the chosen channel is a switch whatever the commits
+	// say. Minimal takes in everything Beta has, so a minimal checkout contains
+	// Beta's newest commit and would otherwise count as up to date on Beta.
+	if branch, _ := git("rev-parse", "--abbrev-ref", "HEAD"); branch != channel {
+		info.Available = true
+		info.Summary = fmt.Sprintf("Switch to %s: %s → %s", name, local, remote)
+		info.Version, _ = git("show", "origin/"+channel+":VERSION")
+		info.Version = strings.TrimSpace(info.Version)
+		return info, nil
+	}
+
 	// Up to date when origin/<channel> is already contained in HEAD.
 	if exec.Command("git", "-C", src, "merge-base", "--is-ancestor", "origin/"+channel, "HEAD").Run() == nil {
 		info.Summary = fmt.Sprintf("Up to date on %s (%s)", name, local)

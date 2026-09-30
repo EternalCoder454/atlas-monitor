@@ -118,6 +118,13 @@ var devLibraries = []struct {
 		"pacman": "libadwaita", "apt": "libadwaita-1-dev", "dnf": "libadwaita-devel",
 		"zypper": "libadwaita-devel", "yum": "libadwaita-devel",
 	}},
+	// The GTK bindings read GLib's error types through it. Fedora's GTK
+	// development package brings it along; Debian's and Ubuntu's do not.
+	{"gobject-introspection-1.0", "the GObject introspection development files", map[string]string{
+		"pacman": "gobject-introspection", "apt": "libgirepository1.0-dev",
+		"dnf": "gobject-introspection-devel", "zypper": "gobject-introspection-devel",
+		"yum": "gobject-introspection-devel",
+	}},
 }
 
 // missingBuildTools returns what is needed and not present, as label/package

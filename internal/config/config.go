@@ -21,11 +21,6 @@ const (
 	MinWindowHeight = 400
 )
 
-// MinimalChannel is the only branch this build updates from. The full
-// application lives on main and beta; pulling either of those into a minimal
-// install would quietly turn it back into the full one.
-const MinimalChannel = "minimal"
-
 // DefaultRefreshSeconds is the sampling interval when nothing is configured.
 //
 // Two seconds rather than one, because this is the build for machines that
@@ -47,6 +42,30 @@ func NormalizeRefresh(seconds int) int {
 		}
 	}
 	return DefaultRefreshSeconds
+}
+
+// Update channels: the branch an update pulls. Release and Beta are the full
+// application, the first stable and the second ahead of it; Minimal is Atlas
+// without the assistant. Choosing another one and pressing Update moves this
+// copy onto it.
+const (
+	ChannelRelease = "main"
+	ChannelBeta    = "beta"
+	ChannelMinimal = "minimal"
+)
+
+// Channels are the channels offered in Settings, in its order.
+var Channels = []string{ChannelRelease, ChannelBeta, ChannelMinimal}
+
+// NormalizeChannel maps anything that is not a channel onto this build's
+// default.
+func NormalizeChannel(ch string) string {
+	for _, c := range Channels {
+		if ch == c {
+			return ch
+		}
+	}
+	return DefaultChannel
 }
 
 // Window transparency levels, as stored in settings. Off is the default and
@@ -75,11 +94,36 @@ func NormalizeTransparency(level string) string {
 	return TransparencyOff
 }
 
+// Frame styles, as stored in settings: how the sidebar and title bar look while
+// the window is see-through. See-through, the default, lets the desktop show
+// through them as well as the page. Solid sidebar keeps the sidebar opaque and
+// the title bar see-through, which is how the first transparent release looked.
+// Solid keeps both opaque, so only the page shows the desktop.
+const (
+	FrameSeeThrough   = "see-through"
+	FrameSolidSidebar = "solid-sidebar"
+	FrameSolid        = "solid"
+)
+
+// FrameChoices are the frame styles offered in Settings, in its order.
+var FrameChoices = []string{FrameSeeThrough, FrameSolidSidebar, FrameSolid}
+
+// NormalizeFrame maps anything that is not one of the offered styles onto
+// see-through, for the same reason as NormalizeTransparency.
+func NormalizeFrame(style string) string {
+	for _, c := range FrameChoices {
+		if style == c {
+			return style
+		}
+	}
+	return FrameSeeThrough
+}
+
 // Settings is the user-configurable state.
 type Settings struct {
 	TextRendering string `json:"text_rendering"`
 	UpdateCheck   bool   `json:"update_check"`
-	UpdateChannel string `json:"update_channel"` // always MinimalChannel in this build; see UpdateChannel handling
+	UpdateChannel string `json:"update_channel"` // one of the Channel constants
 	RenderMode    string `json:"render_mode"`    // see gfx: "software" (default), "gpu", "system"
 
 	// Theme is the colour theme's id — see internal/theme. Empty means Atlas
@@ -91,6 +135,11 @@ type Settings struct {
 	// the Transparency constants. Text and charts stay solid at every level. It
 	// only takes effect where the display composites; see ui.TransparencyAvailable.
 	WindowTransparency string `json:"window_transparency"`
+
+	// FrameStyle is how the sidebar and title bar look while the window is
+	// see-through: one of the Frame constants. It does nothing while
+	// transparency is off.
+	FrameStyle string `json:"frame_style"`
 
 	// RefreshSeconds is how often every collector samples and the visible page
 	// redraws. It also stretches the graphs: they keep 60 samples either way, so
@@ -124,7 +173,7 @@ func Defaults() Settings {
 	return Settings{
 		TextRendering:  gfx.TextSharp,
 		UpdateCheck:    true,
-		UpdateChannel:  MinimalChannel,
+		UpdateChannel:  DefaultChannel,
 		RenderMode:     gfx.ModeSoftware,
 		RefreshSeconds: DefaultRefreshSeconds,
 		WindowWidth:    DefaultWindowWidth,
@@ -133,6 +182,7 @@ func Defaults() Settings {
 		EnergyAuto:     true,
 
 		WindowTransparency: TransparencyOff,
+		FrameStyle:         FrameSeeThrough,
 	}
 }
 
@@ -178,18 +228,12 @@ func Load() Settings {
 			s.HiddenColumns = without(s.HiddenColumns, "Disk Read", "Disk Write")
 		}
 	}
-	// This build tracks one branch and no other. A settings file carried over
-	// from a full install will name main or beta, and honouring that would pull
-	// the full application over the top of this one on the next update — the
-	// assistant back, from a build that was installed to be without it. Anything
-	// that is not the minimal channel is repaired to it.
-	if s.UpdateChannel != MinimalChannel {
-		s.UpdateChannel = MinimalChannel
-	}
+	s.UpdateChannel = NormalizeChannel(s.UpdateChannel)
 	s.RenderMode = gfx.Normalize(s.RenderMode)
 	s.TextRendering = gfx.NormalizeText(s.TextRendering)
 	s.RefreshSeconds = NormalizeRefresh(s.RefreshSeconds)
 	s.WindowTransparency = NormalizeTransparency(s.WindowTransparency)
+	s.FrameStyle = NormalizeFrame(s.FrameStyle)
 	if s.WindowWidth < MinWindowWidth {
 		s.WindowWidth = DefaultWindowWidth
 	}
@@ -204,7 +248,7 @@ func Save(s Settings) error {
 	if err := os.MkdirAll(dir(), 0o755); err != nil {
 		return err
 	}
-	b, err := json.MarshalIndent(s, "", "  ")
+	b, err := merged(s)
 	if err != nil {
 		return err
 	}
@@ -260,4 +304,32 @@ func without(names []string, drop ...string) []string {
 		}
 	}
 	return out
+}
+
+// merged is the settings as JSON, on top of whatever the file already holds that
+// this build does not know about.
+//
+// The full application and the minimal one share a settings file, and the
+// minimal one has no assistant, so it knows nothing of the model, the prompt or
+// the quick prompts. Saving only what it knows would drop them, and someone who
+// tried the Minimal channel and came back would find the assistant reset. Keys
+// this build does not have are kept as they were; the ones it has are written
+// fresh.
+func merged(s Settings) ([]byte, error) {
+	fresh, err := json.Marshal(s)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]json.RawMessage{}
+	if old, err := os.ReadFile(path()); err == nil {
+		_ = json.Unmarshal(old, &out) // a damaged file just has nothing to keep
+	}
+	var mine map[string]json.RawMessage
+	if err := json.Unmarshal(fresh, &mine); err != nil {
+		return nil, err
+	}
+	for k, v := range mine {
+		out[k] = v
+	}
+	return json.MarshalIndent(out, "", "  ")
 }

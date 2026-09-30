@@ -87,14 +87,13 @@ func TestNoDowngradeIsOffered(t *testing.T) {
 }
 
 // TestRemoteCheckNamesTheChannel: the summary is the whole message in Settings,
-// so it has to say which channel it looked at and both versions. This build has
-// one channel, and it is the one it must name.
+// so it has to say which channel it looked at and both versions.
 func TestRemoteCheckNamesTheChannel(t *testing.T) {
-	serveChannel(t, config.MinimalChannel, "0.12.0",
+	serveChannel(t, config.ChannelMinimal, "0.12.0",
 		"# What's new\n\n## 0.12.0\n\n- Beta things\n")
 
 	a := App{version: "0.11.0"}
-	info, err := a.checkRemote(config.MinimalChannel)
+	info, err := a.checkRemote(config.ChannelMinimal)
 	if err != nil {
 		t.Fatal(err)
 	}

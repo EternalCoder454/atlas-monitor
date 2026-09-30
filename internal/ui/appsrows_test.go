@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/diamondburned/gotk4/pkg/core/gioutil"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
 	"atlas-monitor/internal/process"
@@ -17,7 +16,7 @@ import (
 // display is needed.
 func newTestAppsView() *appsView {
 	v := &appsView{
-		model:  gioutil.NewListModel[*procRow](),
+		model:  newRowModel(),
 		byPID:  make(map[int]*procRow),
 		byKey:  make(map[groupKey]*procRow),
 		cells:  make(map[uintptr]*procCell),

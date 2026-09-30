@@ -121,11 +121,9 @@ func TestUpdateInstallsBackIntoItsOwnPrefix(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("the script got %d arguments, want the branch and the prefix: %q", len(lines), lines)
 	}
-	// Fixed, not chosen: pulling main or beta would rebuild this install as the
-	// full application, assistant and all. See config.MinimalChannel.
-	if lines[0] != config.MinimalChannel {
-		t.Errorf("branch = %q, want %q — this build must never pull main or beta",
-			lines[0], config.MinimalChannel)
+	// The channel the settings name, which is this build's own by default.
+	if lines[0] != config.ChannelMinimal {
+		t.Errorf("branch = %q, want %q", lines[0], config.ChannelMinimal)
 	}
 	if lines[1] != "/opt/atlas" {
 		t.Errorf("prefix = %q, want /opt/atlas — the prefix the running copy is installed under", lines[1])

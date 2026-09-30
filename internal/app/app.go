@@ -56,10 +56,11 @@ type App struct {
 	appliedTheme string
 	themeApplied bool
 
-	// appliedGlass is the transparency class last put on the window, or "" for
-	// none, so applyTransparency can tell when there is nothing to do. It has no
-	// separate "applied yet" flag: a window that has been given nothing and one
-	// that has been told to have nothing are the same window.
+	// appliedGlass is the transparency classes last put on the window, space
+	// separated, or "" for none, so applyTransparency can tell when there is
+	// nothing to do. It has no separate "applied yet" flag: a window that has
+	// been given nothing and one that has been told to have nothing are the
+	// same window.
 	appliedGlass string
 
 	// easer is Energy Saver's automatic half, or nil where the system cannot
@@ -154,6 +155,21 @@ func (a *App) activate() {
 	// and more than half of the CPU page's.
 	win.SetOverflow(gtk.OverflowVisible)
 	win.AddCSSClass("am-main")
+	// High contrast, as a class the stylesheet can see. Its cards replace
+	// libadwaita's shadow and so its high-contrast one too; see "Cards" in
+	// assets/style.css. A class, not an @media query, because GTK only reads
+	// those from 4.20 and Atlas supports older.
+	if mgr := adw.StyleManagerGetDefault(); mgr != nil {
+		syncContrast := func() {
+			if mgr.HighContrast() {
+				win.AddCSSClass("am-hc")
+			} else {
+				win.RemoveCSSClass("am-hc")
+			}
+		}
+		syncContrast()
+		mgr.NotifyProperty("high-contrast", syncContrast)
+	}
 	win.SetDefaultSize(a.settings.WindowWidth, a.settings.WindowHeight)
 	win.SetSizeRequest(config.MinWindowWidth, config.MinWindowHeight)
 	if a.settings.WindowMaximized {
@@ -503,7 +519,26 @@ func (a *App) applyTheme() {
 // which the stylesheet turns the backgrounds see-through with, and one per level
 // for how far. They are all listed so that a change of level can clear the old
 // one without remembering what it was.
-var glassClasses = []string{"am-glass", "am-glass-subtle", "am-glass-medium", "am-glass-strong"}
+var glassClasses = []string{"am-glass", "am-glass-subtle", "am-glass-medium", "am-glass-strong",
+	"am-sidebar-solid", "am-frame-solid"}
+
+// glassClassesFor is every class the window should wear for a transparency level
+// and frame style: none at all when transparency is off, whatever the frame
+// style says, since a solid frame on an opaque window is simply the window.
+func glassClassesFor(level, frame string) []string {
+	lc := glassLevelClass(level)
+	if lc == "" {
+		return nil
+	}
+	out := []string{"am-glass", lc}
+	switch config.NormalizeFrame(frame) {
+	case config.FrameSolidSidebar:
+		out = append(out, "am-sidebar-solid")
+	case config.FrameSolid:
+		out = append(out, "am-frame-solid")
+	}
+	return out
+}
 
 // glassLevelClass is the class for one level, or "" for off and for anything
 // unrecognised.
@@ -535,10 +570,11 @@ func (a *App) applyTransparency() {
 	if a.win == nil {
 		return
 	}
-	want := glassLevelClass(a.settings.WindowTransparency)
+	classes := glassClassesFor(a.settings.WindowTransparency, a.settings.FrameStyle)
 	if ok, _ := ui.TransparencyAvailable(); !ok {
-		want = ""
+		classes = nil
 	}
+	want := strings.Join(classes, " ")
 	if want == a.appliedGlass {
 		return
 	}
@@ -547,9 +583,8 @@ func (a *App) applyTransparency() {
 	for _, c := range glassClasses {
 		a.win.RemoveCSSClass(c)
 	}
-	if want != "" {
-		a.win.AddCSSClass("am-glass")
-		a.win.AddCSSClass(want)
+	for _, c := range classes {
+		a.win.AddCSSClass(c)
 	}
 }
 
@@ -596,7 +631,7 @@ func (a *App) startUpdateCheck(win *adw.ApplicationWindow) {
 	if !a.settings.UpdateCheck || a.updateOffered {
 		return
 	}
-	channel := config.MinimalChannel
+	channel := config.NormalizeChannel(a.settings.UpdateChannel)
 	glib.TimeoutAdd(1500, func() bool {
 		go func() {
 			info, err := a.CheckUpdate(channel)
