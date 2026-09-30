@@ -3,6 +3,15 @@
 Written for the people who use Atlas Monitor rather than the people who build
 it. One short line per change, no jargon — this is what the update prompt shows.
 
+## 0.14.0
+
+- One command installs, updates or removes Atlas on Fedora, Ubuntu, Debian, Mint, Arch and more
+- Choose Release, Beta or Minimal in Settings; each says in a line what it is, and Update switches
+- The sidebar and title bar can stay solid while the rest of the window is see-through
+- Cards in Settings are drawn flat, which is lighter on every theme
+- Atlas uses less memory once it has started
+- The Apps page, Energy Saver and app icons do less work each second
+
 ## 0.13.0
 
 - Settings is one page in the window, like Task Manager's: every setting shown, nothing to expand
