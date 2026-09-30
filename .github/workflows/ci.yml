@@ -3,7 +3,21 @@ name: CI
 on:
   push:
     branches: [main, beta, minimal]
+    # Pages about Atlas rather than Atlas: nothing builds, tests or packages them
+    # differently when only these change. README.md is copied into the release
+    # archives, but as a file, so its words cannot break a build. CHANGELOG.md
+    # is not here: a test checks it has an entry for the current version.
+    paths-ignore:
+      - README.md
+      - CLAUDE.md
+      - "screenshots/**"
+      - "images/**"
   pull_request:
+    paths-ignore:
+      - README.md
+      - CLAUDE.md
+      - "screenshots/**"
+      - "images/**"
   workflow_dispatch:
 
 permissions:

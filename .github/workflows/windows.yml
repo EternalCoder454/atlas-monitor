@@ -20,8 +20,22 @@ on:
     # whole of gotk4 — but a platform nothing builds for is a platform that stops
     # working, and nobody would notice until someone downloaded it.
     branches: [windows, beta, main]
+    # See ci.yml. Pages about Atlas rather than Atlas: nothing builds, tests or packages them
+    # differently when only these change. README.md is copied into the release
+    # archives, but as a file, so its words cannot break a build. CHANGELOG.md
+    # is not here: a test checks it has an entry for the current version.
+    paths-ignore:
+      - README.md
+      - CLAUDE.md
+      - "screenshots/**"
+      - "images/**"
   pull_request:
     branches: [windows, beta, main]
+    paths-ignore:
+      - README.md
+      - CLAUDE.md
+      - "screenshots/**"
+      - "images/**"
   workflow_dispatch:
 
 permissions:
