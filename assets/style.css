@@ -443,8 +443,7 @@ columnview.am-table > listview.separators > row:not(.separator) {
    sidebar) and the page take its place at partial opacity. The page sits on the
    frame, so its opacity compounds with the frame's and it ends up the more
    solid of the two, which is where the reading is. Cards on the page keep more
-   of their colour still. Dialogs and popovers are left alone: they are read,
-   not glanced through.
+   of their colour still. Dialogs follow, below; menus and popovers stay solid.
 
    Only set when the display composites and the system is not Windows; see
    ui.TransparencyAvailable. */
@@ -501,6 +500,43 @@ window.am-glass-strong .am-content {
 
 window.am-glass-strong .am-content list.boxed-list {
   background-color: alpha(@card_bg_color, 0.65);
+}
+
+/* Dialogs — Settings, a process's Details — take the glass too. A dialog floats
+   over the window's own page, and libadwaita darkens that page behind it; with
+   the darkening in place a see-through dialog showed only a dim, solid page and
+   looked no different from an opaque one. So under glass the page behind is not
+   darkened, and the dialog shows it through its margins, while the cards
+   holding its text stay nearly solid. The Settings list of pages
+   keeps a faint tint of the sidebar's colour, so it still reads as a sidebar. */
+window.am-glass floating-sheet > dimming {
+  background-color: transparent;
+}
+
+window.am-glass-subtle dialog-host > dialog sheet {
+  background-color: alpha(@window_bg_color, 0.90);
+}
+
+window.am-glass-medium dialog-host > dialog sheet {
+  background-color: alpha(@window_bg_color, 0.76);
+}
+
+window.am-glass-strong dialog-host > dialog sheet {
+  background-color: alpha(@window_bg_color, 0.62);
+}
+
+window.am-glass dialog-host > dialog sheet .sidebar-pane {
+  background-color: alpha(@sidebar_bg_color, 0.45);
+}
+
+/* The cards are where a dialog's text is, so they stay nearly solid: the page
+   behind showed through them as ghosted numbers under the settings' own. A
+   dark theme's card colour is itself a translucent white laid over whatever is
+   below, so making it more opaque did nothing; the card gets a nearly solid
+   window-coloured ground instead, with its own colour laid over that as usual. */
+window.am-glass dialog-host > dialog sheet list.boxed-list {
+  background-color: alpha(@window_bg_color, 0.94);
+  background-image: linear-gradient(@card_bg_color, @card_bg_color);
 }
 
 /* ---- Cards -------------------------------------------------------------

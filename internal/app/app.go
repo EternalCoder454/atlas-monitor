@@ -138,6 +138,9 @@ func (a *App) activate() {
 	win := adw.NewApplicationWindow(&a.app.Application)
 	a.win = win
 	win.SetTitle("Atlas Monitor")
+	// The window's own icon, set rather than left to GTK to guess, so the title
+	// bar's icon slot (see brandBox) and the taskbar show it wherever they ask.
+	win.SetIconName(AppID)
 	win.SetDefaultSize(a.settings.WindowWidth, a.settings.WindowHeight)
 	win.SetSizeRequest(config.MinWindowWidth, config.MinWindowHeight)
 	if a.settings.WindowMaximized {
@@ -203,9 +206,15 @@ func (a *App) activate() {
 }
 
 // brandBox is the application's name at the start of the title bar: its icon,
-// the name, and the version, quieter, after it. The icon is only shown when the
-// icon theme has it — a build run from the source tree has not installed it,
-// and GTK's stand-in for a missing icon would be worse than none.
+// the name, and the version, quieter, after it.
+//
+// The icon only where the title bar does not already show one. A desktop can
+// ask for the window's icon at the start of every title bar — KDE does, with
+// the decoration layout "icon:minimize,maximize,close" — and GTK then draws it
+// itself, which put two side by side. The layout can change while Atlas runs,
+// so the choice is made again when it does. The icon is also left out when the
+// icon theme does not have it: a build run from the source tree has not
+// installed it, and GTK's stand-in for a missing icon would be worse than none.
 func brandBox(version string) *gtk.Box {
 	box := gtk.NewBox(gtk.OrientationHorizontal, 8)
 	box.AddCSSClass("am-brand")
@@ -213,6 +222,14 @@ func brandBox(version string) *gtk.Box {
 		icon := gtk.NewImageFromIconName(AppID)
 		icon.SetPixelSize(18)
 		box.Append(icon)
+		if st := gtk.SettingsGetDefault(); st != nil {
+			sync := func() {
+				layout, _ := st.ObjectProperty("gtk-decoration-layout").(string)
+				icon.SetVisible(!decorationShowsIcon(layout))
+			}
+			sync()
+			st.NotifyProperty("gtk-decoration-layout", sync)
+		}
 	}
 	name := gtk.NewLabel("Atlas Monitor")
 	name.AddCSSClass("am-brand-name")
@@ -223,6 +240,19 @@ func brandBox(version string) *gtk.Box {
 		box.Append(v)
 	}
 	return box
+}
+
+// decorationShowsIcon reports whether a GTK decoration layout puts the window's
+// icon at the start of the title bar, where Atlas's name goes: "icon" among the
+// buttons before the colon.
+func decorationShowsIcon(layout string) bool {
+	start, _, _ := strings.Cut(layout, ":")
+	for _, b := range strings.Split(start, ",") {
+		if strings.TrimSpace(b) == "icon" {
+			return true
+		}
+	}
+	return false
 }
 
 // onSettingsChanged applies saved settings to the running app.
