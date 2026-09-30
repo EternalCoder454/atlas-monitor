@@ -69,7 +69,7 @@ func TestTextModesListedForSettings(t *testing.T) {
 }
 
 // TestModesListedForSettings checks every selectable mode survives Normalize and
-// carries the text the Settings dialog renders.
+// carries the text the Settings page renders.
 func TestModesListedForSettings(t *testing.T) {
 	if len(Modes) == 0 {
 		t.Fatal("no rendering modes listed")

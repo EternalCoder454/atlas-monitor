@@ -28,6 +28,9 @@ func (c *Collector) collectNets() {
 	// interface, so only refresh them every 5th tick (and on the first).
 	c.netTick++
 	refreshAddrs := c.netTick%5 == 1
+	// Read outside the lock: it is a system call, and on Linux one dump answers
+	// for every interface where asking each by name took a dump apiece.
+	refreshAddrs = refreshAddrs && c.readAddrs()
 
 	c.write(func(s *Stats) {
 		for _, n := range s.Nets {
@@ -48,12 +51,16 @@ func (c *Collector) collectNets() {
 				n.UpHist.Push(n.TxRate)
 			}
 			if refreshAddrs {
-				n.IPv4, n.IPv6 = interfaceAddrs(n.Name)
+				a := c.addrs[n.Name]
+				n.IPv4, n.IPv6 = a.v4, a.v6
 			}
 		}
 		s.ActiveNet = active
 	})
 }
+
+// ifAddr is an interface's first IPv4 address and first global IPv6 address.
+type ifAddr struct{ v4, v6 string }
 
 // interfaceAddrs returns the first IPv4 and IPv6 address of an interface.
 func interfaceAddrs(name string) (ipv4, ipv6 string) {

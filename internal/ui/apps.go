@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unsafe"
+	"time"
 
 	"github.com/diamondburned/gotk4/pkg/core/gioutil"
 	coreglib "github.com/diamondburned/gotk4/pkg/core/glib"
@@ -32,6 +32,13 @@ import (
 type procRow struct {
 	proc process.Proc
 	gen  uint64
+
+	// key is the reading the table is sorted by. It is proc, except while the
+	// order is held (see holding): then the numbers on screen keep updating but
+	// key keeps the values the rows were last sorted on, so the order GTK holds
+	// stays consistent with what it compares — which is what lets a held table
+	// take in new rows without its sort reporting a broken contract.
+	key process.Proc
 
 	// live is false while the row is vacant: its process has exited and the row
 	// is waiting in the free list to be reused for the next one. A vacant row
@@ -70,8 +77,9 @@ type procCell struct {
 	iconOf func(*process.Proc) string
 	icon   string
 	row    *procRow // nil while the cell is unbound (off screen)
-	buf    []byte   // render scratch
-	cur    []byte   // text currently displayed
+	cell   *gtk.ColumnViewCell
+	buf    []byte // render scratch
+	cur    []byte // text currently displayed
 	set    bool
 
 	// dim decides whether this reading is the boring one — a rate of zero, a
@@ -204,11 +212,34 @@ func rateHeat(v float64) int {
 // resortActiveColumn asks the column currently being sorted on to compare its
 // rows again. Nothing happens when the table is unsorted.
 func (v *appsView) resortActiveColumn() {
-	if v.columnView == nil {
+	if v.activeLess == nil {
 		return
 	}
-	// ColumnView.Sorter returns the base type; the concrete object is the
-	// column-view sorter that knows which column is primary.
+	v.updateRanks()
+	v.nudgeSorter()
+}
+
+// nudgeSorter tells GTK the ranks moved, which re-sorts the table.
+func (v *appsView) nudgeSorter() {
+	if so := v.activeSorter; so != nil {
+		v.nudging = true
+		so.Changed(gtk.SorterChangeDifferent) // emits synchronously
+		v.nudging = false
+	}
+}
+
+// updateRanks ranks every row by the column being sorted on, on the rows' sort
+// keys, and hands the result to the C comparison. See rankTable.
+func (v *appsView) updateRanks() {
+	if v.ranks != nil && v.activeLess != nil {
+		v.ranks.set(v.order, v.activeLess)
+	}
+}
+
+// noteSortColumn records which column the table is sorted by. It runs when the
+// sort changes, so the per-tick path never has to ask GTK.
+func (v *appsView) noteSortColumn() {
+	v.activeLess, v.activeSorter = nil, nil
 	cvs, ok := v.columnView.Sorter().Cast().(*gtk.ColumnViewSorter)
 	if !ok || cvs == nil {
 		return
@@ -217,9 +248,69 @@ func (v *appsView) resortActiveColumn() {
 	if col == nil {
 		return
 	}
-	if so := v.sortFor[col]; so != nil {
-		so.Changed(gtk.SorterChangeDifferent)
+	v.activeLess = v.lessFor[col.Native()]
+	v.activeSorter = v.sortFor[col.Native()]
+}
+
+// holding reports whether the table's order is held still.
+//
+// A table sorted by CPU re-sorts every tick, and a row moves out from under the
+// pointer just as it is clicked. It is the complaint Task Manager has had for as
+// long as it has sorted live, and the fix it offers is hidden: hold Ctrl. Here
+// the order holds by itself while the pointer is over the table or a row's menu
+// is open — the numbers keep updating, only the rows stay where they are — and
+// it catches up the moment the pointer leaves.
+//
+// Only while the pointer is actually in use: a pointer left resting on the
+// table would otherwise freeze the order for as long as it stayed there, a
+// table that looks sorted and is not. Three seconds without movement and the
+// order moves again; the next movement holds it.
+func (v *appsView) holding() bool {
+	return v.menuOpen || (v.hover && time.Since(v.lastMotion) < holdGrace)
+}
+
+// holdGrace is how long a still pointer keeps holding the order.
+const holdGrace = 3 * time.Second
+
+// refreshKeys brings every live row's sort key up to its current reading.
+// Only ever followed at once by a full re-sort: a key changed in place under
+// GTK's sorted list is what breaks the order it holds.
+func (v *appsView) refreshKeys() {
+	for _, row := range v.order {
+		if row.live {
+			row.key = row.proc
+		}
 	}
+}
+
+// releaseHold brings the order up to date once nothing is holding it: every
+// row's key catches up with its reading, and the table is sorted on them.
+func (v *appsView) releaseHold() {
+	if v.holding() {
+		return
+	}
+	v.refreshKeys()
+	v.resortActiveColumn()
+}
+
+// takeFree hands out a vacant row for a new process, or nil if there is none.
+//
+// While the order is held, only a row GTK has already been told is hidden will
+// do. A row that retired this tick is still, as far as GTK knows, in its sorted
+// place with the old process's key; giving it the new process's key in that
+// place would break the order the held table depends on. Hidden rows are
+// outside the sorted list, so their key can change freely, and they come back
+// in, correctly placed, when the filter reveals them.
+func (v *appsView) takeFree(held bool) *procRow {
+	for i := len(v.free) - 1; i >= 0; i-- {
+		row := v.free[i]
+		if held && row.shown {
+			continue
+		}
+		v.free = append(v.free[:i], v.free[i+1:]...)
+		return row
+	}
+	return nil
 }
 
 // isIdleReading reports whether a numeric cell shows nothing of interest: no
@@ -254,6 +345,26 @@ type appsView struct {
 	columnView       *gtk.ColumnView
 	popover          *gtk.PopoverMenu
 
+	// hover, lastMotion and menuOpen hold the table's order still; see holding.
+	hover, menuOpen bool
+	lastMotion      time.Time
+
+	// nudging is set while Atlas itself tells the sorter the readings moved,
+	// so the sorter-changed handler can tell that from a header click.
+	nudging bool
+
+	// ranks is the order the C sorters read; activeLess and activeSorter belong
+	// to the column being sorted on (see noteSortColumn).
+	sortModel *gtk.SortListModel
+	vadj      *gtk.Adjustment
+	lastPage  float64
+	lastUpper float64
+
+	ranks        *rankTable
+	activeLess   func(a, b *process.Proc) bool
+	activeSorter *gtk.Sorter
+	lessFor      map[uintptr]func(a, b *process.Proc) bool
+
 	// Stable row registry and current model order (parallel to the model).
 	// Ungrouped rows are keyed by pid, grouped rows by groupKey, so the per-tick
 	// diff never has to build a key string.
@@ -267,7 +378,14 @@ type appsView struct {
 	// nothing tells it the numbers moved. Without a nudge the order is whatever
 	// it was when the rows were first added, which meant a table headed "CPU %"
 	// that never actually put the busy process at the top.
-	sortFor map[*gtk.ColumnViewColumn]*gtk.Sorter
+	//
+	// Keyed by the column's GObject, not by its Go wrapper: gotk4 hands back a
+	// fresh wrapper each time GTK returns a column, so PrimarySortColumn never
+	// matched the one stored here, the lookup always missed, and the table was
+	// never re-sorted after its first sort — a CPU-sorted table showing a 0.0%
+	// process above one at 6.0%, and GTK complaining that the order it was
+	// given was inconsistent whenever rows were added.
+	sortFor map[uintptr]*gtk.Sorter
 
 	// free holds rows whose process has exited. They stay in the list model and
 	// are reused for the next process that appears, so the model's item set only
@@ -330,7 +448,9 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 		byPID:   make(map[int]*procRow),
 		byKey:   make(map[groupKey]*procRow),
 		cells:   make(map[uintptr]*procCell),
-		sortFor: make(map[*gtk.ColumnViewColumn]*gtk.Sorter),
+		sortFor: make(map[uintptr]*gtk.Sorter),
+		lessFor: make(map[uintptr]func(a, b *process.Proc) bool),
+		ranks:   newRankTable(),
 		byLabel: make(map[uintptr]*procCell),
 		groups:  make(map[groupKey]int),
 		apps:    newAppResolver(desktop.Default()),
@@ -391,11 +511,11 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 	v.filter = gtk.NewCustomFilter(v.matches)
 	filterModel := gtk.NewFilterListModel(v.model, &v.filter.Filter)
 
-	// Task Manager's table: columns divided, rows not, and the resource columns
-	// shaded by how busy each reading is. See cellHeatClasses and am-table in
-	// assets/style.css.
+	// Task Manager's table, ruled: dividers between the columns and fainter
+	// lines between the rows, and the resource columns shaded by how busy each
+	// reading is. See cellHeatClasses and am-table in assets/style.css.
 	cv := gtk.NewColumnView(nil)
-	cv.SetShowRowSeparators(false)
+	cv.SetShowRowSeparators(true)
 	cv.SetShowColumnSeparators(true)
 	cv.AddCSSClass("am-table")
 	cv.SetReorderable(false)
@@ -477,17 +597,44 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 	v.applyHidden()
 	v.buildColumnMenus(cv, colBtn)
 
+	// Connected before the sort model exists, so it runs before the model's own
+	// handler: by the time GTK sorts on a newly clicked column, its ranks are
+	// already in place.
+	cv.Sorter().ConnectChanged(func(_ gtk.SorterChange) {
+		if v.nudging {
+			return
+		}
+		v.noteSortColumn()
+		v.updateRanks()
+	})
 	sortModel := gtk.NewSortListModel(filterModel, cv.Sorter())
+	v.sortModel = sortModel
 	cv.SetModel(gtk.NewNoSelection(sortModel))
+	v.nudging = true
 	cv.SortByColumn(cpuCol, gtk.SortDescending)
+	v.nudging = false
+	v.noteSortColumn()
 
 	// When the user changes the sort (clicks a header), jump back to the top so
 	// the new ordering is shown from its start. This is deferred to an idle
 	// callback so it runs *after* the model has finished re-sorting — doing it
 	// synchronously in the signal lands on the pre-sort layout (and GTK's own
 	// post-sort scroll then wins, dumping you at the bottom).
+	//
+	// Only for a sort the user asked for. Atlas's own nudge each tick, which
+	// keeps a live table in order (see resortActiveColumn), arrives here too;
+	// taken for a header click it scrolled the table back to the top every
+	// second.
 	cv.Sorter().ConnectChanged(func(_ gtk.SorterChange) {
+		if v.nudging {
+			return
+		}
 		glib.IdleAdd(func() {
+			// A header clicked while the order is held was sorted on the held
+			// keys, which can be minutes old. Bring them up to date, so the new
+			// column is in order by what the table is showing.
+			v.refreshKeys()
+			v.resortActiveColumn()
 			if v.model.Len() > 0 {
 				v.columnView.ScrollTo(0, nil, gtk.ListScrollNone, nil)
 			}
@@ -499,6 +646,7 @@ func newAppsView(proc *process.Collector, gpuAvail bool, settings *config.Settin
 	v.scroller.SetPolicy(gtk.PolicyAutomatic, gtk.PolicyAutomatic)
 	v.scroller.SetVExpand(true)
 	v.root.Append(v.scroller)
+	v.watchScroll()
 
 	v.buildContextMenu(cv)
 
@@ -540,10 +688,69 @@ func (v *appsView) Update() {
 	}
 	v.applyRows(snap)
 
-	// Refresh only the currently-visible cells (~rows on screen × columns).
+	v.refreshVisible()
+}
+
+// cellMargin is how many rows beyond the ones on screen still get refreshed each
+// tick, so a small scroll never shows a value a second old.
+const cellMargin = 6
+
+// refreshVisible re-renders the cells of the rows on screen and a few beyond.
+//
+// GTK keeps about 200 rows of widgets realised whatever the window shows, so
+// most of the cells are off screen, and rewriting their text makes GTK measure
+// them again for nothing anyone sees. They catch up when they matter: binding a
+// row refreshes it, a scroll or a taller window refreshes the cells now in
+// range (see watchScroll), and the next tick after that covers the rest.
+func (v *appsView) refreshVisible() {
+	lo, hi, ok := v.visibleRange()
 	for _, c := range v.cells {
+		if c.row == nil {
+			continue
+		}
+		if ok {
+			if pos := int(c.cell.Position()); pos < lo || pos > hi {
+				continue
+			}
+		}
 		c.refresh()
 	}
+}
+
+// visibleRange is the span of row positions worth keeping current, from the
+// scroll position and the height of a row. ok is false when it cannot be worked
+// out (nothing laid out yet), which means "refresh everything".
+func (v *appsView) visibleRange() (lo, hi int, ok bool) {
+	if v.vadj == nil || v.sortModel == nil {
+		return 0, 0, false
+	}
+	n := int(v.sortModel.NItems())
+	upper, page := v.vadj.Upper(), v.vadj.PageSize()
+	if n == 0 || upper <= 0 || page <= 0 {
+		return 0, 0, false
+	}
+	rowH := upper / float64(n)
+	top := v.vadj.Value()
+	lo = int(top/rowH) - cellMargin
+	hi = int((top+page)/rowH) + 1 + cellMargin
+	return lo, hi, true
+}
+
+// watchScroll refreshes the cells that a scroll or a resize brings into range.
+func (v *appsView) watchScroll() {
+	v.vadj = v.scroller.VAdjustment()
+	v.vadj.ConnectValueChanged(v.refreshVisible)
+	// A resize changes the page, and a search or a filter changes how tall the
+	// list is. Until the layout that follows, the rows' height is worked out
+	// from the old total over the new count, so the range is wrong for that
+	// moment; refreshing again once the total has caught up puts it right.
+	v.vadj.ConnectChanged(func() {
+		p, u := v.vadj.PageSize(), v.vadj.Upper()
+		if p != v.lastPage || u != v.lastUpper {
+			v.lastPage, v.lastUpper = p, u
+			v.refreshVisible()
+		}
+	})
 }
 
 // applyRows merges one snapshot into the table's stable rows: values are updated
@@ -553,6 +760,10 @@ func (v *appsView) Update() {
 // by the tests, which have neither a collector nor a display.
 func (v *appsView) applyRows(snap []process.Proc) {
 	v.gen++
+	// One decision per tick. holding reads the clock, and a hold that lapsed
+	// part-way through the loops below would leave some rows keyed one way and
+	// some the other.
+	held := v.holding()
 
 	// Three passes, in this order for a reason. Processes that are still here
 	// are stamped first; then rows whose process is gone are retired, which is
@@ -564,6 +775,9 @@ func (v *appsView) applyRows(snap []process.Proc) {
 		p := &snap[i]
 		if row := v.lookup(p); row != nil {
 			row.proc = *p // same process, update values in place
+			if !held {
+				row.key = row.proc
+			}
 			row.gen = v.gen
 			continue
 		}
@@ -582,35 +796,61 @@ func (v *appsView) applyRows(snap []process.Proc) {
 	for _, i := range pending {
 		p := &snap[i]
 		var row *procRow
-		if n := len(v.free); n > 0 {
+		if r := v.takeFree(held); r != nil {
 			// Reuse a row whose process exited: it is already in the model, so
 			// nothing is spliced and nothing is pinned.
-			row, v.free = v.free[n-1], v.free[:n-1]
-			row.proc = *p
+			row = r
+			row.proc, row.key = *p, *p
 			row.live = true
 		} else {
-			row = &procRow{proc: *p, live: true}
+			row = &procRow{proc: *p, key: *p, live: true}
 			v.order = append(v.order, row)
 			toAppend = append(toAppend, row)
 		}
 		row.gen = v.gen
 		v.register(row)
 	}
-	if len(toAppend) > 0 {
-		v.model.Splice(len(v.order)-len(toAppend), 0, toAppend...)
-	}
-	v.appended = toAppend[:0] // keep the buffers for the next tick
-	v.pending = pending[:0]
-
 	// Tell the sorter the readings moved. Every row's values are rewritten in
 	// place each tick and GTK has no way to know, so without this the order
 	// never changes after the rows are first added — a table headed "CPU %"
 	// that never put the busy process at the top.
 	//
+	// Before the new rows are spliced in, not after. GTK places an added row
+	// by comparing it with the rows it already holds, which it takes to be in
+	// order; with their readings already rewritten they no longer were, and
+	// its sort reported "Comparison method violates its general contract" —
+	// ten times in ninety seconds of process churn — and could leave the
+	// table out of order until the next tick.
+	//
 	// Only the column actually being sorted on is nudged. Nudging all ten made
 	// GTK re-sort the whole table once per column per tick, which measured at
 	// half again the page's cost for nine sorts nobody asked for.
-	v.resortActiveColumn()
+	//
+	// Not while the order is held: the keys have not moved, so there is nothing
+	// to re-sort, and not moving is the point.
+	if !held {
+		v.resortActiveColumn()
+	} else if len(pending) > 0 {
+		// New readings only for rows that are new or hidden, which is the one
+		// thing that changes the ranks while the order is held.
+		v.updateRanks()
+	}
+
+	if len(toAppend) > 0 {
+		first := len(v.order) - len(toAppend)
+		v.model.Splice(first, 0, toAppend...)
+		if v.ranks != nil {
+			// The sorter can only find a row's rank once its object carries the
+			// row's index, and the object exists only from the splice. Until
+			// then the new rows sort last; one more pass puts them in place.
+			for i := range toAppend {
+				tagRow(v.model.Item(uint(first+i)), first+i)
+			}
+			v.nudgeSorter()
+		}
+	}
+	v.appended = toAppend[:0] // keep the buffers for the next tick
+	v.pending = pending[:0]
 
 	// The filter decides visibility from row.live, which GTK cannot see change,
 	// so a row appearing or retiring has to be announced — but only if the
@@ -836,7 +1076,7 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 		}
 		cell.SetChild(parts.root)
 		c := &procCell{label: parts.label, render: render, dim: dim, heat: o.heat,
-			image: parts.image, iconOf: o.icon}
+			image: parts.image, iconOf: o.icon, cell: cell}
 		v.cells[cell.Native()] = c
 		v.byLabel[parts.label.Object.Native()] = c
 		if parts.box != nil {
@@ -880,7 +1120,7 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 			// The next cell to take this label starts from a clean procCell,
 			// which believes the label is plain; anything left on it would
 			// stay until that cell's own reading happened to change grade.
-			// A busy process's orange would outlive it on an idle row.
+			// A busy process's deepest shade would outlive it on an idle row.
 			if c.dimmed {
 				c.label.RemoveCSSClass("am-zero")
 				c.dimmed = false
@@ -900,25 +1140,12 @@ func (v *appsView) textColumn(title string, expand bool, xalign float64,
 	col.SetExpand(expand)
 	col.SetResizable(true)
 
-	// This runs on every tick now, because the rows' values change in place and
-	// the sorter has to be told (see applyRows). The Take() wrappers below are
-	// therefore a warm path. Before gotk4 0.4.1 each one kept a reference on its
-	// row for good, which only stayed bounded because rows are recycled rather
-	// than replaced; 0.4.1 releases them.
-	sorter := gtk.NewCustomSorter(func(a, b unsafe.Pointer) int {
-		ra := gioutil.ObjectValue[*procRow](coreglib.Take(a))
-		rb := gioutil.ObjectValue[*procRow](coreglib.Take(b))
-		switch {
-		case less(&ra.proc, &rb.proc):
-			return -1
-		case less(&rb.proc, &ra.proc):
-			return 1
-		default:
-			return 0
-		}
-	})
-	col.SetSorter(&sorter.Sorter)
-	v.sortFor[col] = &sorter.Sorter
+	// The sorters are C: they compare the ranks Go computes each tick (see
+	// rankTable), so sorting makes no calls back into Go.
+	sorter := v.ranks.newSorter()
+	col.SetSorter(sorter)
+	v.sortFor[col.Native()] = sorter
+	v.lessFor[col.Native()] = less
 	return col
 }
 
@@ -996,9 +1223,43 @@ func (v *appsView) attachContextMenu(cv *gtk.ColumnView) {
 		}
 		rect := gdk.NewRectangle(int(x), int(y), 1, 1)
 		v.popover.SetPointingTo(&rect)
+		v.menuOpen = true
 		v.popover.Popup()
 	})
 	cv.AddController(click)
+
+	// The order holds while a menu is open, so the row it was opened on does
+	// not slide away beside it, and while the pointer is over the table. See
+	// holding.
+	v.popover.ConnectClosed(func() {
+		v.menuOpen = false
+		v.releaseHold()
+	})
+	motion := gtk.NewEventControllerMotion()
+	motion.ConnectEnter(func(_, _ float64) { v.hover, v.lastMotion = true, time.Now() })
+	// Motion means the pointer is inside, whether or not the enter was seen —
+	// after a popover or the page coming back, it may not have been.
+	motion.ConnectMotion(func(_, _ float64) { v.hover, v.lastMotion = true, time.Now() })
+	motion.ConnectLeave(func() {
+		v.hover = false
+		v.releaseHold()
+	})
+	cv.AddController(motion)
+	// Scrolling with the wheel moves no pointer, but it is the table in use:
+	// the order should not start moving under someone reading down it.
+	scroll := gtk.NewEventControllerScroll(gtk.EventControllerScrollVertical)
+	scroll.ConnectScroll(func(_, _ float64) bool {
+		v.hover, v.lastMotion = true, time.Now()
+		return false // let the scrolled window scroll
+	})
+	cv.AddController(scroll)
+
+	// Leaving the page by the keyboard sends no leave event; let go then too,
+	// so the table is not still held the next time it is shown.
+	v.root.ConnectUnmap(func() {
+		v.hover, v.menuOpen = false, false
+		v.releaseHold()
+	})
 }
 
 // cellAt finds the cell under a point in the table. Pick returns the deepest

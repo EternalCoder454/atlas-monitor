@@ -106,13 +106,12 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, packs []stri
 	scroll.SetVExpand(true)
 
 	// Settings stays at the foot of the sidebar however far the pages above
-	// scroll, where Task Manager keeps it. It opens a dialog rather than a
-	// page, so its list selects nothing: a highlighted Settings row would
-	// claim to be the page on screen.
+	// scroll, where Task Manager keeps it. It is a page like the others, and
+	// is highlighted like them while it is the one on screen.
 	footer := newSidebarList()
-	footer.SetSelectionMode(gtk.SelectionNone)
 	footer.AddCSSClass("am-sidebar-footer")
-	appendRow(footer, "Settings", "atlas-settings-symbolic", settingsEntry, onSelect)
+	track(settingsEntry, footer, appendRow(footer, "Settings", "atlas-settings-symbolic", settingsEntry, onSelect))
+	sb.lists = append(sb.lists, footer)
 
 	col := gtk.NewBox(gtk.OrientationVertical, 0)
 	col.AddCSSClass("am-sidebar")
@@ -123,8 +122,7 @@ func buildSidebar(disks []*stats.DiskStats, nets []*stats.NetStats, packs []stri
 	return sb
 }
 
-// settingsEntry is the name the sidebar's Settings row reports when chosen.
-// It is not a page; selectView opens the dialog for it instead.
+// settingsEntry is the name of the Settings page, and of its sidebar row.
 const settingsEntry = "settings"
 
 func newSidebarList() *gtk.ListBox {

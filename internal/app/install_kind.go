@@ -225,7 +225,7 @@ var aurHelpers = []string{"paru", "yay", "pikaur", "trizen", "aura"}
 // The answer cannot change while the process runs — the binary is already open
 // and the recorded checkout is read at startup — and finding it out runs two or
 // three package-manager queries, so it is not worth doing twice. It is asked
-// both from the main loop and from the goroutine the Settings dialog checks for
+// both from the main loop and from the goroutine the Settings page checks for
 // updates on, hence the Once: it also gives readers the happens-before they need
 // to see a fully written value.
 func (a *App) install() Install {

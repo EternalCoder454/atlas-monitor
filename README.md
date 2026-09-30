@@ -171,7 +171,7 @@ Where the rest comes from:
   the CPU, **108 MiB** with Vulkan pinned to the one driver the card needs, and
   **144 MiB** letting GTK load everything. So the driver stack costs ~27 MiB
   restricted and ~63 MiB unrestricted, to draw a few line charts once a second.
-  **Settings → App → Rendering** switches to GPU if you prefer smoother resizing
+  **Settings → Performance → Rendering** switches to GPU if you prefer smoother resizing
   on a high-refresh display. Both figures move with the driver — an Intel or
   NVIDIA box will not match an AMD one.
 - **Pages are built the first time you open them.** A machine with three disks
@@ -317,7 +317,7 @@ make clean
 
 ## Updating
 
-Open **Settings** (the gear) → **Application** and use the update button there.
+Open **Settings** and use the **Update** button under **Updates**.
 
 This build has one channel and there is nothing to choose: it always follows the
 `minimal` branch. Pulling `main` or `beta` would rebuild this install as the full
@@ -373,7 +373,7 @@ installs them rather than failing with a page of compiler errors.
   (`/proc/<pid>/fdinfo`, the `drm-engine-*` nanosecond counters), so each
   process's GPU engine load is shown — no root or debugfs required. Known GPU
   clients are sampled every tick with a periodic full rescan to find new ones.
-- **Rendering**: the GSK renderer is chosen from **Settings → App →
+- **Rendering**: the GSK renderer is chosen from **Settings → Performance →
   Rendering** and applied at startup. Setting `GSK_RENDERER` or `GDK_DISABLE`
   in the environment yourself always wins — Atlas never overrides a variable
   you have set.
@@ -409,7 +409,7 @@ Atlas Monitor follows [Semantic Versioning](https://semver.org):
 
 `0.x` releases are pre-1.0 (the app is still evolving); `1.0.0` will mark the
 first release declared stable. The current version lives in [`VERSION`](VERSION)
-and is shown in **Settings → Application → Version**.
+and is shown in **Settings → Updates**.
 
 Tagged releases land on `main` (e.g. `v0.1.0`). Day-to-day development happens on
 the `beta` branch (versioned `X.Y.Z-beta`); once a beta is approved it is merged

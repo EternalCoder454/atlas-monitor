@@ -49,6 +49,33 @@ func NormalizeRefresh(seconds int) int {
 	return DefaultRefreshSeconds
 }
 
+// Window transparency levels, as stored in settings. Off is the default and
+// leaves the window opaque, which is how Atlas has always looked.
+const (
+	TransparencyOff    = "off"
+	TransparencySubtle = "subtle"
+	TransparencyMedium = "medium"
+	TransparencyStrong = "strong"
+)
+
+// TransparencyChoices are the levels offered in Settings, weakest first.
+var TransparencyChoices = []string{
+	TransparencyOff, TransparencySubtle, TransparencyMedium, TransparencyStrong,
+}
+
+// NormalizeTransparency maps anything that is not one of the offered levels onto
+// off, so a hand-edited value can never leave the window half see-through in a
+// way the Settings row cannot show or undo.
+func NormalizeTransparency(level string) string {
+	for _, c := range TransparencyChoices {
+		if level == c {
+			return level
+		}
+	}
+	return TransparencyOff
+}
+
+// Settings is the user-configurable state.
 type Settings struct {
 	TextRendering string `json:"text_rendering"`
 	UpdateCheck   bool   `json:"update_check"`
@@ -59,6 +86,11 @@ type Settings struct {
 	// follows the desktop's light/dark preference, which is what it did before
 	// there was a choice, and is the default for that reason.
 	Theme string `json:"theme"`
+
+	// WindowTransparency is how see-through the window's backgrounds are: one of
+	// the Transparency constants. Text and charts stay solid at every level. It
+	// only takes effect where the display composites; see ui.TransparencyAvailable.
+	WindowTransparency string `json:"window_transparency"`
 
 	// RefreshSeconds is how often every collector samples and the visible page
 	// redraws. It also stretches the graphs: they keep 60 samples either way, so
@@ -99,6 +131,8 @@ func Defaults() Settings {
 		WindowHeight:   DefaultWindowHeight,
 		HiddenColumns:  []string{"Disk Read", "Disk Write"},
 		EnergyAuto:     true,
+
+		WindowTransparency: TransparencyOff,
 	}
 }
 
@@ -155,6 +189,7 @@ func Load() Settings {
 	s.RenderMode = gfx.Normalize(s.RenderMode)
 	s.TextRendering = gfx.NormalizeText(s.TextRendering)
 	s.RefreshSeconds = NormalizeRefresh(s.RefreshSeconds)
+	s.WindowTransparency = NormalizeTransparency(s.WindowTransparency)
 	if s.WindowWidth < MinWindowWidth {
 		s.WindowWidth = DefaultWindowWidth
 	}
