@@ -533,3 +533,17 @@ func TestSaveKeepsWhatItDoesNotKnow(t *testing.T) {
 		t.Errorf("theme = %s, want the new value", m["theme"])
 	}
 }
+
+// TestSaveOverNull: a settings file that is only `null` is replaced, not kept.
+func TestSaveOverNull(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(path()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path(), []byte("null"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(Defaults()); err != nil {
+		t.Fatalf("Save over a null file: %v", err)
+	}
+}

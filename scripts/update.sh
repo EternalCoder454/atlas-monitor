@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Update Atlas Monitor from GitHub, then reinstall. Invoked by the in-app
 # "Update and restart" button as:  update.sh <branch> [prefix]
-#   main = Release (stable), beta = newest features/fixes.
+#   main = Release (stable), beta = newest features/fixes, minimal = no assistant.
 #   prefix defaults to the Makefile's own ($HOME/.local).
 #
 # Safety: a dirty working tree is never touched (it just rebuilds in place), the

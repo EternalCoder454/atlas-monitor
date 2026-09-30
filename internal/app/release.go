@@ -69,9 +69,12 @@ func (a *App) checkRemote(channel string) (UpdateInfo, error) {
 	local := strings.TrimSpace(a.version)
 
 	// Moving between the full application and the minimal one is worth doing
-	// at the same version: it is a different build, not a newer one.
-	if (channel == config.ChannelMinimal) != config.Minimal {
+	// at the same version: it is a different build, not a newer one. Not for a
+	// copy a package manager owns, which has no command that changes build and
+	// would be told the same thing on every check.
+	if (channel == config.ChannelMinimal) != config.Minimal && a.install().Manager == "" {
 		info.Available = true
+		info.Switch = true
 		info.Version = version
 		info.Summary = fmt.Sprintf("Switch to %s (v%s)", name, version)
 		return info, nil

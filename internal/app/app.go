@@ -635,7 +635,9 @@ func (a *App) startUpdateCheck(win *adw.ApplicationWindow) {
 	glib.TimeoutAdd(1500, func() bool {
 		go func() {
 			info, err := a.CheckUpdate(channel)
-			if err != nil || !info.Available {
+			// A switch of channel is applied from Settings, where it was
+			// chosen; asking again at every launch would only nag.
+			if err != nil || !info.Available || info.Switch {
 				return // nothing to say, and nothing worth interrupting for
 			}
 			glib.IdleAdd(func() { a.offerUpdate(win, info) })

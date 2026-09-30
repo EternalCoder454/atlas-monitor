@@ -322,7 +322,11 @@ func merged(s Settings) ([]byte, error) {
 	}
 	out := map[string]json.RawMessage{}
 	if old, err := os.ReadFile(path()); err == nil {
-		_ = json.Unmarshal(old, &out) // a damaged file just has nothing to keep
+		// A damaged file has nothing to keep — and `null` would leave the map
+		// nil, which could not be written to.
+		if json.Unmarshal(old, &out) != nil || out == nil {
+			out = map[string]json.RawMessage{}
+		}
 	}
 	var mine map[string]json.RawMessage
 	if err := json.Unmarshal(fresh, &mine); err != nil {

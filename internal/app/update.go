@@ -1,6 +1,7 @@
 package app
 
 import (
+	"atlas-monitor/internal/config"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -14,6 +15,10 @@ type UpdateInfo struct {
 	Version   string   // "0.8.2", empty when it could not be read
 	Changes   []string // changelog bullets for that version
 	Summary   string   // one line, e.g. "Release update available: a5ffed5 → 762074b"
+	// Switch is set when what is on offer is another channel's build rather
+	// than a newer one of this: the user chose it in Settings, and it is theirs
+	// to apply there. The check at launch leaves it alone.
+	Switch bool
 }
 
 // maxChangelogBullets caps how much the update prompt shows. A release with
@@ -53,11 +58,17 @@ func (a *App) CheckUpdate(channel string) (UpdateInfo, error) {
 	remote, _ := git("rev-parse", "--short", "origin/"+channel)
 	name := channelName(channel)
 
-	// On another branch, the chosen channel is a switch whatever the commits
-	// say. Minimal takes in everything Beta has, so a minimal checkout contains
-	// Beta's newest commit and would otherwise count as up to date on Beta.
-	if branch, _ := git("rev-parse", "--abbrev-ref", "HEAD"); branch != channel {
+	// On another channel's branch, the chosen channel is a switch whatever the
+	// commits say. Minimal takes in everything Beta has, so a minimal checkout
+	// contains Beta's newest commit and would otherwise count as up to date on
+	// Beta. Only from a channel branch, and only with nothing uncommitted: a
+	// developer's own branch or edits are theirs, and update.sh would not move
+	// them anyway, so offering it would only repeat.
+	branch, _ := git("rev-parse", "--abbrev-ref", "HEAD")
+	dirty, _ := git("status", "--porcelain")
+	if branch != channel && config.NormalizeChannel(branch) == branch && dirty == "" {
 		info.Available = true
+		info.Switch = true
 		info.Summary = fmt.Sprintf("Switch to %s: %s → %s", name, local, remote)
 		info.Version, _ = git("show", "origin/"+channel+":VERSION")
 		info.Version = strings.TrimSpace(info.Version)
