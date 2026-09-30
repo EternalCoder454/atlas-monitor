@@ -24,7 +24,7 @@ arch=('x86_64' 'aarch64')
 url="https://github.com/EternalCoder454/atlas-monitor"
 license=('MIT')
 depends=('gtk4' 'libadwaita' 'glib2')
-makedepends=('go>=1.24' 'gcc' 'pkgconf')
+makedepends=('go>=1.24' 'gcc' 'pkgconf' 'gobject-introspection')
 checkdepends=('desktop-file-utils')
 optdepends=(
     'hwdata: names the detected GPU instead of showing its PCI id'

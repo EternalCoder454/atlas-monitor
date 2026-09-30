@@ -30,28 +30,59 @@ what it cannot do and why.
   </tr>
 </table>
 
-## Quick install
+## Install
 
-Fedora (one line — installs build deps, then clones, builds and installs to
-`~/.local`):
-
-```sh
-sudo dnf install -y golang gtk4-devel libadwaita-devel glib2-devel gcc pkgconf-pkg-config git && \
-  git clone https://github.com/EternalCoder454/atlas-monitor.git && \
-  cd atlas-monitor && make install
-```
-
-Arch Linux (builds a real package and hands it to pacman — no clone needed,
-`makepkg` fetches the release itself):
+One line, on any Linux distribution:
 
 ```sh
-sudo pacman -S --needed base-devel go gtk4 libadwaita && \
-  curl -O https://raw.githubusercontent.com/EternalCoder454/atlas-monitor/main/packaging/PKGBUILD && \
-  makepkg -si
+curl -fsSL https://raw.githubusercontent.com/EternalCoder454/atlas-monitor/main/setup.sh | bash
 ```
 
-Then press **Super** and search "Atlas". The first build compiles the gotk4 cgo
-bindings and can take a few minutes; rebuilds are cached and fast.
+It installs what the build needs with your own package manager (it shows you
+the command and asks first), builds Atlas and puts it in your app menu: press
+**Super** and search "Atlas". Nothing is written outside your home folder except
+through your package manager. The first build takes a few minutes.
+
+Atlas is built against GTK 4.22 and libadwaita 1.9. Where your distribution has
+those, it is built with your own packages; where it has older ones, `setup.sh`
+builds and runs it in a small Fedora container instead, through
+[distrobox](https://distrobox.it). The container shares your home, your
+processes and your desktop, so Atlas still sees the whole machine, and it opens
+from the app menu like anything else.
+
+| Distribution | How `setup.sh` installs Atlas |
+| --- | --- |
+| Fedora 44 and later | Natively (dnf) |
+| Arch Linux, Manjaro, EndeavourOS, CachyOS | Natively (pacman), or with the [PKGBUILD](#arch-linux) |
+| openSUSE Tumbleweed | Natively (zypper) |
+| Ubuntu 26.04 and later, Linux Mint 23 and later | Natively (apt) |
+| Debian testing (forky) and unstable | Natively (apt) |
+| Void, Alpine, Solus and others | Natively (xbps, apk, eopkg) if their GTK is 4.22 or newer, otherwise in a container |
+| Debian 13, Ubuntu 24.04 and 25.x, Linux Mint 22, Pop!_OS, elementary OS | In a Fedora container (their GTK is older than 4.22) |
+
+Options go after `bash -s --`: `--beta` follows the Beta channel, `--minimal`
+installs the build without the assistant, `--yes` answers yes to every question,
+and `--container` or `--native` choose the route yourself.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/EternalCoder454/atlas-monitor/main/setup.sh | bash -s -- --beta
+```
+
+**Update:** the **Update** button in Settings, or
+
+```sh
+bash ~/.local/share/atlas-monitor/setup.sh update
+```
+
+**Uninstall:** close Atlas first, then
+
+```sh
+bash ~/.local/share/atlas-monitor/setup.sh uninstall            # keeps your settings
+bash ~/.local/share/atlas-monitor/setup.sh uninstall --purge    # removes them too
+```
+
+`bash setup.sh check` says what your system has, what it is missing and which
+route it would take, without changing anything.
 
 ## Features
 
@@ -201,28 +232,42 @@ Where the rest comes from:
   **refresh interval** is configurable (1–10 seconds); a slower rate costs less
   CPU and stretches the same 60 samples over a longer window.
 
-## Install without building
+## Other ways to install
 
-Each release carries a prebuilt tarball. It needs the GTK4 runtime libraries
-(not the `-devel` packages) and no Go toolchain:
+### Prebuilt tarball
+
+Each release carries a prebuilt Linux tarball. It needs only the GTK 4.22 and
+libadwaita 1.9 runtime libraries, not the `-devel` packages, and no Go toolchain:
 
 ```sh
-sudo dnf install gtk4 libadwaita        # Debian: libgtk-4-1 libadwaita-1-0
+sudo dnf install gtk4 libadwaita
 tar xf atlas-monitor-*-linux-x86_64-fedora*.tar.gz
 cd atlas-monitor-* && ./install.sh      # --system for /usr/local, --uninstall to remove
 ```
 
-The binary is dynamically linked, so the tarball is built per Fedora release —
-pick the one matching yours, or build from source below. `install.sh` checks
-what the dynamic linker cannot resolve and says so before installing anything.
+It is built on Fedora, so it runs where the libraries are at least as new:
+Fedora 44, Arch, openSUSE Tumbleweed, Ubuntu 26.04. `install.sh` asks the
+dynamic linker whether this system can run it, and says so before installing
+anything. On an older distribution, use `setup.sh` above.
 
-Arch Linux has a [`PKGBUILD`](packaging/PKGBUILD). `makepkg -si` from
-`packaging/` builds the released version and installs it through pacman, so
-`pacman -R atlas-monitor` removes it cleanly and updates arrive the same way as
-every other package. Atlas works out that pacman owns it — it asks pacman who
-owns its own binary — and its Update button then checks for a newer version and
-hands over the command that installs it, rather than writing over `/usr/bin`
-behind pacman's back. See [Updating](#updating).
+### Arch Linux
+
+Arch has a [`PKGBUILD`](packaging/PKGBUILD). It builds the released version and
+installs it through pacman, so `pacman -R atlas-monitor` removes it cleanly and
+updates arrive the same way as every other package:
+
+```sh
+sudo pacman -S --needed base-devel go gtk4 libadwaita && \
+  curl -O https://raw.githubusercontent.com/EternalCoder454/atlas-monitor/main/packaging/PKGBUILD && \
+  makepkg -si
+```
+
+Atlas works out that pacman owns it (it asks pacman who owns its own binary),
+and its Update button then checks for a newer version and hands over the command
+that installs it, rather than writing over `/usr/bin` behind pacman's back. See
+[Updating](#updating).
+
+### RPM
 
 An RPM spec lives in [`packaging/`](packaging/atlas-monitor.spec) for COPR or a
 local `rpmbuild`.
@@ -285,20 +330,19 @@ does — both call the same script.
 
 ## Build dependencies
 
-Fedora 40+/44:
+`setup.sh` installs these for you. To do it by hand you need Go 1.24 or newer, a
+C compiler, `pkg-config`, `git`, `make`, and the development files for GTK 4.22+
+and libadwaita 1.9+:
 
 ```sh
-sudo dnf install golang gtk4-devel libadwaita-devel glib2-devel gcc pkgconf-pkg-config
+sudo dnf install golang gtk4-devel libadwaita-devel gcc pkgconf-pkg-config git make   # Fedora
+sudo pacman -S --needed go gtk4 libadwaita base-devel git pkgconf                     # Arch and family
+sudo apt install golang-go libgtk-4-dev libadwaita-1-dev build-essential pkg-config git # Debian, Ubuntu, Mint
+sudo zypper install go gtk4-devel libadwaita-devel gcc pkg-config git make             # openSUSE
 ```
 
-Arch Linux:
-
-```sh
-sudo pacman -S --needed base-devel go gtk4 libadwaita
-```
-
-You need Go 1.24 or newer. The first build compiles the gotk4 cgo bindings and
-can take several minutes; subsequent builds are cached and fast.
+The first build compiles the gotk4 cgo bindings and can take several minutes;
+later builds are cached and fast.
 
 ## Build & install
 
@@ -371,7 +415,8 @@ out for itself:
 
 | Installed by | What the button does |
 | --- | --- |
-| `make install` (a source checkout) | Pulls the channel, rebuilds, and relaunches into the new version. |
+| `setup.sh` or `make install` (a source checkout) | Pulls the channel, rebuilds, and relaunches into the new version. |
+| `setup.sh` in a container, on an older distribution | The same, inside the container. |
 | A release tarball or `install.sh` | Fetches the source once, then behaves like a checkout from then on. |
 | pacman, apt, dnf or zypper | Checks for a newer version and gives you the one command that installs it, with a button to copy it and another to run it in a terminal. |
 

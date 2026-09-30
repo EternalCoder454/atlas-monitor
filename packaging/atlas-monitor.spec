@@ -18,13 +18,14 @@ Source0:        %{url}/archive/v%{version}/%{name}-%{version}.tar.gz
 
 BuildRequires:  golang >= 1.24
 BuildRequires:  gcc
-BuildRequires:  pkgconfig(gtk4)
-BuildRequires:  pkgconfig(libadwaita-1) >= 1.6
+BuildRequires:  pkgconfig(gtk4) >= 4.22
+BuildRequires:  pkgconfig(libadwaita-1) >= 1.9
 BuildRequires:  pkgconfig(glib-2.0)
+BuildRequires:  pkgconfig(gobject-introspection-1.0)
 BuildRequires:  desktop-file-utils
 
-Requires:       gtk4
-Requires:       libadwaita >= 1.6
+Requires:       gtk4 >= 4.22
+Requires:       libadwaita >= 1.9
 # hwdata supplies /usr/share/hwdata/pci.ids, which names the detected GPU.
 Recommends:     hwdata
 # The optional assistant talks to a local Ollama server; it is not packaged here.

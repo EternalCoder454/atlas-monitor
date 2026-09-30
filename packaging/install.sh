@@ -62,7 +62,21 @@ if command -v ldd >/dev/null 2>&1; then
         echo "On Debian:  sudo apt install libgtk-4-1 libadwaita-1-0" >&2
         echo >&2
         echo "If they are installed and still listed, this tarball was built" >&2
-        echo "against a newer distribution — build from source with 'make install'." >&2
+        echo "against a newer distribution — use setup.sh instead, which builds" >&2
+        echo "Atlas for this system (see the README)." >&2
+        exit 1
+    fi
+    # Present but too old is the commoner case: Atlas needs GTK 4.22 and
+    # libadwaita 1.9, and Debian 13 or Ubuntu 24.04 have both libraries at older
+    # versions. The loader then finds every library and fails at launch, on a
+    # function the older one lacks. -r resolves every symbol now, so that shows.
+    undefined="$(LC_ALL=C ldd -r "$here/$BINARY" 2>&1 | grep -c 'undefined symbol' || true)"
+    if [ "${undefined:-0}" -gt 0 ]; then
+        echo "Your GTK or libadwaita is older than this build needs (GTK 4.22," >&2
+        echo "libadwaita 1.9): $undefined of the functions it uses are missing." >&2
+        echo "setup.sh installs Atlas on this system anyway, in a small container" >&2
+        echo "if it has to:" >&2
+        echo "  curl -fsSL https://raw.githubusercontent.com/EternalCoder454/atlas-monitor/main/setup.sh | bash" >&2
         exit 1
     fi
 fi
