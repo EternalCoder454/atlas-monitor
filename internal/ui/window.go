@@ -97,8 +97,14 @@ type Window struct {
 	netStable  []string // base order (collector order)
 	netCurrent []string // currently displayed order
 
-	// onSettings opens the settings dialog; see SetSettingsHandler.
-	onSettings func()
+	// settingsHooks makes what the Settings page needs from the application;
+	// see SetSettingsHooks. settingsPage is the page once it has been built.
+	settingsHooks func() SettingsHooks
+	settingsPage  *settingsView
+
+	// lastPage is the page Atlas reopens on: the one on screen, or while
+	// Settings is showing, the one before it. See LastPage.
+	lastPage string
 }
 
 // NewWindow creates the content controller around a started collector.
@@ -188,6 +194,14 @@ func (w *Window) Build() gtk.Widgetter {
 	w.addView("energy", func() View { return newEnergyView(w.proc, w.easer, w.easeErr, w.settings) })
 	w.addView("startup", func() View { return newStartupView() })
 	w.addView("services", func() View { return newServicesView() })
+	w.addView(settingsEntry, func() View {
+		var h SettingsHooks
+		if w.settingsHooks != nil {
+			h = w.settingsHooks()
+		}
+		w.settingsPage = newSettingsView(w.settings, h)
+		return w.settingsPage
+	})
 
 	w.netStable = make([]string, len(nets))
 	for i, n := range nets {
@@ -262,10 +276,12 @@ func (w *Window) Build() gtk.Widgetter {
 		adw.BreakpointConditionMaxWidth, narrowWidth, adw.LengthUnitPx))
 	bp.ConnectApply(func() {
 		split.SetCollapsed(true)
+		split.AddCSSClass("am-collapsed") // the overlaid sidebar stays solid under glass
 		w.menuBtn.SetVisible(true)
 	})
 	bp.ConnectUnapply(func() {
 		split.SetCollapsed(false)
+		split.RemoveCSSClass("am-collapsed")
 		split.SetShowSidebar(true)
 		w.menuBtn.SetVisible(false)
 	})
@@ -413,13 +429,27 @@ func (w *Window) refreshInterval() time.Duration {
 	return time.Duration(config.NormalizeRefresh(w.settings.RefreshSeconds)) * time.Second
 }
 
-// SetSettingsHandler is what the sidebar's Settings entry does. The window does
-// not own the settings dialog — the application does, since it applies what is
-// saved — so it is handed the action rather than building the dialog itself.
-func (w *Window) SetSettingsHandler(f func()) { w.onSettings = f }
+// SetSettingsHooks hands the window what makes the Settings page's hooks: the
+// application applies what is saved and does the updating. A func, called when
+// the page is first opened, because working out how Atlas was installed can ask
+// the package manager, and a launch that never opens Settings should not wait
+// for that. It has to come before Build: Build can open straight onto Settings.
+func (w *Window) SetSettingsHooks(f func() SettingsHooks) { w.settingsHooks = f }
 
-// ActiveView is the page currently on screen, saved so Atlas reopens on it.
-func (w *Window) ActiveView() string { return w.active }
+// FlushSettings applies anything typed on the Settings page and not yet
+// confirmed. The page does this itself when it is left, but closing the window
+// saves the settings before the page is taken down, so the application calls
+// this first.
+func (w *Window) FlushSettings() {
+	if w.settingsPage != nil {
+		w.settingsPage.commit()
+	}
+}
+
+// LastPage is the page to reopen on next time: the one on screen, unless that
+// is Settings, which is somewhere to change something and go back from rather
+// than a page to come back to. Then it is the page before it.
+func (w *Window) LastPage() string { return w.lastPage }
 
 // MenuButton is the sidebar toggle, for the window's header bar. It shows
 // itself only when the sidebar has collapsed into an overlay.
@@ -452,18 +482,6 @@ func (w *Window) addView(name string, build func() View) {
 }
 
 func (w *Window) selectView(name string) {
-	// Settings is an entry in the sidebar but a dialog, not a page. Chosen
-	// from the overlay sidebar of a narrow window, the overlay closes first,
-	// as it does for a page, rather than staying open behind the dialog.
-	if name == settingsEntry {
-		if w.split != nil && w.split.Collapsed() {
-			w.split.SetShowSidebar(false)
-		}
-		if w.onSettings != nil {
-			w.onSettings()
-		}
-		return
-	}
 	lv := w.views[name]
 	if lv == nil {
 		return
@@ -473,6 +491,9 @@ func (w *Window) selectView(name string) {
 		w.stack.AddNamed(lv.view.Root(), name)
 	}
 	w.active = name
+	if name != settingsEntry {
+		w.lastPage = name
+	}
 	w.stack.SetVisibleChildName(name)
 	// Typing goes to the search on the page that is showing, never to one
 	// on a page that is not.

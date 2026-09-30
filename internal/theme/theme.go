@@ -422,13 +422,17 @@ func IsFollowing(id string) bool {
 	return !ok
 }
 
-// CSS is the colour overrides for this theme, or "" for the two that are
-// libadwaita's own palette.
-func (t Theme) CSS() string {
+// CSS is the colour overrides for this theme, and the colours its tables and
+// lists draw with (see tableCSS). The two themes that are libadwaita's own
+// palette override no colours, but still carry those, worked out from
+// libadwaita's. accent is the desktop's accent colour, used by a theme that
+// does not set its own: libadwaita's Light and Dark follow the desktop's.
+func (t Theme) CSS(accent string) string {
+	table := t.tableCSS(accent)
 	if len(t.colors) == 0 {
-		return ""
+		return table
 	}
-	return colorCSS(t.colors)
+	return colorCSS(t.colors) + table
 }
 
 // colorCSS writes one set of overrides.

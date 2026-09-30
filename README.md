@@ -104,7 +104,7 @@ bindings and can take a few minutes; rebuilds are cached and fast.
   answers questions about your machine — specs, the top CPU/memory processes,
   failed services — from a live system snapshot. A dropdown beside the message
   box offers editable **quick prompts** (Detailed Overview, Top Processes, Quick
-  Check). Toggle it off any time in **Settings** (the gear icon).
+  Check). Toggle it off any time in **Settings** (the last entry in the sidebar).
 
 ## Performance
 
@@ -169,7 +169,7 @@ Where the rest comes from:
   the CPU, **108 MiB** with Vulkan pinned to the one driver the card needs, and
   **144 MiB** letting GTK load everything. So the driver stack costs ~27 MiB
   restricted and ~63 MiB unrestricted, to draw a few line charts once a second.
-  **Settings → App → Rendering** switches to GPU if you prefer smoother resizing
+  **Settings → Performance → Rendering** switches to GPU if you prefer smoother resizing
   on a high-refresh display. Both figures move with the driver — an Intel or
   NVIDIA box will not match an AMD one.
 - **Pages are built the first time you open them.** A machine with three disks
@@ -320,8 +320,8 @@ make build-lean     # or: make install-lean
 ```
 
 Builds with `-tags noai`, which drops the Assistant page, the Ollama client and
-the Markdown renderer from the binary. The Settings dialog loses its assistant
-sections and the sidebar loses the Assistant row; everything else is identical.
+the Markdown renderer from the binary. The Settings page loses its Assistant
+section and the sidebar loses the Assistant row; everything else is identical.
 An in-app update remembers which flavour you installed and rebuilds the same
 one.
 
@@ -353,14 +353,14 @@ ollama pull qwen3.5:9b
 If you open the Assistant before this is done, Atlas shows an in-app panel with
 the exact commands (and a **Copy** button) and clears it automatically the
 moment Ollama is ready — no need to restart. To use a different model, set it in
-**Settings** (the gear) and run `make setup-ai <model>` (or `ollama pull
+**Settings** and run `make setup-ai <model>` (or `ollama pull
 <model>`); GPU acceleration is detected automatically by Ollama's installer. You
 can turn the assistant off entirely in Settings, which hides the view and stops
 all AI activity.
 
 ## Updating
 
-Open **Settings** (the gear) → **Application** and use the update button there.
+Open **Settings** and use the **Update** button under **Updates**.
 There are two channels:
 
 - **Release (main)** — the stable `main` branch (the default).
@@ -415,7 +415,7 @@ installs them rather than failing with a page of compiler errors.
   (`/proc/<pid>/fdinfo`, the `drm-engine-*` nanosecond counters), so each
   process's GPU engine load is shown — no root or debugfs required. Known GPU
   clients are sampled every tick with a periodic full rescan to find new ones.
-- **Rendering**: the GSK renderer is chosen from **Settings → App →
+- **Rendering**: the GSK renderer is chosen from **Settings → Performance →
   Rendering** and applied at startup. Setting `GSK_RENDERER` or `GDK_DISABLE`
   in the environment yourself always wins — Atlas never overrides a variable
   you have set.
@@ -428,7 +428,7 @@ installs them rather than failing with a page of compiler errors.
   assistant](#setting-up-the-assistant) for the one-command install. Each
   question sends a compact live snapshot — specs, top processes, services — as
   the system prompt; the model runs entirely on your machine. Configure the
-  model/endpoint or turn it off completely via the gear → **Settings**. With AI
+  model/endpoint or turn it off completely in **Settings**. With AI
   disabled, no network calls are made and the Assistant entry is hidden.
   Settings persist to `~/.config/atlas-monitor/settings.json`.
 
@@ -456,7 +456,7 @@ Atlas Monitor follows [Semantic Versioning](https://semver.org):
 
 `0.x` releases are pre-1.0 (the app is still evolving); `1.0.0` will mark the
 first release declared stable. The current version lives in [`VERSION`](VERSION)
-and is shown in **Settings → Application → Version**.
+and is shown in **Settings → Updates**.
 
 Tagged releases land on `main` (e.g. `v0.1.0`). Day-to-day development happens on
 the `beta` branch (versioned `X.Y.Z-beta`); once a beta is approved it is merged

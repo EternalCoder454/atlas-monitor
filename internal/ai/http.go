@@ -296,7 +296,7 @@ func timeoutContext(ctx context.Context, d time.Duration) (context.Context, cont
 // the network in the clear, and the person deserves to be told.
 //
 // Anything that is not recognisably a loopback address counts as remote. No name
-// is resolved: this is called from the Settings dialog on the UI thread, and a
+// is resolved: this is called from the Settings page on the UI thread, and a
 // DNS lookup there could block the interface.
 func IsLocal(raw string) bool {
 	ep, err := parseEndpoint(raw)

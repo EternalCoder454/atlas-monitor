@@ -97,6 +97,9 @@ type NetStats struct {
 	// rather than a name test because the two platforms do not agree on the
 	// name: Linux calls it "lo", Windows "Loopback Pseudo-Interface 1".
 	loopback bool
+	// index is the kernel's interface index, which is what a netlink address
+	// dump is keyed by. Only Linux fills it in.
+	index int
 }
 
 // Label is the friendly interface name, falling back to the kernel name.
@@ -218,6 +221,7 @@ type Collector struct {
 	diskSpace   [][2]uint64  // used/free per disk, measured outside the lock
 	diskTick    int
 	netCounters map[string][2]uint64
+	addrs       map[string]ifAddr // last address refresh, by interface name
 }
 
 // New creates a Collector. gpuReader may report Available()==false.
@@ -230,6 +234,7 @@ func New(gpuReader *gpu.Reader) *Collector {
 		stopCh:      make(chan struct{}),
 		diskStats:   make(map[string][2]uint64),
 		netCounters: make(map[string][2]uint64),
+		addrs:       make(map[string]ifAddr),
 	}
 	c.interval.Store(int64(time.Second))
 	return c

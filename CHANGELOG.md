@@ -3,6 +3,16 @@
 Written for the people who use Atlas Monitor rather than the people who build
 it. One short line per change, no jargon — this is what the update prompt shows.
 
+## 0.13.0
+
+- Settings is one page in the window, like Task Manager's: every setting shown, nothing to expand
+- Text in Settings saves as you go: press Enter or move on, no tick button to find
+- Optional window transparency lets the desktop show through (not on Windows)
+- Lines between the rows of Apps, Services and Startup, as strong as each theme needs
+- The Apps list holds still while you point at it, and sorts by the column you chose
+- Dialogs follow the window's transparency, and the title bar shows one icon, not two
+- Atlas does much less work to draw itself each second, most of all on Settings and Apps
+
 ## 0.12.0
 
 - A new look, modelled on the Windows 11 Task Manager, with Settings at the

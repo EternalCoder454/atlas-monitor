@@ -172,3 +172,19 @@ func routeLookup() string {
 	}
 	return ""
 }
+
+// readAddrs looks up every interface's addresses into c.addrs. It reports false
+// when there is nothing to apply.
+func (c *Collector) readAddrs() bool {
+	clear(c.addrs)
+	c.Read(func(s *Stats) {
+		for _, n := range s.Nets {
+			c.addrs[n.Name] = ifAddr{}
+		}
+	})
+	for name := range c.addrs {
+		v4, v6 := interfaceAddrs(name)
+		c.addrs[name] = ifAddr{v4, v6}
+	}
+	return true
+}
