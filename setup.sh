@@ -238,6 +238,12 @@ build_and_install() {
 	fi
 	say "Building Atlas Monitor (the first build takes a few minutes)"
 	make -C "$SRC" install PREFIX="$PREFIX"
+	# Settings names the channel this copy follows; after installing another
+	# one it has to say so, or it would offer to switch back.
+	local conf="${XDG_CONFIG_HOME:-$HOME/.config}/atlas-monitor/settings.json"
+	if [ -f "$conf" ]; then
+		sed -i "s/\"update_channel\": *\"[a-z]*\"/\"update_channel\": \"$want\"/" "$conf"
+	fi
 }
 
 native_install() {
