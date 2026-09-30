@@ -10,11 +10,32 @@
    its top-left corner rounded where the three meet and a hairline along the
    two edges that face the frame. Every colour is still the theme's own —
    @sidebar_bg_color for the frame, @window_bg_color for the page — so each
-   theme keeps its palette and gains the layering. */
+   theme keeps its palette and gains the layering.
+
+   The frame's colour is painted once, as the window's own background, and
+   nothing above it paints it again. It used to be painted four times over —
+   by the title bar, the split view, the sidebar's pane and the sidebar — with
+   the window background under all of them. Every layer is a fill of its whole
+   area on every frame, and on Wayland the software renderer repaints the whole
+   window each time anything changes (GTK's damage tracking for its cairo
+   buffers never shrinks once two buffers alternate), so each layer was paid
+   once a second whatever the page was doing.
+
+   The window no longer clips what it holds to its rounded corners either (see
+   the SetOverflow call in internal/app/app.go): the surfaces that reach a
+   corner are rounded themselves, which costs one small rounded shape each
+   instead of a curved clip over every shape in the window. The window's own
+   background has the corners; the page takes the bottom-right one. The radius
+   is libadwaita's, which is 0 when the window is maximised, tiled or full
+   screen. */
+
+window.am-main {
+  background-color: @sidebar_bg_color;
+}
 
 toolbarview.am-frame > .top-bar,
 toolbarview.am-frame > .top-bar:backdrop {
-  background-color: @sidebar_bg_color;
+  background-color: transparent;
   box-shadow: none;
 }
 
@@ -37,8 +58,10 @@ toolbarview.am-frame > .top-bar:backdrop {
   color: alpha(currentColor, 0.5);
 }
 
-.am-shell {
-  background-color: @sidebar_bg_color;
+.am-shell,
+.am-shell .sidebar-pane,
+.am-shell .sidebar-pane:backdrop {
+  background-color: transparent;
 }
 
 /* One colour on all four sides, with only the top and left given width: a
@@ -50,11 +73,28 @@ toolbarview.am-frame > .top-bar:backdrop {
   border-color: alpha(@window_fg_color, 0.07);
   border-width: 1px 0 0 1px;
   border-top-left-radius: 10px;
+  border-bottom-right-radius: var(--window-radius);
+}
+
+/* A dialog's shade covers the whole window, and a sheet along the bottom of a
+   narrow one meets its bottom corners: both take the window's rounding, now
+   the window does not round them. */
+window.am-main floating-sheet > dimming,
+window.am-main bottom-sheet > dimming {
+  border-radius: var(--window-radius);
+}
+
+window.am-main bottom-sheet > sheet,
+window.am-main bottom-sheet > sheet > outline {
+  border-bottom-left-radius: var(--window-radius);
+  border-bottom-right-radius: var(--window-radius);
 }
 
 /* ---- Sidebar -------------------------------------------------------- */
 
-.am-sidebar {
+/* The sidebar lets the frame show through, except in a narrow window, where it
+   slides over the page and has to hide it. */
+.am-shell.am-collapsed .am-sidebar {
   background-color: @sidebar_bg_color;
 }
 
@@ -450,6 +490,19 @@ window.am-glass.background {
 
 window.am-glass .am-sidebar {
   background-color: transparent;
+}
+
+/* Under glass the frame's colour is not the window's background but the title
+   bar's and the split view's, each at its own opacity, so those two take the
+   window's corners between them. */
+window.am-glass toolbarview.am-frame > .top-bar {
+  border-top-left-radius: var(--window-radius);
+  border-top-right-radius: var(--window-radius);
+}
+
+window.am-glass .am-shell {
+  border-bottom-left-radius: var(--window-radius);
+  border-bottom-right-radius: var(--window-radius);
 }
 
 /* In a narrow window the sidebar slides over the page instead of beside it, and

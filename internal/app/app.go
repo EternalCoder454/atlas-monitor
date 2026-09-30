@@ -143,6 +143,20 @@ func (a *App) activate() {
 	// The window's own icon, set rather than left to GTK to guess, so the title
 	// bar's icon slot (see brandBox) and the taskbar show it wherever they ask.
 	win.SetIconName(AppID)
+	// The window does not clip what it holds to its rounded corners; the few
+	// surfaces that reach a corner are rounded themselves instead. See "The
+	// frame" in assets/style.css.
+	//
+	// A clip round the whole window is nearly free on the GPU and the most
+	// expensive thing on the default software renderer. There cairo clips every
+	// shape drawn inside it against the rounded outline, re-flattening the corner
+	// curves each time, and it has to do so for all of the window on every
+	// frame: on Wayland GTK's software renderer repaints the whole window each
+	// time anything changes, even one figure in the sidebar. Measured on a
+	// captured frame, the clip was a third of the cost of drawing the Apps page
+	// and more than half of the CPU page's.
+	win.SetOverflow(gtk.OverflowVisible)
+	win.AddCSSClass("am-main")
 	win.SetDefaultSize(a.settings.WindowWidth, a.settings.WindowHeight)
 	win.SetSizeRequest(config.MinWindowWidth, config.MinWindowHeight)
 	if a.settings.WindowMaximized {
