@@ -5,10 +5,13 @@ package stats
 
 import (
 	"bytes"
+	"encoding/binary"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"atlas-monitor/internal/sysfs"
 )
@@ -37,6 +40,7 @@ func (c *Collector) discoverNets() {
 		n.Wireless = isWireless(name)
 		n.loopback = name == "lo"
 		n.IPv4, n.IPv6 = interfaceAddrs(name)
+		n.index, _ = strconv.Atoi(sysfs.ReadString(filepath.Join("/sys/class/net", name, "ifindex")))
 		nets = append(nets, n)
 	}
 	// Stable order: loopback last, otherwise alphabetical.
@@ -152,4 +156,98 @@ func isWireless(name string) bool {
 		}
 	}
 	return false
+}
+
+// Netlink message layout, for reading the address table by hand.
+const (
+	nlHdrLen   = 16 // struct nlmsghdr
+	ifAddrLen  = 8  // struct ifaddrmsg
+	rtAttrLen  = 4  // struct rtattr
+	nlmsgDone  = 3
+	rtmNewAddr = 20
+	ifaAddress = 1
+	ifaLocal   = 2
+)
+
+// readAddrs fills c.addrs from one RTM_GETADDR dump, which answers for every
+// interface. Go's net package would dump the whole link table and then the
+// whole address table again for each interface it is asked about; with a
+// handful of interfaces that was most of what a quiet Atlas allocated. It
+// reports false if the dump failed, so the addresses shown stay as they were.
+func (c *Collector) readAddrs() bool {
+	rib, err := syscall.NetlinkRIB(syscall.RTM_GETADDR, syscall.AF_UNSPEC)
+	if err != nil {
+		return false
+	}
+	clear(c.addrs)
+	c.Read(func(s *Stats) { parseAddrDump(rib, s.Nets, c.addrs) })
+	return true
+}
+
+// parseAddrDump walks a netlink address dump and records, for each interface in
+// nets, its first IPv4 address and its first IPv6 address that is not
+// link-local, which is what interfaceAddrs reports.
+func parseAddrDump(rib []byte, nets []*NetStats, out map[string]ifAddr) {
+	le := binary.NativeEndian
+	for len(rib) >= nlHdrLen {
+		msgLen := int(le.Uint32(rib))
+		if msgLen < nlHdrLen || msgLen > len(rib) {
+			return
+		}
+		typ := le.Uint16(rib[4:])
+		body := rib[nlHdrLen:msgLen]
+		if adv := (msgLen + 3) &^ 3; adv < len(rib) {
+			rib = rib[adv:]
+		} else {
+			rib = nil
+		}
+		if typ == nlmsgDone {
+			return
+		}
+		if typ != rtmNewAddr || len(body) < ifAddrLen {
+			continue
+		}
+		family, index := body[0], int(le.Uint32(body[4:]))
+		var name string
+		for _, n := range nets {
+			if n.index == index {
+				name = n.Name
+				break
+			}
+		}
+		if name == "" {
+			continue
+		}
+		var addr []byte
+		attrs := body[ifAddrLen:]
+		for len(attrs) >= rtAttrLen {
+			l := int(le.Uint16(attrs))
+			if l < rtAttrLen || l > len(attrs) {
+				break
+			}
+			kind := le.Uint16(attrs[2:])
+			// A point-to-point link puts its own address in LOCAL and the peer's
+			// in ADDRESS; on anything else they are the same.
+			if kind == ifaLocal || (kind == ifaAddress && addr == nil) {
+				addr = attrs[rtAttrLen:l]
+			}
+			next := (l + 3) &^ 3
+			if next >= len(attrs) {
+				break
+			}
+			attrs = attrs[next:]
+		}
+		a := out[name]
+		switch {
+		case family == syscall.AF_INET && len(addr) == 4:
+			if a.v4 == "" {
+				a.v4 = netip.AddrFrom4([4]byte(addr)).String()
+			}
+		case family == syscall.AF_INET6 && len(addr) == 16:
+			if ip := netip.AddrFrom16([16]byte(addr)); a.v6 == "" && !ip.IsLinkLocalUnicast() {
+				a.v6 = ip.String()
+			}
+		}
+		out[name] = a
+	}
 }
