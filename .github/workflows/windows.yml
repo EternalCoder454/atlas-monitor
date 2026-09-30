@@ -38,6 +38,10 @@ jobs:
   build:
     name: exe
     runs-on: windows-latest
+    # About twice the slowest successful run, a cold compile of gotk4 (40 minutes).
+    # "Start it" launches the app, and a hang there would otherwise hold the
+    # runner for GitHub's default of six hours.
+    timeout-minutes: 90
     defaults:
       run:
         shell: msys2 {0}

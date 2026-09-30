@@ -17,6 +17,9 @@ jobs:
   check:
     name: build · vet · test
     runs-on: ubuntu-latest
+    # About twice the slowest successful run, a cold compile of gotk4 (31 minutes),
+    # so a hung test stops within the hour instead of at GitHub's six.
+    timeout-minutes: 60
     # Fedora rather than the bare Ubuntu runner: Atlas needs libadwaita >= 1.6
     # for AdwButtonRow, which Ubuntu 24.04 does not ship, and Fedora is what the
     # project targets.
@@ -137,6 +140,7 @@ jobs:
   race:
     name: race detector
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     container: fedora:latest
     steps:
       # Split in two so the package cache can be restored between them: the
