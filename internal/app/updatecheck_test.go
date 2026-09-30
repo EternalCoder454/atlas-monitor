@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"atlas-monitor/internal/config"
 )
 
 // git runs a git command in dir, failing the test if it errors.
@@ -27,7 +29,8 @@ func gitIn(t *testing.T, dir string, args ...string) string {
 func newUpstream(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	gitIn(t, dir, "init", "-q", "-b", "main")
+	// On this build's own channel, so checking it is an update and not a switch.
+	gitIn(t, dir, "init", "-q", "-b", config.DefaultChannel)
 
 	write := func(name, body string) {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
@@ -90,7 +93,7 @@ func TestCheckUpdateFindsTheNewerRelease(t *testing.T) {
 	pointSourceAt(t, checkoutAt(t, up, old))
 
 	var a App
-	info, err := a.CheckUpdate("main")
+	info, err := a.CheckUpdate(config.DefaultChannel)
 	if err != nil {
 		t.Fatalf("CheckUpdate: %v", err)
 	}
@@ -122,7 +125,7 @@ func TestCheckUpdateSaysNothingWhenCurrent(t *testing.T) {
 	pointSourceAt(t, checkoutAt(t, up, "HEAD"))
 
 	var a App
-	info, err := a.CheckUpdate("main")
+	info, err := a.CheckUpdate(config.DefaultChannel)
 	if err != nil {
 		t.Fatalf("CheckUpdate: %v", err)
 	}
@@ -141,10 +144,10 @@ func TestCheckUpdateSaysNothingWhenCurrent(t *testing.T) {
 // version it is on, and that has to work.
 func TestCheckUpdateWithoutACheckout(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir()) // no source file at all
-	serveChannel(t, "main", "1.4.0", "# What's new\n\n## 1.4.0\n\n- A thing worth having\n")
+	serveChannel(t, config.DefaultChannel, "1.4.0", "# What's new\n\n## 1.4.0\n\n- A thing worth having\n")
 
 	a := App{version: "1.3.0"}
-	info, err := a.CheckUpdate("main")
+	info, err := a.CheckUpdate(config.DefaultChannel)
 	if err != nil {
 		t.Fatalf("a packaged install could not check for updates: %v", err)
 	}
@@ -175,10 +178,10 @@ func TestCheckUpdateOnSomethingThatIsNotARepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	pointSourceAt(t, dir)
-	serveChannel(t, "main", "2.0.0", "")
+	serveChannel(t, config.DefaultChannel, "2.0.0", "")
 
 	a := App{version: "2.0.0"}
-	info, err := a.CheckUpdate("main")
+	info, err := a.CheckUpdate(config.DefaultChannel)
 	if err != nil {
 		t.Fatalf("a non-repository source could not check for updates: %v", err)
 	}
@@ -187,5 +190,57 @@ func TestCheckUpdateOnSomethingThatIsNotARepository(t *testing.T) {
 	}
 	if !strings.Contains(info.Summary, "Up to date") {
 		t.Errorf("Summary = %q, want it to say up to date", info.Summary)
+	}
+}
+
+// TestCheckUpdateOffersTheChosenChannel: a checkout on one channel's branch,
+// with another chosen in Settings, is offered the switch even when it already
+// has every commit of the chosen one — minimal contains all of beta, so by
+// commits alone it would count as up to date there. A developer's own branch or
+// uncommitted edits are left alone: update.sh would not move them.
+func TestCheckUpdateOffersTheChosenChannel(t *testing.T) {
+	requireGit(t)
+	up := newUpstream(t)
+	other := config.ChannelBeta
+	if config.DefaultChannel == config.ChannelBeta {
+		other = config.ChannelRelease
+	}
+	gitIn(t, up, "branch", other)
+
+	for _, c := range []struct {
+		name   string
+		branch string
+		dirty  bool
+		want   bool
+	}{
+		{"another channel", other, false, true},
+		{"another channel with edits", other, true, false},
+		{"a branch of one's own", "my-work", false, false},
+		{"the chosen channel", config.DefaultChannel, false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := checkoutAt(t, up, "HEAD")
+			if c.branch != config.DefaultChannel {
+				gitIn(t, dir, "checkout", "-q", "-B", c.branch, "origin/"+other)
+			}
+			if c.dirty {
+				if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("mine\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			pointSourceAt(t, dir)
+
+			var a App
+			info, err := a.CheckUpdate(config.DefaultChannel)
+			if err != nil {
+				t.Fatalf("CheckUpdate: %v", err)
+			}
+			if info.Switch != c.want || info.Available != c.want {
+				t.Errorf("Switch = %v, Available = %v, want both %v (%q)", info.Switch, info.Available, c.want, info.Summary)
+			}
+			if c.want && (!strings.Contains(info.Summary, channelName(config.DefaultChannel)) || info.Version != "1.1.0") {
+				t.Errorf("Summary = %q, Version = %q: want the channel named and its version", info.Summary, info.Version)
+			}
+		})
 	}
 }

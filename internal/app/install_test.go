@@ -94,8 +94,6 @@ func TestUpdateInstallsBackIntoItsOwnPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The channel here is whatever is in the settings; this build ignores it and
-	// pulls the minimal branch regardless, which is asserted below.
 	a := &App{settings: config.Settings{UpdateChannel: "beta"}}
 	// A packaged-looking prefix, pinned rather than detected so the test does not
 	// depend on where the test binary happens to live.
@@ -121,9 +119,8 @@ func TestUpdateInstallsBackIntoItsOwnPrefix(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("the script got %d arguments, want the branch and the prefix: %q", len(lines), lines)
 	}
-	// The channel the settings name, which is this build's own by default.
-	if lines[0] != config.ChannelMinimal {
-		t.Errorf("branch = %q, want %q", lines[0], config.ChannelMinimal)
+	if lines[0] != "beta" {
+		t.Errorf("branch = %q, want beta", lines[0])
 	}
 	if lines[1] != "/opt/atlas" {
 		t.Errorf("prefix = %q, want /opt/atlas — the prefix the running copy is installed under", lines[1])

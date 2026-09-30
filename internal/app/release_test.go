@@ -71,10 +71,10 @@ func TestVersionsCompareAsNumbers(t *testing.T) {
 // switched to Release, or someone running a local build — must not be told to
 // "update" to something older.
 func TestNoDowngradeIsOffered(t *testing.T) {
-	serveChannel(t, "main", "1.0.0", "")
+	serveChannel(t, config.DefaultChannel, "1.0.0", "")
 
 	a := App{version: "1.1.0"}
-	info, err := a.checkRemote("main")
+	info, err := a.checkRemote(config.DefaultChannel)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,26 +86,73 @@ func TestNoDowngradeIsOffered(t *testing.T) {
 	}
 }
 
+// sameBuild is a channel that carries this same build — the full application
+// or the minimal one — so checking it is an update and not a switch.
+func sameBuild() (channel, name string) {
+	if config.Minimal {
+		return config.ChannelMinimal, "Minimal"
+	}
+	return config.ChannelBeta, "Beta"
+}
+
+// otherBuild is a channel that carries the other build.
+func otherBuild() (channel, name string) {
+	if config.Minimal {
+		return config.ChannelRelease, "Release"
+	}
+	return config.ChannelMinimal, "Minimal"
+}
+
+// TestSwitchingBuildsIsOffered: moving between the full application and the
+// minimal one is a different build, so it is offered at the same version and
+// says so — except to a copy a package manager owns, which cannot act on it and
+// would be told the same thing on every check.
+func TestSwitchingBuildsIsOffered(t *testing.T) {
+	channel, name := otherBuild()
+	serveChannel(t, channel, "1.0.0", "")
+
+	a := &App{version: "1.0.0"}
+	a.pinInstall(Install{Kind: Standalone, Binary: "/opt/atlas/bin/atlas-monitor"})
+	info, err := a.checkRemote(channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Available || !info.Switch {
+		t.Fatalf("Available = %v, Switch = %v: the other build was not offered (%q)", info.Available, info.Switch, info.Summary)
+	}
+	for _, want := range []string{"Switch", name, "1.0.0"} {
+		if !strings.Contains(info.Summary, want) {
+			t.Errorf("Summary = %q, want it to mention %q", info.Summary, want)
+		}
+	}
+
+	pkg := &App{version: "1.0.0"}
+	pkg.pinInstall(Install{Kind: FromPackage, Binary: "/usr/bin/atlas-monitor", Manager: "pacman", Package: "atlas-monitor"})
+	if info, err := pkg.checkRemote(channel); err != nil || info.Available {
+		t.Errorf("a packaged copy was offered %q (err %v), which its package manager cannot do", info.Summary, err)
+	}
+}
+
 // TestRemoteCheckNamesTheChannel: the summary is the whole message in Settings,
 // so it has to say which channel it looked at and both versions.
 func TestRemoteCheckNamesTheChannel(t *testing.T) {
-	serveChannel(t, config.ChannelMinimal, "0.12.0",
-		"# What's new\n\n## 0.12.0\n\n- Beta things\n")
+	channel, name := sameBuild()
+	serveChannel(t, channel, "0.12.0", "# What's new\n\n## 0.12.0\n\n- New things\n")
 
 	a := App{version: "0.11.0"}
-	info, err := a.checkRemote(config.ChannelMinimal)
+	info, err := a.checkRemote(channel)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !info.Available {
 		t.Fatal("0.11.0 was not offered 0.12.0")
 	}
-	for _, want := range []string{"Minimal", "0.11.0", "0.12.0"} {
+	for _, want := range []string{name, "0.11.0", "0.12.0"} {
 		if !strings.Contains(info.Summary, want) {
 			t.Errorf("Summary = %q, want it to mention %q", info.Summary, want)
 		}
 	}
-	if len(info.Changes) != 1 || info.Changes[0] != "Beta things" {
+	if len(info.Changes) != 1 || info.Changes[0] != "New things" {
 		t.Errorf("Changes = %q, want the one bullet for 0.12.0", info.Changes)
 	}
 }
@@ -114,10 +161,10 @@ func TestRemoteCheckNamesTheChannel(t *testing.T) {
 // branch without one, or a fetch that fails for it alone, must not turn an
 // available update into an error.
 func TestMissingChangelogStillOffersTheUpdate(t *testing.T) {
-	serveChannel(t, "main", "3.0.0", "") // 404s the changelog
+	serveChannel(t, config.DefaultChannel, "3.0.0", "") // 404s the changelog
 
 	a := App{version: "2.0.0"}
-	info, err := a.checkRemote("main")
+	info, err := a.checkRemote(config.DefaultChannel)
 	if err != nil {
 		t.Fatalf("a missing changelog broke the check: %v", err)
 	}
@@ -135,7 +182,7 @@ func TestUnreachableChannelIsAnOrdinaryError(t *testing.T) {
 	t.Cleanup(func() { rawBase = old })
 
 	a := App{version: "1.0.0"}
-	info, err := a.checkRemote("main")
+	info, err := a.checkRemote(config.DefaultChannel)
 	if err == nil {
 		t.Fatal("an unreachable channel reported success")
 	}
@@ -150,10 +197,10 @@ func TestUnreachableChannelIsAnOrdinaryError(t *testing.T) {
 // TestEmptyVersionIsNotTreatedAsAVersion: a proxy or a captive portal answering
 // 200 with nothing must not be read as "the channel is on version ”".
 func TestEmptyVersionIsNotTreatedAsAVersion(t *testing.T) {
-	serveChannel(t, "main", "", "")
+	serveChannel(t, config.DefaultChannel, "", "")
 
 	a := App{version: "1.0.0"}
-	if _, err := a.checkRemote("main"); err == nil {
+	if _, err := a.checkRemote(config.DefaultChannel); err == nil {
 		t.Error("an empty VERSION was accepted")
 	}
 }
