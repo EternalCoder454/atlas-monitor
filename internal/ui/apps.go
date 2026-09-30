@@ -1463,6 +1463,9 @@ func (v *appsView) iconOf(p *process.Proc) string {
 
 // setIcon shows an icon by theme name or file path, or clears the image.
 func setIcon(img *gtk.Image, icon string) {
+	if img != nil && icon == "" {
+		delete(iconShown, img.Object.Native())
+	}
 	if img != nil && icon != "" {
 		if size := img.PixelSize(); size > 0 {
 			if tex := iconTexture(img, icon, size); tex != nil {

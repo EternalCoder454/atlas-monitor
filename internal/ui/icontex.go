@@ -13,6 +13,10 @@ static GdkTexture *atlas_icon_texture(GtkWidget *w, const char *name, int size, 
 	GtkIconTheme *theme = gtk_icon_theme_get_for_display(display);
 	GtkIconPaintable *icon;
 	if (name[0] == '/') {
+		// Looked up by file, a missing one would come back as the "missing
+		// image" picture, and that would be kept in its place.
+		if (!g_file_test(name, G_FILE_TEST_IS_REGULAR))
+			return NULL;
 		GFile *file = g_file_new_for_path(name);
 		GIcon *gicon = g_file_icon_new(file);
 		icon = gtk_icon_theme_lookup_by_gicon(theme, gicon, size, scale, gtk_widget_get_direction(w), 0);
@@ -35,11 +39,18 @@ static GdkTexture *atlas_icon_texture(GtkWidget *w, const char *name, int size, 
 		return NULL;
 	}
 
+	// Made once, on the main thread, which is the only one that calls this.
 	static GskRenderer *renderer = NULL;
+	static gboolean failed = FALSE;
+	if (failed) {
+		g_object_unref(icon);
+		return NULL;
+	}
 	if (renderer == NULL) {
 		renderer = gsk_cairo_renderer_new();
 		if (!gsk_renderer_realize_for_display(renderer, display, NULL)) {
 			g_clear_object(&renderer);
+			failed = TRUE;
 			g_object_unref(icon);
 			return NULL;
 		}
@@ -83,19 +94,37 @@ type iconKey struct {
 	size, scale int
 }
 
-var iconTextures = map[iconKey]*gdk.Texture{}
+// iconTextures holds a texture per icon, size and scale, and nil for an icon it
+// could not make one for, so that is not tried again every tick. It is emptied
+// whenever the icon theme changes, which is also when an icon that was missing
+// may have arrived: an application installed while Atlas runs.
+var iconTextures = map[iconKey]gdk.Paintabler{}
 var iconThemeWatched bool
+
+// iconShown is what each image that has had a texture was last asked to show,
+// so it can be made again when the image's scale changes: when it is first put
+// in a window, or the window moves to a screen with another scale.
+var iconShown = map[uintptr]string{}
 
 // iconTexture is the ready-made texture for an icon, or nil to fall back to
 // showing it by name.
-func iconTexture(img *gtk.Image, name string, size int) *gdk.Texture {
+func iconTexture(img *gtk.Image, name string, size int) gdk.Paintabler {
 	if !iconThemeWatched {
 		iconThemeWatched = true
-		// A new icon theme means new pictures for the same names.
-		if st := gtk.SettingsGetDefault(); st != nil {
-			st.NotifyProperty("gtk-icon-theme-name", func() { clear(iconTextures) })
+		if d := gdk.DisplayGetDefault(); d != nil {
+			gtk.IconThemeGetForDisplay(d).ConnectChanged(func() { clear(iconTextures) })
 		}
 	}
+	n := img.Object.Native()
+	if _, seen := iconShown[n]; !seen {
+		img.NotifyProperty("scale-factor", func() {
+			if ic := iconShown[n]; ic != "" {
+				setIcon(img, ic)
+			}
+		})
+		img.ConnectDestroy(func() { delete(iconShown, n) })
+	}
+	iconShown[n] = name
 	scale := img.ScaleFactor()
 	if scale < 1 {
 		scale = 1
@@ -107,11 +136,11 @@ func iconTexture(img *gtk.Image, name string, size int) *gdk.Texture {
 	cname := C.CString(name)
 	defer C.free(unsafe.Pointer(cname))
 	ptr := C.atlas_icon_texture((*C.GtkWidget)(unsafe.Pointer(img.Object.Native())), cname, C.int(size), C.int(scale))
-	var tex *gdk.Texture
+	var tex gdk.Paintabler
 	if ptr != nil {
-		obj := coreglib.AssumeOwnership(unsafe.Pointer(ptr))
-		tex = &gdk.Texture{Object: obj}
+		// Cast builds gotk4's own wrapper for the texture's actual type.
+		tex, _ = coreglib.AssumeOwnership(unsafe.Pointer(ptr)).Cast().(gdk.Paintabler)
 	}
-	iconTextures[key] = tex // a miss is remembered too, so it is not tried every tick
+	iconTextures[key] = tex
 	return tex
 }
