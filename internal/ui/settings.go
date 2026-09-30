@@ -1,8 +1,6 @@
 package ui
 
 import (
-	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
@@ -20,7 +18,7 @@ import (
 
 const modelsURL = "https://ollama.com/library"
 
-// SettingsHooks are the app-level callbacks the Settings dialog needs.
+// SettingsHooks are the app-level callbacks the Settings page needs.
 type SettingsHooks struct {
 	OnChange    func()                                                        // a setting was saved
 	ApplyUpdate func(done func(ok bool))                                      // pull the channel, reinstall, relaunch; done reports a failure
@@ -33,226 +31,550 @@ type SettingsHooks struct {
 	ManagedBy string
 }
 
-// ShowSettings presents the settings dialog over parent: a sidebar with three
-// sections — Model & Prompt, Quick Prompts, and App.
-func ShowSettings(parent gtk.Widgetter, s *config.Settings, h SettingsHooks) {
-	dlg := adw.NewDialog()
-	dlg.SetTitle("Settings")
-	dlg.SetContentWidth(840)
-	dlg.SetContentHeight(620)
+// settingsView is the Settings page: every setting on one scrolling page, under
+// a few section headings, the way Windows 11's Task Manager lays out its own.
+//
+// It used to be a dialog with a list of three pages down its side, and the
+// quick prompts folded away inside expander rows, so reaching a setting could
+// take four clicks and changing one meant finding it first. Now each setting is
+// a card of its own — an icon, a title, one line saying what it does, and the
+// control at the right-hand end — and all of them are on screen, a scroll away
+// at most. The options that belong to another, such as the assistant's model
+// under the switch that turns the assistant on, sit in the same card beneath it,
+// lined up with its title, and are always shown: there is nothing to expand.
+//
+// Text fields apply themselves, on Enter or when focus leaves them, instead of
+// waiting for an apply button, and whatever is still being typed is applied
+// when the page is left.
+type settingsView struct {
+	root  *gtk.ScrolledWindow
+	usage *adw.ActionRow // Atlas's own memory, re-read while the page is open
 
-	stack := gtk.NewStack()
-	stack.SetHExpand(true)
-	stack.SetVExpand(true)
-	stack.SetTransitionType(gtk.StackTransitionTypeCrossfade)
-	stack.SetTransitionDuration(120)
+	// flush applies text typed but not yet confirmed. Each field adds its own.
+	flush []func()
+}
 
-	// The assistant pages only exist when the assistant is compiled in
-	// (`make build-lean` drops it).
-	var mp *modelPromptPage
-	var qp *quickPromptsPage
+// settingIconSize and the margins round it decide where a card's titles start,
+// and settingIndent is that position, for the rows and blocks beneath a card's
+// first row that have no icon of their own but should line up with its title.
+// The 12 on either side of the margins is libadwaita's own: the row's header
+// box starts 12px in, and puts 6px between its prefixes and the title.
+const (
+	settingIconSize     = 20
+	settingIconStart    = 6
+	settingIconEnd      = 10
+	settingIndent       = 12 + settingIconStart + settingIconSize + settingIconEnd + 6
+	settingTextWidth    = 26 // characters, for the text fields at a row's end
+	settingPromptHeight = 140
+)
 
-	sidebar := gtk.NewListBox()
-	sidebar.AddCSSClass("navigation-sidebar")
-	sidebar.AddCSSClass("am-nav") // the main sidebar's rows and accent pill
-	sidebar.SetVExpand(true)
+func newSettingsView(s *config.Settings, h SettingsHooks) *settingsView {
+	v := &settingsView{}
+
+	page := gtk.NewBox(gtk.OrientationVertical, 6)
+	page.AddCSSClass("am-settings")
+	page.SetMarginTop(18)
+	page.SetMarginBottom(24)
+	page.SetMarginStart(24)
+	page.SetMarginEnd(24)
+	page.Append(newTitle("Settings"))
+
+	settingsSection(page, "Appearance",
+		themeCard(s, h),
+		settingsCard(transparencyRow(s, h)),
+		settingsCard(fontRow(s, h)))
+
+	v.usage = memoryRow()
+	settingsSection(page, "Performance",
+		settingsCard(refreshRow(s, h)),
+		settingsCard(renderRow(s, h)),
+		settingsCard(v.usage))
 
 	if aiCompiledIn {
-		mp = newModelPromptPage(s, h)
-		qp = newQuickPromptsPage(s, h)
-		stack.AddNamed(mp.page, "model")
-		stack.AddNamed(qp.page, "prompts")
-		addSettingsRow(sidebar, "Model & Prompt", "model")
-		addSettingsRow(sidebar, "Quick Prompts", "prompts")
-	}
-	ap := newAppPage(s, h)
-	stack.AddNamed(ap.page, "app")
-	addSettingsRow(sidebar, "App", "app")
-
-	// One page needs no list of pages. Without the assistant compiled in, App is
-	// all there is, and a sidebar holding a single highlighted row that goes
-	// nowhere is width spent on nothing.
-	if !aiCompiledIn {
-		toolbar := adw.NewToolbarView()
-		toolbar.AddTopBar(adw.NewHeaderBar())
-		ap.page.SetHExpand(true)
-		ap.page.SetVExpand(true)
-		toolbar.SetContent(ap.page)
-		dlg.SetChild(toolbar)
-		connectSettingsClosed(dlg, s, h, mp, qp)
-		dlg.Present(parent)
-		return
+		settingsSection(page, "Assistant",
+			v.assistantCard(s, h),
+			v.promptCard(s, h),
+			v.quickPromptsCard(s, h))
 	}
 
-	// The list of pages and the page itself, as a split view that folds.
-	//
-	// It used to be a fixed 200px column beside the content in a plain box. On a
-	// window narrower than about 560px the dialog becomes a sheet the width of
-	// the window, the column kept its 200px, and the page was cut off down its
-	// right-hand side — the theme names, the rows' values, the end of every
-	// description. Folded, the list is one screen and each page another, with a
-	// back button between them, which is how libadwaita's own preferences behave.
-	titles := map[string]string{"model": "Model & Prompt", "prompts": "Quick Prompts", "app": "App"}
+	settingsSection(page, "Updates", updateCards(s, h)...)
 
-	sidebarScroll := gtk.NewScrolledWindow()
-	sidebarScroll.SetChild(sidebar)
-	sidebarScroll.SetPolicy(gtk.PolicyNever, gtk.PolicyAutomatic)
+	// Wide enough for Task Manager's long rows, but not so wide on a maximised
+	// window that a title and its control end up a screen apart.
+	clamp := adw.NewClamp()
+	clamp.SetMaximumSize(1000)
+	clamp.SetTighteningThreshold(800)
+	clamp.SetChild(page)
 
-	sidebarBar := adw.NewToolbarView()
-	sidebarBar.AddTopBar(adw.NewHeaderBar())
-	sidebarBar.SetContent(sidebarScroll)
-
-	contentBar := adw.NewToolbarView()
-	contentBar.AddTopBar(adw.NewHeaderBar())
-	contentBar.SetContent(stack)
-
-	contentPage := adw.NewNavigationPage(contentBar, titles["model"])
-	split := adw.NewNavigationSplitView()
-	split.SetSidebar(adw.NewNavigationPage(sidebarBar, "Settings"))
-	split.SetContent(contentPage)
-	// The list is sized in pixels, as the fixed column it replaces was. Its
-	// default unit scales with the text, and on a desktop with large fonts that
-	// takes the width from the page, which is the part with something to read.
-	split.SetSidebarWidthUnit(adw.LengthUnitPx)
-	split.SetMinSidebarWidth(180)
-	split.SetMaxSidebarWidth(220)
-
-	// Fold below 500sp. The unit matters, and so does staying clear of the
-	// dialog's own width: sp scales with the text, and at a 1.5x text scale —
-	// 144 DPI, which is what the machine this was built on runs — 560sp is
-	// exactly 840px, the width the floating dialog is given. A max-width
-	// condition matches at its boundary, so at 560 the dialog folded itself on a
-	// window a thousand pixels wide. 500sp is 750px at that scale; at 2x it is a
-	// thousand, and folding there is right, because the text needs the room.
-	bp := adw.NewBreakpoint(adw.NewBreakpointConditionLength(
-		adw.BreakpointConditionMaxWidth, 500, adw.LengthUnitSp))
-	bp.ConnectApply(func() { split.SetCollapsed(true) })
-	bp.ConnectUnapply(func() { split.SetCollapsed(false) })
-	dlg.AddBreakpoint(bp)
-
-	sidebar.ConnectRowSelected(func(row *gtk.ListBoxRow) {
-		if row != nil {
-			stack.SetVisibleChildName(row.Name())
-			contentPage.SetTitle(titles[row.Name()])
-		}
-	})
-	// Selecting a row switches the page; activating one — a click or Enter —
-	// also moves to it when folded. They are separate because opening the dialog
-	// selects the first row, and on a phone that should land on the list, not
-	// jump straight past it into Model & Prompt.
-	sidebar.ConnectRowActivated(func(*gtk.ListBoxRow) { split.SetShowContent(true) })
-	// Dev aid, alongside ATLAS_OPEN_SETTINGS and ATLAS_VIEW: open the dialog on a
-	// named page. Screenshotting the theme picker otherwise means opening the
-	// dialog and clicking, which a capture script cannot do.
-	selected := 0
-	if want := os.Getenv("ATLAS_SETTINGS_PAGE"); want != "" {
-		for i := 0; ; i++ {
-			row := sidebar.RowAtIndex(i)
-			if row == nil {
-				break
-			}
-			if row.Name() == want {
-				selected = i
-				break
-			}
-		}
-	}
-	sidebar.SelectRow(sidebar.RowAtIndex(selected))
-	if selected != 0 {
-		split.SetShowContent(true) // asked for a page, so show it even when folded
-	}
-	dlg.SetChild(split)
-	connectSettingsClosed(dlg, s, h, mp, qp)
-	dlg.Present(parent)
+	v.root = gtk.NewScrolledWindow()
+	v.root.SetChild(clamp)
+	v.root.SetPolicy(gtk.PolicyNever, gtk.PolicyAutomatic)
+	v.root.SetHExpand(true)
+	v.root.SetVExpand(true)
+	// Leaving the page — for another page, or closing the window — applies
+	// whatever was being typed, as leaving the field would have.
+	v.root.ConnectUnmap(v.commit)
+	return v
 }
 
-// connectSettingsClosed persists the apply-rows that were not explicitly
-// confirmed, when the dialog closes. Both layouts — the split view and the
-// single page — need it, and mp and qp are nil when the assistant is not
-// compiled in.
-func connectSettingsClosed(dlg *adw.Dialog, s *config.Settings, h SettingsHooks,
-	mp *modelPromptPage, qp *quickPromptsPage) {
-	dlg.ConnectClosed(func() {
-		if mp != nil {
-			s.AssistantTitle = nonEmpty(strings.TrimSpace(mp.name.Text()), config.Defaults().AssistantTitle)
-			s.Model = strings.TrimSpace(mp.model.Text())
-			s.OllamaURL = strings.TrimSpace(mp.url.Text())
-			s.SystemPrompt = nonEmpty(strings.TrimSpace(textViewText(mp.prompt)), config.DefaultSystemPrompt)
-		}
-		if qp != nil {
-			def := config.DefaultQuickPrompts()
-			for i := range s.QuickPrompts {
-				s.QuickPrompts[i].Name = nonEmpty(strings.TrimSpace(qp.names[i].Text()), def[i].Name)
-				s.QuickPrompts[i].Prompt = nonEmpty(strings.TrimSpace(qp.prompts[i].Text()), def[i].Prompt)
-			}
-		}
-		_ = config.Save(*s)
-		fire(h.OnChange)
-	})
+func (v *settingsView) Root() gtk.Widgetter { return v.root }
+
+// Update refreshes the one reading on the page, Atlas's own memory, so it can
+// be watched falling after Release idle memory without leaving and coming back.
+func (v *settingsView) Update() { v.usage.SetSubtitle(selfMemory()) }
+
+func (v *settingsView) commit() {
+	for _, f := range v.flush {
+		f()
+	}
 }
 
-// addSettingsRow adds a sidebar row whose widget name is the stack page it
-// selects.
-func addSettingsRow(list *gtk.ListBox, title, page string) {
+// --- Layout -----------------------------------------------------------------
+
+// settingsSection appends a section to the page: its heading, then its cards.
+func settingsSection(page *gtk.Box, title string, cards ...gtk.Widgetter) {
+	heading := gtk.NewLabel(title)
+	heading.AddCSSClass("am-settings-heading")
+	heading.SetXAlign(0)
+	heading.SetMarginTop(14)
+	heading.SetMarginBottom(4)
+	page.Append(heading)
+	for _, c := range cards {
+		page.Append(c)
+	}
+}
+
+// settingsCard is one card on the page: its rows joined on one surface.
+func settingsCard(rows ...gtk.Widgetter) *gtk.ListBox {
+	lb := gtk.NewListBox()
+	lb.SetSelectionMode(gtk.SelectionNone)
+	lb.AddCSSClass("boxed-list")
+	for _, r := range rows {
+		lb.Append(r)
+	}
+	return lb
+}
+
+// withIcon makes row the first row of a card: its icon at the start, and the
+// taller height Task Manager gives a setting's title and description.
+func withIcon(row *adw.ActionRow, icon string) {
+	img := gtk.NewImageFromIconName(icon)
+	img.SetPixelSize(settingIconSize)
+	img.SetMarginStart(settingIconStart)
+	img.SetMarginEnd(settingIconEnd)
+	row.AddPrefix(img)
+	row.AddCSSClass("am-setting")
+}
+
+// indented makes row one that belongs to the row above it: no icon, and its
+// title lined up with that row's.
+func indented(row *adw.ActionRow) {
+	spacer := gtk.NewBox(gtk.OrientationHorizontal, 0)
+	spacer.SetSizeRequest(settingIconSize, -1)
+	spacer.SetMarginStart(settingIconStart)
+	spacer.SetMarginEnd(settingIconEnd)
+	row.AddPrefix(spacer)
+}
+
+// blockRow holds something that is not a row — the theme circles, the prompt's
+// text — beneath a card's first row, starting where that row's title does.
+func blockRow(child gtk.Widgetter) *gtk.ListBoxRow {
 	row := gtk.NewListBoxRow()
-	row.SetName(page)
-	lbl := gtk.NewLabel(title)
-	lbl.SetXAlign(0)
-	lbl.SetMarginTop(10)
-	lbl.SetMarginBottom(10)
-	lbl.SetMarginStart(12)
-	lbl.SetMarginEnd(12)
-	row.SetChild(lbl)
-	list.Append(row)
+	row.SetActivatable(false)
+	// The row is only a frame. Whatever is inside it takes focus; the row
+	// itself would be one more stop on the way there.
+	row.SetFocusable(false)
+	w := gtk.BaseWidget(child)
+	w.SetMarginStart(settingIndent)
+	w.SetMarginEnd(12)
+	w.SetMarginTop(6)
+	w.SetMarginBottom(12)
+	row.SetChild(child)
+	return row
 }
 
-// --- Model & Prompt ---------------------------------------------------------
-
-type modelPromptPage struct {
-	page             *adw.PreferencesPage
-	name, model, url *adw.EntryRow
-	prompt           *gtk.TextView
+// textField is a text setting's entry. It applies itself on Enter and when focus
+// leaves it; apply stores the trimmed text and returns what was stored, which
+// the entry then shows — an emptied name comes back as the default, rather than
+// staying blank while the default is what is used. Anything still pending when
+// the page is left is applied then; see flush.
+func (v *settingsView) textField(value string, apply func(text string) string) *gtk.Entry {
+	e := gtk.NewEntry()
+	e.SetText(value)
+	e.SetWidthChars(settingTextWidth)
+	e.SetVAlign(gtk.AlignCenter)
+	applied := strings.TrimSpace(value)
+	commit := func() {
+		text := strings.TrimSpace(e.Text())
+		if text == applied {
+			return
+		}
+		applied = apply(text)
+		if e.Text() != applied {
+			e.SetText(applied)
+		}
+	}
+	e.ConnectActivate(commit)
+	focus := gtk.NewEventControllerFocus()
+	focus.ConnectLeave(commit)
+	e.AddController(focus)
+	v.flush = append(v.flush, commit)
+	return e
 }
 
-func newModelPromptPage(s *config.Settings, h SettingsHooks) *modelPromptPage {
-	p := &modelPromptPage{page: adw.NewPreferencesPage()}
+// save writes the settings and tells the application they changed.
+func save(s *config.Settings, h SettingsHooks) {
+	_ = config.Save(*s)
+	fire(h.OnChange)
+}
 
-	aiGroup := adw.NewPreferencesGroup()
-	aiGroup.SetTitle("AI Assistant")
-	aiGroup.SetDescription("A local assistant powered by Ollama, running entirely on your machine. " +
-		"Turn this off to hide the Assistant view and stop all AI activity.")
+// --- Appearance ---------------------------------------------------------------
 
+// themeCard is the colour theme: one circle per theme, split between the window
+// background and the accent, under a row whose button goes back to following
+// the desktop.
+//
+// Circles rather than a dropdown because the thing being chosen is a colour, and a
+// list of names makes you pick one to find out what it looks like. Split circles
+// rather than single ones because a theme is two decisions — what the window is and
+// what stands out against it — and either one alone is a misleading preview.
+//
+// There is no circle for following the desktop. It is the state Atlas starts in
+// and it is not a palette, so it is the button at the end of the row, where Task
+// Manager puts its own "Use system setting", and it stays pressed while it is the
+// choice.
+func themeCard(s *config.Settings, h SettingsHooks) *gtk.ListBox {
+	head := adw.NewActionRow()
+	head.SetTitle("App theme")
+	withIcon(head, "atlas-theme-symbolic")
+
+	system := gtk.NewToggleButtonWithLabel("Use system setting")
+	system.SetVAlign(gtk.AlignCenter)
+	system.AddCSSClass("am-choice")
+	head.AddSuffix(system)
+
+	// The circles in two halves, side by side where they fit and one above the
+	// other where they do not: a line of ten, or two of five. Wrapping the ten
+	// one by one left whatever did not fit alone on a second line — Contrast by
+	// itself under the other nine, at a common window width.
+	circles := gtk.NewFlowBox()
+	circles.SetSelectionMode(gtk.SelectionNone)
+	circles.SetActivateOnSingleClick(false)
+	circles.SetMaxChildrenPerLine(2)
+	circles.SetMinChildrenPerLine(1)
+	circles.SetHomogeneous(true)
+	circles.SetColumnSpacing(18)
+	circles.SetRowSpacing(12)
+	circles.SetHAlign(gtk.AlignStart)
+	perHalf := (len(theme.Themes) + 1) / 2
+	var halves [2]*gtk.Box
+	for i := range halves {
+		halves[i] = gtk.NewBox(gtk.OrientationHorizontal, 18)
+		halves[i].SetHomogeneous(true)
+		circles.Append(halves[i])
+		// The FlowBox wraps each half in a child of its own that takes keyboard
+		// focus, which would put a stop that does nothing in front of the
+		// circles. Only the circles should take it.
+		if child := circles.ChildAtIndex(i); child != nil {
+			child.SetFocusable(false)
+		}
+	}
+
+	// Every button is held so that choosing one can clear the others. A GtkCheckButton
+	// group would do that itself, but its indicator cannot be styled into a disc.
+	var buttons []*gtk.ToggleButton
+
+	// sync marks the chosen one and leaves the rest clear. The guard is for the
+	// notify that setting Active fires: without it, clearing the others would
+	// re-enter this through their own handlers.
+	syncing := false
+	sync := func() {
+		syncing = true
+		for i, b := range buttons {
+			b.SetActive(theme.Themes[i].ID == s.Theme)
+		}
+		following := theme.IsFollowing(s.Theme)
+		system.SetActive(following)
+		syncing = false
+		if t, ok := theme.ByID(s.Theme); ok && !following {
+			head.SetSubtitle(t.Name + " — " + t.Summary)
+		} else {
+			head.SetSubtitle("Follows the desktop's light and dark setting")
+		}
+	}
+
+	for _, t := range theme.Themes {
+		t := t
+
+		swatch := gtk.NewToggleButton()
+		// Centred, not filled. A button fills its cell by default, and the cell
+		// is as wide as the name under it — so every theme with a name longer
+		// than the circle ("Ember", "Dracula", "Solarized") was drawn as an oval,
+		// and the ring round the chosen one with it.
+		swatch.SetHAlign(gtk.AlignCenter)
+		swatch.SetVAlign(gtk.AlignCenter)
+		swatch.AddCSSClass("am-swatch")
+		swatch.AddCSSClass(theme.SwatchClass(t.ID))
+		swatch.SetTooltipText(t.Name + " — " + t.Summary)
+		// The button has no label, so without this a screen reader would announce
+		// an unnamed toggle ten times over.
+		swatch.SetName(t.Name)
+
+		name := gtk.NewLabel(t.Name)
+		name.AddCSSClass("caption")
+
+		cell := gtk.NewBox(gtk.OrientationVertical, 6)
+		cell.Append(swatch)
+		cell.Append(name)
+		halves[len(buttons)/perHalf].Append(cell)
+
+		swatch.ConnectToggled(func() {
+			if syncing {
+				return
+			}
+			if !swatch.Active() {
+				// Clicking the chosen one again would otherwise turn the theme
+				// off and leave nothing selected. It stays chosen, and nothing
+				// has changed to save.
+				syncing = true
+				swatch.SetActive(true)
+				syncing = false
+				return
+			}
+			s.Theme = t.ID
+			sync()
+			save(s, h)
+		})
+		buttons = append(buttons, swatch)
+	}
+
+	system.ConnectToggled(func() {
+		if syncing {
+			return
+		}
+		if !system.Active() {
+			// The same as a circle: pressing it again leaves it chosen.
+			syncing = true
+			system.SetActive(true)
+			syncing = false
+			return
+		}
+		s.Theme = theme.Follow
+		sync()
+		save(s, h)
+	})
+
+	sync()
+	return settingsCard(head, blockRow(circles))
+}
+
+// transparencyRow is the window transparency dropdown. Where transparency cannot
+// work — see TransparencyAvailable — the row stays, greyed, with the reason in
+// place of its description, so that the option is not simply missing with nothing
+// to say why.
+func transparencyRow(s *config.Settings, h SettingsHooks) *adw.ComboRow {
+	labels := make([]string, len(transparencyLevels))
+	selected := 0
+	current := config.NormalizeTransparency(s.WindowTransparency)
+	for i, l := range transparencyLevels {
+		labels[i] = l.Label
+		if l.Value == current {
+			selected = i
+		}
+	}
+
+	row := adw.NewComboRow()
+	row.SetTitle("Window transparency")
+	row.SetSubtitle("How much of the desktop shows through. Text and charts stay solid")
+	withIcon(&row.ActionRow, "atlas-opacity-symbolic")
+	row.SetModel(gtk.NewStringList(labels))
+	row.SetSelected(uint(selected))
+	if ok, why := TransparencyAvailable(); !ok {
+		row.SetSubtitle(why)
+		row.SetSensitive(false)
+	}
+	row.NotifyProperty("selected", func() {
+		idx := int(row.Selected())
+		if idx < 0 || idx >= len(transparencyLevels) || transparencyLevels[idx].Value == s.WindowTransparency {
+			return
+		}
+		s.WindowTransparency = transparencyLevels[idx].Value
+		save(s, h)
+	})
+	return row
+}
+
+// fontRow is text rendering. Separate from the renderer: this one decides
+// whether GTK may skip hinting, which is only obvious on a 1x display.
+func fontRow(s *config.Settings, h SettingsHooks) *adw.ComboRow {
+	labels := make([]string, len(gfx.TextModes))
+	selected := 0
+	current := gfx.NormalizeText(s.TextRendering)
+	for i, m := range gfx.TextModes {
+		labels[i] = m.Label
+		if m.Value == current {
+			selected = i
+		}
+	}
+	row := adw.NewComboRow()
+	row.SetTitle("Font rendering")
+	row.SetSubtitle(gfx.TextModes[selected].Detail)
+	withIcon(&row.ActionRow, "atlas-text-symbolic")
+	row.SetModel(gtk.NewStringList(labels))
+	row.SetSelected(uint(selected))
+	row.NotifyProperty("selected", func() {
+		idx := int(row.Selected())
+		if idx < 0 || idx >= len(gfx.TextModes) || gfx.TextModes[idx].Value == s.TextRendering {
+			return
+		}
+		s.TextRendering = gfx.TextModes[idx].Value
+		row.SetSubtitle(gfx.TextModes[idx].Detail + " Restart Atlas to apply.")
+		save(s, h)
+	})
+	return row
+}
+
+// --- Performance --------------------------------------------------------------
+
+// refreshRow is the sampling interval. Slower is cheaper, and stretches the
+// graphs: they hold 60 samples whatever the rate.
+func refreshRow(s *config.Settings, h SettingsHooks) *adw.ComboRow {
+	labels := make([]string, len(config.RefreshChoices))
+	selected := 0
+	current := config.NormalizeRefresh(s.RefreshSeconds)
+	for i, sec := range config.RefreshChoices {
+		labels[i] = refreshLabel(sec)
+		if sec == current {
+			selected = i
+		}
+	}
+	row := adw.NewComboRow()
+	row.SetTitle("Refresh interval")
+	row.SetSubtitle(refreshDetail(current))
+	withIcon(&row.ActionRow, "atlas-timer-symbolic")
+	row.SetModel(gtk.NewStringList(labels))
+	row.SetSelected(uint(selected))
+	row.NotifyProperty("selected", func() {
+		idx := int(row.Selected())
+		if idx < 0 || idx >= len(config.RefreshChoices) {
+			return
+		}
+		s.RefreshSeconds = config.RefreshChoices[idx]
+		row.SetSubtitle(refreshDetail(s.RefreshSeconds))
+		save(s, h)
+	})
+	return row
+}
+
+// renderRow is the rendering mode. It is the single biggest influence on how
+// much memory Atlas uses, so it is a setting rather than an environment
+// variable; each mode's description says what it costs.
+func renderRow(s *config.Settings, h SettingsHooks) *adw.ComboRow {
+	labels := make([]string, len(gfx.Modes))
+	selected := 0
+	for i, m := range gfx.Modes {
+		labels[i] = m.Label
+		if m.Value == s.RenderMode {
+			selected = i
+		}
+	}
+	row := adw.NewComboRow()
+	row.SetTitle("Rendering")
+	row.SetSubtitle(gfx.Modes[selected].Detail)
+	withIcon(&row.ActionRow, "atlas-gpu-symbolic")
+	row.SetModel(gtk.NewStringList(labels))
+	row.SetSelected(uint(selected))
+	row.NotifyProperty("selected", func() {
+		idx := int(row.Selected())
+		if idx < 0 || idx >= len(gfx.Modes) || gfx.Modes[idx].Value == s.RenderMode {
+			return
+		}
+		s.RenderMode = gfx.Modes[idx].Value
+		row.SetSubtitle(gfx.Modes[idx].Detail + " Restart Atlas to apply.")
+		save(s, h)
+	})
+	return row
+}
+
+// memoryRow is Atlas's own memory, with the button that hands back what it is
+// holding and not using.
+func memoryRow() *adw.ActionRow {
+	row := adw.NewActionRow()
+	row.SetTitle("Memory used by Atlas")
+	row.SetSubtitle(selfMemory())
+	row.SetSubtitleSelectable(true)
+	withIcon(row, "atlas-memory-symbolic")
+	release := gtk.NewButtonWithLabel("Release idle memory")
+	release.SetVAlign(gtk.AlignCenter)
+	release.ConnectClicked(func() {
+		sysmem.Release()
+		row.SetSubtitle(selfMemory())
+	})
+	row.AddSuffix(release)
+	return row
+}
+
+// refreshLabel names an interval in the dropdown.
+func refreshLabel(seconds int) string {
+	if seconds == 1 {
+		return "Every second"
+	}
+	return "Every " + strconv.Itoa(seconds) + " seconds"
+}
+
+// refreshDetail explains what the choice costs and buys.
+func refreshDetail(seconds int) string {
+	if seconds == 1 {
+		return "Graphs cover the last minute"
+	}
+	return "Lighter on the CPU · graphs cover the last " +
+		strconv.Itoa(seconds) + " minutes"
+}
+
+// selfMemory reports this process's resident set — the same figure a task manager
+// shows for Atlas. Where it comes from is per-platform; see internal/sysmem.
+func selfMemory() string {
+	n, ok := sysmem.Resident()
+	if !ok {
+		return "unavailable"
+	}
+	return format.Bytes(n) + " resident"
+}
+
+// --- Assistant ----------------------------------------------------------------
+
+// assistantCard is the switch that turns the assistant on, with what it needs
+// beneath it: its name, the model, and where Ollama is.
+func (v *settingsView) assistantCard(s *config.Settings, h SettingsHooks) *gtk.ListBox {
 	enable := adw.NewSwitchRow()
-	enable.SetTitle("Enable AI assistant")
+	enable.SetTitle("AI assistant")
+	enable.SetSubtitle("A local assistant powered by Ollama, running entirely on this machine")
+	withIcon(&enable.ActionRow, "atlas-assistant-symbolic")
 	enable.SetActive(s.AIEnabled)
 	enable.NotifyProperty("active", func() {
+		if s.AIEnabled == enable.Active() {
+			return
+		}
 		s.AIEnabled = enable.Active()
-		_ = config.Save(*s)
-		fire(h.OnChange)
+		save(s, h)
 	})
-	aiGroup.Add(enable)
 
-	p.name = newApplyRow("Assistant name", s.AssistantTitle, func(text string) {
+	name := v.textRow("Name", "What the Assistant page calls it", s.AssistantTitle, func(text string) string {
 		s.AssistantTitle = nonEmpty(text, config.Defaults().AssistantTitle)
-		_ = config.Save(*s)
-		fire(h.OnChange)
+		save(s, h)
+		return s.AssistantTitle
 	})
-	aiGroup.Add(p.name)
 
-	p.model = newApplyRow("Model", s.Model, func(text string) {
+	// The link goes before the field rather than after it, so that the three
+	// fields' right-hand edges still line up down the card.
+	browse := gtk.NewLinkButtonWithLabel(modelsURL, "Browse models")
+	browse.SetVAlign(gtk.AlignCenter)
+	browse.SetTooltipText("The models Ollama can pull, on ollama.com/library")
+	model := v.textRow("Model", "Any model Ollama has pulled", s.Model, func(text string) string {
 		s.Model = text
-		_ = config.Save(*s)
-		fire(h.OnChange)
-	})
-	aiGroup.Add(p.model)
-
-	models := adw.NewActionRow()
-	models.SetTitle("Browse models")
-	models.SetSubtitle("Find a model name to use above")
-	link := gtk.NewLinkButtonWithLabel(modelsURL, "ollama.com/library")
-	link.SetVAlign(gtk.AlignCenter)
-	models.AddSuffix(link)
-	aiGroup.Add(models)
+		save(s, h)
+		return s.Model
+	}, browse)
 
 	// A warning that appears only when the endpoint is off this machine. The
 	// assistant's system prompt carries the hostname, the username, the running
@@ -260,186 +582,160 @@ func newModelPromptPage(s *config.Settings, h SettingsHooks) *modelPromptPage {
 	// only — https is refused — so a remote Ollama means all of that crosses the
 	// network in the clear. Local is the default and the intended use; this just
 	// makes the other case visible instead of silent.
-	egress := gtk.NewLabel("")
+	egress := gtk.NewLabel("This Ollama server is not on this machine. Each question sends a snapshot of " +
+		"this system — hostname, user, running processes and services — to it over plain HTTP, " +
+		"unencrypted.")
 	egress.SetWrap(true)
 	egress.SetXAlign(0)
 	egress.AddCSSClass("am-warning")
-	showEgress := func(url string) {
-		if ai.IsLocal(url) {
-			egress.SetVisible(false)
+	warning := blockRow(egress)
+	warning.SetVisible(!ai.IsLocal(s.OllamaURL))
+
+	url := v.textRow("Ollama URL", "Where Ollama is listening", s.OllamaURL, func(text string) string {
+		s.OllamaURL = text
+		warning.SetVisible(!ai.IsLocal(text))
+		save(s, h)
+		return s.OllamaURL
+	})
+
+	return settingsCard(enable, name, model, url, warning)
+}
+
+// textRow is a text setting beneath a card's first row: its title and
+// description, and the field at the end, with anything in before just ahead of it.
+func (v *settingsView) textRow(title, desc, value string, apply func(text string) string,
+	before ...gtk.Widgetter) *adw.ActionRow {
+	row := adw.NewActionRow()
+	row.SetTitle(title)
+	row.SetSubtitle(desc)
+	indented(row)
+	for _, w := range before {
+		row.AddSuffix(w)
+	}
+	field := v.textField(value, apply)
+	row.AddSuffix(field)
+	// A click anywhere on the row puts the cursor in the field.
+	row.SetActivatableWidget(field)
+	return row
+}
+
+// promptCard is the system prompt, in full, with the button that puts back the
+// one Atlas ships with.
+func (v *settingsView) promptCard(s *config.Settings, h SettingsHooks) *gtk.ListBox {
+	head := adw.NewActionRow()
+	head.SetTitle("System prompt")
+	head.SetSubtitle("How the assistant behaves. The live system data is always attached for you")
+	withIcon(head, "atlas-document-symbolic")
+
+	text := gtk.NewTextView()
+	text.SetWrapMode(gtk.WrapWordChar)
+	text.SetLeftMargin(8)
+	text.SetRightMargin(8)
+	text.SetTopMargin(8)
+	text.SetBottomMargin(8)
+	text.Buffer().SetText(s.SystemPrompt)
+
+	applied := strings.TrimSpace(s.SystemPrompt)
+	commit := func() {
+		current := strings.TrimSpace(textViewText(text))
+		if current == "" {
+			current = config.DefaultSystemPrompt
+			text.Buffer().SetText(current)
+		}
+		if current == applied {
 			return
 		}
-		egress.SetText("This Ollama server is not on this machine. Each question sends a snapshot of " +
-			"this system — hostname, user, running processes and services — to it over plain HTTP, " +
-			"unencrypted.")
-		egress.SetVisible(true)
+		s.SystemPrompt = current
+		applied = current
+		save(s, h)
 	}
+	focus := gtk.NewEventControllerFocus()
+	focus.ConnectLeave(commit)
+	text.AddController(focus)
+	v.flush = append(v.flush, commit)
 
-	p.url = newApplyRow("Ollama URL", s.OllamaURL, func(text string) {
-		s.OllamaURL = text
-		_ = config.Save(*s)
-		showEgress(text)
-		fire(h.OnChange)
+	reset := gtk.NewButtonWithLabel("Reset to default")
+	reset.SetVAlign(gtk.AlignCenter)
+	reset.ConnectClicked(func() {
+		text.Buffer().SetText(config.DefaultSystemPrompt)
+		commit()
 	})
-	aiGroup.Add(p.url)
-	showEgress(s.OllamaURL)
-	aiGroup.Add(egressRow(egress))
-	p.page.Add(aiGroup)
-
-	promptGroup := adw.NewPreferencesGroup()
-	promptGroup.SetTitle("System prompt")
-	promptGroup.SetDescription("Sets how the assistant behaves. Sent to the model ahead of the live " +
-		"system data, which is always attached for you.")
-
-	p.prompt = gtk.NewTextView()
-	p.prompt.SetWrapMode(gtk.WrapWordChar)
-	p.prompt.SetLeftMargin(8)
-	p.prompt.SetRightMargin(8)
-	p.prompt.SetTopMargin(8)
-	p.prompt.SetBottomMargin(8)
-	p.prompt.Buffer().SetText(s.SystemPrompt)
+	head.AddSuffix(reset)
 
 	scroll := gtk.NewScrolledWindow()
-	scroll.SetChild(p.prompt)
+	scroll.SetChild(text)
 	scroll.SetPolicy(gtk.PolicyNever, gtk.PolicyAutomatic)
-	scroll.SetMinContentHeight(160)
+	scroll.SetMinContentHeight(settingPromptHeight)
 	scroll.AddCSSClass("am-chat")
-	promptGroup.Add(scroll)
 
-	reset := adw.NewButtonRow()
-	reset.SetTitle("Reset prompt to default")
-	reset.SetStartIconName("atlas-reset-symbolic")
-	reset.ConnectActivated(func() { p.prompt.Buffer().SetText(config.DefaultSystemPrompt) })
-	promptGroup.Add(reset)
-	p.page.Add(promptGroup)
-	return p
+	return settingsCard(head, blockRow(scroll))
 }
 
-// --- Quick Prompts ----------------------------------------------------------
+// quickPromptsCard is the three entries in the assistant's list of ready-made
+// questions, each a name and what it asks, side by side.
+func (v *settingsView) quickPromptsCard(s *config.Settings, h SettingsHooks) *gtk.ListBox {
+	head := adw.NewActionRow()
+	head.SetTitle("Quick prompts")
+	head.SetSubtitle("The questions in the list button beside the assistant's message box")
+	withIcon(head, "atlas-prompts-symbolic")
 
-type quickPromptsPage struct {
-	page    *adw.PreferencesPage
-	names   [3]*adw.EntryRow
-	prompts [3]*adw.EntryRow
-}
-
-func newQuickPromptsPage(s *config.Settings, h SettingsHooks) *quickPromptsPage {
-	p := &quickPromptsPage{page: adw.NewPreferencesPage()}
-	group := adw.NewPreferencesGroup()
-	group.SetTitle("Quick prompts")
-	group.SetDescription("The three entries in the assistant's dropdown (the list button next to the message box). " +
-		"Rename them and edit what each one asks.")
-
+	rows := []gtk.Widgetter{head}
 	def := config.DefaultQuickPrompts()
 	for i := range s.QuickPrompts {
 		i := i
-		exp := adw.NewExpanderRow()
-		exp.SetTitle(s.QuickPrompts[i].Name)
-
-		p.names[i] = newApplyRow("Name", s.QuickPrompts[i].Name, func(text string) {
+		name := v.textField(s.QuickPrompts[i].Name, func(text string) string {
 			s.QuickPrompts[i].Name = nonEmpty(text, def[i].Name)
-			exp.SetTitle(s.QuickPrompts[i].Name)
-			_ = config.Save(*s)
-			fire(h.OnChange)
+			save(s, h)
+			return s.QuickPrompts[i].Name
 		})
-		p.prompts[i] = newApplyRow("Prompt", s.QuickPrompts[i].Prompt, func(text string) {
+		name.SetWidthChars(16)
+		name.SetPlaceholderText("Name")
+		name.SetTooltipText("The name it has in the list")
+
+		prompt := v.textField(s.QuickPrompts[i].Prompt, func(text string) string {
 			s.QuickPrompts[i].Prompt = nonEmpty(text, def[i].Prompt)
-			_ = config.Save(*s)
-			fire(h.OnChange)
+			save(s, h)
+			return s.QuickPrompts[i].Prompt
 		})
-		exp.AddRow(p.names[i])
-		exp.AddRow(p.prompts[i])
-		group.Add(exp)
+		prompt.SetHExpand(true)
+		prompt.SetPlaceholderText("What it asks")
+		prompt.SetTooltipText("What it asks the assistant")
+
+		pair := gtk.NewBox(gtk.OrientationHorizontal, 8)
+		pair.Append(name)
+		pair.Append(prompt)
+		row := blockRow(pair)
+		gtk.BaseWidget(pair).SetMarginTop(8)
+		gtk.BaseWidget(pair).SetMarginBottom(8)
+		rows = append(rows, row)
 	}
-	p.page.Add(group)
-	return p
+	return settingsCard(rows...)
 }
 
-// --- App --------------------------------------------------------------------
+// --- Updates ------------------------------------------------------------------
 
-type appPage struct {
-	page *adw.PreferencesPage
-}
-
-func newAppPage(s *config.Settings, h SettingsHooks) *appPage {
-	p := &appPage{page: adw.NewPreferencesPage()}
-	version := h.Version
-	if version == "" {
-		version = "unknown"
-	}
-
-	p.page.Add(themeGroup(s, h))
-	// Right under the theme, because it is the other half of how the window
-	// looks: the theme picks the colours and this decides how much of the
-	// desktop shows through them. A group of its own, not a row in the theme's:
-	// a group puts its rows above its other content, which left the row between
-	// the theme's name and its circles.
-	winGroup := adw.NewPreferencesGroup()
-	winGroup.SetTitle("Window")
-	winGroup.Add(transparencyRow(s, h))
-	p.page.Add(winGroup)
-	p.page.Add(perfGroup(s, h))
-
-	updGroup := adw.NewPreferencesGroup()
-	updGroup.SetTitle("Updates")
-	updGroup.SetDescription("Atlas updates by pulling the selected channel from GitHub and reinstalling. " +
-		"Update checks first and only restarts if there is something newer.")
-
-	channelIDs := []string{"main", "beta"}
-	channel := adw.NewComboRow()
-	channel.SetTitle("Channel")
-	channel.SetSubtitle("Release is the stable main branch; Beta has the newest features and fixes")
-	channel.SetModel(gtk.NewStringList([]string{"Release (main)", "Beta (beta)"}))
-	if s.UpdateChannel == "beta" {
-		channel.SetSelected(1)
-	} else {
-		channel.SetSelected(0)
-	}
+// updateCards are the version with its Update button, the channel it follows,
+// whether it checks by itself, and where this copy lives.
+func updateCards(s *config.Settings, h SettingsHooks) []gtk.Widgetter {
+	version := nonEmpty(h.Version, "unknown")
+	onChannel := func() string { return "On the " + channelName(s.UpdateChannel) + " channel" }
 
 	status := adw.NewActionRow()
-	status.SetTitle("Status")
-	status.SetSubtitle(fmt.Sprintf("On %s · version %s", channelName(s.UpdateChannel), version))
+	status.SetTitle("Atlas " + version)
+	status.SetSubtitle(onChannel())
 	status.SetSubtitleSelectable(true)
+	withIcon(status, "atlas-update-symbolic")
 
-	channel.NotifyProperty("selected", func() {
-		if idx := int(channel.Selected()); idx >= 0 && idx < len(channelIDs) {
-			s.UpdateChannel = channelIDs[idx]
-			_ = config.Save(*s)
-			status.SetSubtitle(fmt.Sprintf("On %s · version %s", channelName(s.UpdateChannel), version))
-			fire(h.OnChange)
-		}
-	})
-	// Checking on launch is on by default: an update nobody hears about is not
-	// much use. It is one switch to stop, and stopping it leaves the manual
-	// Update button below working exactly as before.
-	autoCheck := adw.NewSwitchRow()
-	autoCheck.SetTitle("Check for updates on launch")
-	autoCheck.SetSubtitle("Asks GitHub once, shortly after Atlas opens, and only speaks up if there is something newer")
-	autoCheck.SetActive(s.UpdateCheck)
-	autoCheck.NotifyProperty("active", func() {
-		if s.UpdateCheck == autoCheck.Active() {
-			return
-		}
-		s.UpdateCheck = autoCheck.Active()
-		_ = config.Save(*s)
-		fire(h.OnChange)
-	})
-
-	updGroup.Add(channel)
-	updGroup.Add(autoCheck)
-	updGroup.Add(status)
-
-	update := adw.NewButtonRow()
-	update.SetTitle("Update")
+	update := gtk.NewButtonWithLabel("Update")
 	if h.ManagedBy != "" {
 		// An install pacman owns is not updated from here, and the button should
 		// not imply otherwise: it checks, and then hands over the one command
 		// that does the work.
-		update.SetTitle("Check for updates")
+		update.SetLabel("Check for updates")
 	}
-	update.SetStartIconName("atlas-update-symbolic")
+	update.SetVAlign(gtk.AlignCenter)
 	update.AddCSSClass("suggested-action")
-	update.ConnectActivated(func() {
+	update.ConnectClicked(func() {
 		if h.CheckUpdate == nil {
 			return
 		}
@@ -485,333 +781,55 @@ func newAppPage(s *config.Settings, h SettingsHooks) *appPage {
 			})
 		}()
 	})
-	updGroup.Add(update)
-	p.page.Add(updGroup)
+	status.AddSuffix(update)
 
-	aboutGroup := adw.NewPreferencesGroup()
-	aboutGroup.SetTitle("About")
-	ver := adw.NewActionRow()
-	ver.SetTitle("Version")
-	ver.SetSubtitle(version)
-	ver.SetSubtitleSelectable(true)
-	aboutGroup.Add(ver)
+	channelIDs := []string{"main", "beta"}
+	channel := adw.NewComboRow()
+	channel.SetTitle("Update channel")
+	channel.SetSubtitle("Release is the stable main branch. Beta has the newest features and fixes")
+	withIcon(&channel.ActionRow, "atlas-branch-symbolic")
+	channel.SetModel(gtk.NewStringList([]string{"Release", "Beta"}))
+	if s.UpdateChannel == "beta" {
+		channel.SetSelected(1)
+	}
+	channel.NotifyProperty("selected", func() {
+		idx := int(channel.Selected())
+		if idx < 0 || idx >= len(channelIDs) || channelIDs[idx] == s.UpdateChannel {
+			return
+		}
+		s.UpdateChannel = channelIDs[idx]
+		status.SetSubtitle(onChannel())
+		save(s, h)
+	})
+
+	// Checking on launch is on by default: an update nobody hears about is not
+	// much use. It is one switch to stop, and stopping it leaves the Update
+	// button above working exactly as before.
+	autoCheck := adw.NewSwitchRow()
+	autoCheck.SetTitle("Check for updates on launch")
+	autoCheck.SetSubtitle("Asks GitHub once after Atlas opens, and only speaks up if there is something newer")
+	withIcon(&autoCheck.ActionRow, "atlas-startup-symbolic")
+	autoCheck.SetActive(s.UpdateCheck)
+	autoCheck.NotifyProperty("active", func() {
+		if s.UpdateCheck == autoCheck.Active() {
+			return
+		}
+		s.UpdateCheck = autoCheck.Active()
+		save(s, h)
+	})
+
 	loc := adw.NewActionRow()
 	loc.SetTitle("Location")
 	loc.SetSubtitle(nonEmpty(h.Location, "unknown"))
 	loc.SetSubtitleSelectable(true)
-	aboutGroup.Add(loc)
-	p.page.Add(aboutGroup)
-	return p
-}
+	withIcon(loc, "atlas-folder-symbolic")
 
-// themeGroup builds the colour theme picker: one circle per theme, split between
-// the window background and the accent.
-//
-// Circles rather than a dropdown because the thing being chosen is a colour, and a
-// list of names makes you pick one to find out what it looks like. Split circles
-// rather than single ones because a theme is two decisions — what the window is and
-// what stands out against it — and either one alone is a misleading preview.
-//
-// There is no circle for "follow the desktop". It is the state Atlas starts in and
-// it is not a palette, so it sits underneath as a plain button, and only when there
-// is something to go back from.
-func themeGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
-	g := adw.NewPreferencesGroup()
-	g.SetTitle("Theme")
-
-	// Two rows of five rather than one of ten. Ten circles and their names are
-	// wider than the dialog is at its narrowest — it becomes a bottom sheet on a
-	// phone-width window — and a FlowBox wraps to fewer per line there instead of
-	// forcing the dialog wider or clipping the names.
-	row := gtk.NewFlowBox()
-	row.SetSelectionMode(gtk.SelectionNone)
-	row.SetActivateOnSingleClick(false)
-	row.SetMaxChildrenPerLine(5)
-	row.SetMinChildrenPerLine(1)
-	row.SetHomogeneous(true)
-	row.SetColumnSpacing(18)
-	row.SetRowSpacing(12)
-	row.SetHAlign(gtk.AlignCenter)
-	row.SetMarginTop(6)
-	row.SetMarginBottom(6)
-
-	// A small, quiet button. Added to the group's own box rather than to the
-	// group directly: a bare button there picks up the styling meant for a
-	// section heading and comes out bold and full width, which for the way back
-	// from a choice is much too loud.
-	follow := gtk.NewButtonWithLabel("Follow the desktop instead")
-	follow.SetHAlign(gtk.AlignCenter)
-	follow.AddCSSClass("flat")
-	follow.AddCSSClass("am-quiet-button")
-
-	// Every button is held so that choosing one can clear the others. A GtkCheckButton
-	// group would do that itself, but its indicator cannot be styled into a disc.
-	var buttons []*gtk.ToggleButton
-
-	describe := func() {
-		if theme.IsFollowing(s.Theme) {
-			g.SetDescription("Atlas is following the desktop's light and dark setting. " +
-				"Choose a theme to set it here instead.")
-			follow.SetVisible(false)
-			return
-		}
-		if t, ok := theme.ByID(s.Theme); ok {
-			g.SetDescription(t.Name + " — " + t.Summary)
-		}
-		follow.SetVisible(true)
+	return []gtk.Widgetter{
+		settingsCard(status),
+		settingsCard(channel),
+		settingsCard(autoCheck),
+		settingsCard(loc),
 	}
-
-	// sync marks the chosen one and leaves the rest clear. The guard is for the
-	// notify that setting Active fires: without it, clearing the others would
-	// re-enter this through their own handlers.
-	syncing := false
-	sync := func() {
-		syncing = true
-		for i, b := range buttons {
-			b.SetActive(theme.Themes[i].ID == s.Theme)
-		}
-		syncing = false
-		describe()
-	}
-
-	for _, t := range theme.Themes {
-		t := t
-
-		swatch := gtk.NewToggleButton()
-		// Centred, not filled. A button fills its cell by default, and the cell
-		// is as wide as the name under it — so every theme with a name longer
-		// than the circle ("Ember", "Dracula", "Solarized") was drawn as an oval,
-		// and the ring round the chosen one with it.
-		swatch.SetHAlign(gtk.AlignCenter)
-		swatch.SetVAlign(gtk.AlignCenter)
-		swatch.AddCSSClass("am-swatch")
-		swatch.AddCSSClass(theme.SwatchClass(t.ID))
-		swatch.SetTooltipText(t.Name + " — " + t.Summary)
-		// The button has no label, so without this a screen reader would announce
-		// an unnamed toggle five times over.
-		swatch.SetName(t.Name)
-		swatch.Widget.SetTooltipText(t.Name + " — " + t.Summary)
-
-		name := gtk.NewLabel(t.Name)
-		name.AddCSSClass("caption")
-
-		cell := gtk.NewBox(gtk.OrientationVertical, 6)
-		cell.SetHAlign(gtk.AlignCenter)
-		cell.Append(swatch)
-		cell.Append(name)
-		row.Append(cell)
-		// The FlowBox wraps each cell in a child of its own that takes keyboard
-		// focus, which would put two tab stops in front of every circle — one
-		// that does nothing, then the button. Only the button should take it.
-		if child := row.ChildAtIndex(len(buttons)); child != nil {
-			child.SetFocusable(false)
-		}
-
-		swatch.ConnectToggled(func() {
-			if syncing {
-				return
-			}
-			if !swatch.Active() {
-				// Clicking the chosen one again would otherwise turn the theme
-				// off and leave nothing selected. It stays chosen.
-				swatch.SetActive(true)
-				return
-			}
-			s.Theme = t.ID
-			_ = config.Save(*s)
-			sync()
-			fire(h.OnChange)
-		})
-		buttons = append(buttons, swatch)
-	}
-
-	follow.ConnectClicked(func() {
-		s.Theme = theme.Follow
-		_ = config.Save(*s)
-		sync()
-		fire(h.OnChange)
-	})
-
-	content := gtk.NewBox(gtk.OrientationVertical, 4)
-	content.Append(row)
-	content.Append(follow)
-	g.Add(content)
-	sync()
-	return g
-}
-
-// transparencyRow is the window transparency dropdown. Where transparency cannot
-// work — see TransparencyAvailable — the row stays, greyed, with the reason in
-// place of its description, so that the option is not simply missing with nothing
-// to say why.
-func transparencyRow(s *config.Settings, h SettingsHooks) *adw.ComboRow {
-	labels := make([]string, len(transparencyLevels))
-	selected := 0
-	current := config.NormalizeTransparency(s.WindowTransparency)
-	for i, l := range transparencyLevels {
-		labels[i] = l.Label
-		if l.Value == current {
-			selected = i
-		}
-	}
-
-	row := adw.NewComboRow()
-	row.SetTitle("Window transparency")
-	row.SetSubtitle("See the desktop through the window. Text and charts stay solid")
-	row.SetModel(gtk.NewStringList(labels))
-	row.SetSelected(uint(selected))
-	if ok, why := TransparencyAvailable(); !ok {
-		row.SetSubtitle(why)
-		row.SetSensitive(false)
-	}
-	row.NotifyProperty("selected", func() {
-		idx := int(row.Selected())
-		if idx < 0 || idx >= len(transparencyLevels) || transparencyLevels[idx].Value == s.WindowTransparency {
-			return
-		}
-		s.WindowTransparency = transparencyLevels[idx].Value
-		_ = config.Save(*s)
-		fire(h.OnChange)
-	})
-	return row
-}
-
-// perfGroup builds the rendering-mode selector and the live self-memory
-// readout. Rendering is the single biggest influence on how much memory Atlas
-// uses, so it gets a first-class setting rather than an environment variable.
-func perfGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
-	g := adw.NewPreferencesGroup()
-	g.SetTitle("Performance")
-	// Two sentences. It was a five-line paragraph explaining Mesa, the Vulkan
-	// loader and what each mode cost on the machine it was measured on — which
-	// pushed the rows it describes below the fold, and repeated what those rows'
-	// own subtitles already say ("~27 MiB more"). What is left is the trade.
-	g.SetDescription("Software keeps graphics drivers out of Atlas, which saves memory. " +
-		"GPU makes resizing smoother on high-refresh displays.")
-
-	labels := make([]string, len(gfx.Modes))
-	selected := 0
-	for i, m := range gfx.Modes {
-		labels[i] = m.Label
-		if m.Value == s.RenderMode {
-			selected = i
-		}
-	}
-	render := adw.NewComboRow()
-	render.SetTitle("Rendering")
-	render.SetSubtitle(gfx.Modes[selected].Detail)
-	render.SetModel(gtk.NewStringList(labels))
-	render.SetSelected(uint(selected))
-	render.NotifyProperty("selected", func() {
-		idx := int(render.Selected())
-		if idx < 0 || idx >= len(gfx.Modes) || gfx.Modes[idx].Value == s.RenderMode {
-			return
-		}
-		s.RenderMode = gfx.Modes[idx].Value
-		render.SetSubtitle(gfx.Modes[idx].Detail + " · restart Atlas to apply")
-		_ = config.Save(*s)
-		fire(h.OnChange)
-	})
-	g.Add(render)
-
-	// Text rendering. Separate from the renderer above: this one decides
-	// whether GTK may skip hinting, which is only obvious on a 1x display.
-	textLabels := make([]string, len(gfx.TextModes))
-	textSel := 0
-	currentText := gfx.NormalizeText(s.TextRendering)
-	for i, m := range gfx.TextModes {
-		textLabels[i] = m.Label
-		if m.Value == currentText {
-			textSel = i
-		}
-	}
-	text := adw.NewComboRow()
-	text.SetTitle("Font rendering")
-	text.SetSubtitle(gfx.TextModes[textSel].Detail)
-	text.SetModel(gtk.NewStringList(textLabels))
-	text.SetSelected(uint(textSel))
-	text.NotifyProperty("selected", func() {
-		idx := int(text.Selected())
-		if idx < 0 || idx >= len(gfx.TextModes) || gfx.TextModes[idx].Value == s.TextRendering {
-			return
-		}
-		s.TextRendering = gfx.TextModes[idx].Value
-		text.SetSubtitle(gfx.TextModes[idx].Detail + " · restart Atlas to apply")
-		_ = config.Save(*s)
-		fire(h.OnChange)
-	})
-	g.Add(text)
-
-	// Sampling interval. Slower is cheaper, and stretches the graphs: they hold
-	// 60 samples whatever the rate.
-	intervals := make([]string, len(config.RefreshChoices))
-	chosen := 0
-	current := config.NormalizeRefresh(s.RefreshSeconds)
-	for i, sec := range config.RefreshChoices {
-		intervals[i] = refreshLabel(sec)
-		if sec == current {
-			chosen = i
-		}
-	}
-	refresh := adw.NewComboRow()
-	refresh.SetTitle("Refresh interval")
-	refresh.SetSubtitle(refreshDetail(current))
-	refresh.SetModel(gtk.NewStringList(intervals))
-	refresh.SetSelected(uint(chosen))
-	refresh.NotifyProperty("selected", func() {
-		idx := int(refresh.Selected())
-		if idx < 0 || idx >= len(config.RefreshChoices) {
-			return
-		}
-		s.RefreshSeconds = config.RefreshChoices[idx]
-		refresh.SetSubtitle(refreshDetail(s.RefreshSeconds))
-		_ = config.Save(*s)
-		fire(h.OnChange)
-	})
-	g.Add(refresh)
-
-	usage := adw.NewActionRow()
-	usage.SetTitle("Memory used by Atlas")
-	usage.SetSubtitle(selfMemory())
-	usage.SetSubtitleSelectable(true)
-	g.Add(usage)
-
-	release := adw.NewButtonRow()
-	release.SetTitle("Release idle memory now")
-	release.SetStartIconName("atlas-trash-symbolic")
-	release.ConnectActivated(func() {
-		sysmem.Release()
-		usage.SetSubtitle(selfMemory())
-	})
-	g.Add(release)
-	return g
-}
-
-// refreshLabel names an interval in the dropdown.
-func refreshLabel(seconds int) string {
-	if seconds == 1 {
-		return "Every second"
-	}
-	return "Every " + strconv.Itoa(seconds) + " seconds"
-}
-
-// refreshDetail explains what the choice costs and buys.
-func refreshDetail(seconds int) string {
-	if seconds == 1 {
-		return "Graphs cover the last minute"
-	}
-	return "Lighter on the CPU · graphs cover the last " +
-		strconv.Itoa(seconds) + " minutes"
-}
-
-// selfMemory reports this process's resident set — the same figure a task manager
-// shows for Atlas. Where it comes from is per-platform; see internal/sysmem.
-func selfMemory() string {
-	n, ok := sysmem.Resident()
-	if !ok {
-		return "unavailable"
-	}
-	return format.Bytes(n) + " resident"
 }
 
 func channelName(ch string) string {
@@ -829,21 +847,6 @@ func fire(f func()) {
 	}
 }
 
-// newApplyRow builds an entry row with a visible apply (✓) button. apply runs
-// with the trimmed text when the user confirms.
-func newApplyRow(title, value string, apply func(text string)) *adw.EntryRow {
-	row := adw.NewEntryRow()
-	row.SetTitle(title)
-	row.SetText(value)
-	row.SetShowApplyButton(true)
-	row.ConnectApply(func() {
-		text := strings.TrimSpace(row.Text())
-		apply(text)
-		row.SetText(text)
-	})
-	return row
-}
-
 func textViewText(tv *gtk.TextView) string {
 	buf := tv.Buffer()
 	return buf.Text(buf.StartIter(), buf.EndIter(), false)
@@ -854,20 +857,4 @@ func nonEmpty(s, fallback string) string {
 		return fallback
 	}
 	return s
-}
-
-// egressRow puts the remote-endpoint warning inside the preferences group, so
-// it sits with the setting it is about rather than floating under it.
-func egressRow(lbl *gtk.Label) *adw.ActionRow {
-	row := adw.NewActionRow()
-	row.SetActivatable(false)
-	row.SetChild(lbl)
-	lbl.SetMarginTop(6)
-	lbl.SetMarginBottom(6)
-	lbl.SetMarginStart(12)
-	lbl.SetMarginEnd(12)
-	// The row follows the label: invisible until there is something to say.
-	lbl.NotifyProperty("visible", func() { row.SetVisible(lbl.Visible()) })
-	row.SetVisible(lbl.Visible())
-	return row
 }

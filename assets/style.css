@@ -86,8 +86,7 @@ toolbarview.am-frame > .top-bar:backdrop {
    gradient image rather than a child widget so that no row carries an extra
    widget for it, and it is sized and placed, not stretched, so it stays a
    pill: 3 by 16 pixels, centred on the row. */
-.am-sidebar list > row,
-list.am-nav > row {
+.am-sidebar list > row {
   border-radius: 5px;
 }
 
@@ -101,15 +100,12 @@ list.am-nav > row {
   margin-right: 10px;
 }
 
-.am-sidebar list > row.activatable:hover,
-list.am-nav > row.activatable:hover {
+.am-sidebar list > row.activatable:hover {
   background-color: alpha(currentColor, 0.05);
 }
 
 .am-sidebar list > row:selected,
-.am-sidebar list > row:selected:hover,
-list.am-nav > row:selected,
-list.am-nav > row:selected:hover {
+.am-sidebar list > row:selected:hover {
   background-color: alpha(currentColor, 0.08);
   background-image: linear-gradient(@accent_color, @accent_color);
   background-size: 3px 16px;
@@ -435,7 +431,7 @@ columnview.am-table > listview.separators > row:not(.separator) {
   background-color: alpha(currentColor, 0.14);
 }
 
-/* ---- Transparency (Settings, App, Window transparency) ------------------
+/* ---- Transparency (Settings, Appearance, Window transparency) -----------
 
    True translucency, not a blur: the window's surfaces let the desktop show
    through, and everything drawn on them — text, charts, the table's shading —
@@ -502,13 +498,12 @@ window.am-glass-strong .am-content list.boxed-list {
   background-color: alpha(@card_bg_color, 0.65);
 }
 
-/* Dialogs — Settings, a process's Details — take the glass too. A dialog floats
-   over the window's own page, and libadwaita darkens that page behind it; with
-   the darkening in place a see-through dialog showed only a dim, solid page and
-   looked no different from an opaque one. So under glass the page behind is not
-   darkened, and the dialog shows it through its margins, while the cards
-   holding its text stay nearly solid. The Settings list of pages
-   keeps a faint tint of the sidebar's colour, so it still reads as a sidebar. */
+/* Dialogs — a process's Details, the update's progress — take the glass too. A
+   dialog floats over the window's own page, and libadwaita darkens that page
+   behind it; with the darkening in place a see-through dialog showed only a dim,
+   solid page and looked no different from an opaque one. So under glass the page
+   behind is not darkened, and the dialog shows it through its margins, while the
+   cards holding its text stay nearly solid. */
 window.am-glass floating-sheet > dimming {
   background-color: transparent;
 }
@@ -525,10 +520,6 @@ window.am-glass-strong dialog-host > dialog sheet {
   background-color: alpha(@window_bg_color, 0.62);
 }
 
-window.am-glass dialog-host > dialog sheet .sidebar-pane {
-  background-color: alpha(@sidebar_bg_color, 0.45);
-}
-
 /* The cards are where a dialog's text is, so they stay nearly solid: the page
    behind showed through them as ghosted numbers under the settings' own. A
    dark theme's card colour is itself a translucent white laid over whatever is
@@ -537,6 +528,36 @@ window.am-glass dialog-host > dialog sheet .sidebar-pane {
 window.am-glass dialog-host > dialog sheet list.boxed-list {
   background-color: alpha(@window_bg_color, 0.94);
   background-image: linear-gradient(@card_bg_color, @card_bg_color);
+}
+
+/* ---- Settings ----------------------------------------------------------
+
+   Task Manager's settings page: a heading over each section, and each setting a
+   card with its icon, its title, one line under that saying what it does, and
+   the control at the end. The first row of a card is the taller one, as Task
+   Manager's are; the rows beneath it, lined up with its title, keep libadwaita's
+   height. See internal/ui/settings.go. */
+.am-settings-heading {
+  font-weight: 600;
+  font-size: 1.08em;
+}
+
+row.am-setting > box.header {
+  min-height: 62px;
+}
+
+/* A setting's button is one of its controls, set like the rest of the row, not
+   the bold of a dialog's main action. */
+.am-settings button {
+  font-weight: normal;
+}
+
+/* "Use system setting" while it is the choice: in the accent, as the ring round
+   a chosen theme's circle is. GTK's own pressed look is a darker grey, which
+   reads as switched off rather than chosen. */
+.am-settings button.am-choice:checked {
+  background-color: @accent_bg_color;
+  color: @accent_fg_color;
 }
 
 /* ---- Cards -------------------------------------------------------------

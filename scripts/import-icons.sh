@@ -45,6 +45,13 @@ map=(
     warning:warning
     power-saving:energy
     sensors:sensors
+    contrast:theme
+    opacity:opacity
+    text-fields:text
+    timer:timer
+    alt-route:branch
+    folder:folder
+    description:document
 )
 
 fail=0

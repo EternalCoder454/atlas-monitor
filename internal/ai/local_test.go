@@ -5,7 +5,7 @@ import "testing"
 // TestIsLocal pins which endpoints count as "nothing leaves the machine". The
 // assistant's system prompt carries the hostname, the username and the process
 // list, and this client cannot speak TLS, so the distinction decides whether the
-// Settings dialog warns.
+// Settings page warns.
 func TestIsLocal(t *testing.T) {
 	local := []string{
 		"http://localhost:11434",

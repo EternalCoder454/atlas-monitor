@@ -43,7 +43,7 @@ type App struct {
 	// updating is set while an install is building, so a second one cannot start.
 	updating bool
 	// installed is how this copy got onto the machine, worked out once: see
-	// install(). The Settings dialog checks for updates on a goroutine of its
+	// install(). The Settings page checks for updates on a goroutine of its
 	// own, so this is settled through a sync.Once rather than a plain flag.
 	installed   Install
 	installOnce sync.Once
@@ -94,7 +94,8 @@ func New(css, version string) *App {
 		// "Update and restart", or the session ending. The geometry recorded
 		// there is reused; only the open page can still be read here.
 		if a.content != nil {
-			if v := a.content.ActiveView(); v != "" && v != a.settings.LastView {
+			a.content.FlushSettings()
+			if v := a.content.LastPage(); v != "" && v != a.settings.LastView {
 				a.settings.LastView = v
 				_ = config.Save(a.settings)
 			}
@@ -133,6 +134,7 @@ func (a *App) activate() {
 	a.content = ui.NewWindow(a.col, a.aiClient, &a.settings)
 	a.startEaser()
 	a.content.SetEnergy(a.easer, a.easeErr)
+	a.content.SetSettingsHooks(a.settingsHooks)
 	root := a.content.Build()
 
 	win := adw.NewApplicationWindow(&a.app.Application)
@@ -167,12 +169,6 @@ func (a *App) activate() {
 		header.PackEnd(btn)
 	}
 
-	// Settings is the last entry in the sidebar, where Task Manager keeps it,
-	// rather than a gear in the title bar.
-	a.content.SetSettingsHandler(func() {
-		ui.ShowSettings(win, &a.settings, a.settingsHooks())
-	})
-
 	toolbar := adw.NewToolbarView()
 	toolbar.AddCSSClass("am-frame")
 	toolbar.AddTopBar(header)
@@ -195,14 +191,6 @@ func (a *App) activate() {
 	win.Present()
 
 	a.startUpdateCheck(win)
-
-	// Dev aid: ATLAS_OPEN_SETTINGS=1 opens the settings dialog at startup.
-	if os.Getenv("ATLAS_OPEN_SETTINGS") == "1" {
-		glib.TimeoutAdd(400, func() bool {
-			ui.ShowSettings(win, &a.settings, a.settingsHooks())
-			return false
-		})
-	}
 }
 
 // brandBox is the application's name at the start of the title bar: its icon,
@@ -270,13 +258,16 @@ func (a *App) onSettingsChanged() {
 // picks up where this one left off. A maximized window keeps the size it had
 // before being maximized, which is what the user gets back on un-maximize.
 func (a *App) saveWindowState(win *adw.ApplicationWindow) {
+	// Text still being typed in Settings goes in with everything else, while the
+	// window it would update is still there.
+	a.content.FlushSettings()
 	a.settings.WindowMaximized = win.IsMaximized()
 	if !a.settings.WindowMaximized {
 		if w, h := win.DefaultSize(); w >= config.MinWindowWidth && h >= config.MinWindowHeight {
 			a.settings.WindowWidth, a.settings.WindowHeight = w, h
 		}
 	}
-	if v := a.content.ActiveView(); v != "" {
+	if v := a.content.LastPage(); v != "" {
 		a.settings.LastView = v
 	}
 	_ = config.Save(a.settings)
@@ -319,7 +310,7 @@ func atlasDir(envVar, unixSuffix string) string {
 	return filepath.Join(home, unixSuffix, "atlas-monitor")
 }
 
-// settingsHooks bundles the callbacks the Settings dialog needs.
+// settingsHooks bundles the callbacks the Settings page needs.
 func (a *App) settingsHooks() ui.SettingsHooks {
 	return ui.SettingsHooks{
 		OnChange:    a.onSettingsChanged,
@@ -335,7 +326,7 @@ func (a *App) settingsHooks() ui.SettingsHooks {
 // updates it: a checkout path, or "installed by pacman — /usr/bin/atlas-monitor".
 func (a *App) location() string { return a.install().Where() }
 
-// checkUpdate adapts CheckUpdate to what the Settings dialog wants: a yes/no
+// checkUpdate adapts CheckUpdate to what the Settings page wants: a yes/no
 // and one line to show. The detail it drops — the version and the changelog —
 // is only needed by the prompt at launch.
 func (a *App) checkUpdate(channel string) (available bool, info string, err error) {

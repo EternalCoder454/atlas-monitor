@@ -46,7 +46,7 @@ const (
 )
 
 // Modes lists the selectable rendering modes with their labels, in the order
-// the Settings dialog shows them.
+// the Settings page shows them.
 var Modes = []struct{ Value, Label, Detail string }{
 	// Labels and details both stay short. A combo row lays its value out beside
 	// the subtitle, and a subtitle long enough to fill the row on one line takes
@@ -72,7 +72,7 @@ const (
 )
 
 // TextModes lists the selectable text-rendering modes with their labels, in the
-// order the Settings dialog shows them.
+// order the Settings page shows them.
 var TextModes = []struct{ Value, Label, Detail string }{
 	// Keep both short. A combo row lays its value out beside the subtitle, and
 	// a subtitle long enough to fill the row on one line takes the width the
