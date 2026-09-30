@@ -358,6 +358,7 @@ type appsView struct {
 	sortModel *gtk.SortListModel
 	vadj      *gtk.Adjustment
 	lastPage  float64
+	lastUpper float64
 
 	ranks        *rankTable
 	activeLess   func(a, b *process.Proc) bool
@@ -739,9 +740,14 @@ func (v *appsView) visibleRange() (lo, hi int, ok bool) {
 func (v *appsView) watchScroll() {
 	v.vadj = v.scroller.VAdjustment()
 	v.vadj.ConnectValueChanged(v.refreshVisible)
+	// A resize changes the page, and a search or a filter changes how tall the
+	// list is. Until the layout that follows, the rows' height is worked out
+	// from the old total over the new count, so the range is wrong for that
+	// moment; refreshing again once the total has caught up puts it right.
 	v.vadj.ConnectChanged(func() {
-		if p := v.vadj.PageSize(); p != v.lastPage {
-			v.lastPage = p
+		p, u := v.vadj.PageSize(), v.vadj.Upper()
+		if p != v.lastPage || u != v.lastUpper {
+			v.lastPage, v.lastUpper = p, u
 			v.refreshVisible()
 		}
 	})
