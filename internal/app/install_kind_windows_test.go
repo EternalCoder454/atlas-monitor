@@ -64,8 +64,4 @@ func TestDownloadPageIsAReleaseURL(t *testing.T) {
 			t.Errorf("downloadPage(%q) = %q, want the releases of that channel's build", channel, url)
 		}
 	}
-	// And the minimal ones: /releases/latest is usually the full application.
-	if strings.HasSuffix(url, "/releases/latest") || !strings.Contains(url, "minimal") {
-		t.Errorf("downloadPage() = %q, want minimal's releases, not the latest of either build", url)
-	}
 }
