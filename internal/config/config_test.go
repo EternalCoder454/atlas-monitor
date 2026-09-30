@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -429,5 +430,106 @@ func TestEnergyAutoDefaultsOn(t *testing.T) {
 	s := Load()
 	if s.EnergyAuto || len(s.EnergyNever) != 1 || s.EnergyNever[0] != "org.kde.konsole" {
 		t.Errorf("loaded %+v", s)
+	}
+}
+
+func TestNormalizeFrame(t *testing.T) {
+	for _, style := range FrameChoices {
+		if got := NormalizeFrame(style); got != style {
+			t.Errorf("NormalizeFrame(%q) = %q, want it unchanged", style, got)
+		}
+	}
+	for _, bad := range []string{"", "Solid", "opaque", " solid"} {
+		if got := NormalizeFrame(bad); got != FrameSeeThrough {
+			t.Errorf("NormalizeFrame(%q) = %q, want %q", bad, got, FrameSeeThrough)
+		}
+	}
+	if d := Defaults(); d.FrameStyle != FrameSeeThrough {
+		t.Errorf("default FrameStyle = %q, want %q", d.FrameStyle, FrameSeeThrough)
+	}
+}
+
+// TestFrameStyleLoads: a saved style comes back, and a file from before the
+// option existed comes back see-through, which is how those windows looked.
+func TestFrameStyleLoads(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(path()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for body, want := range map[string]string{
+		`{"frame_style":"solid"}`:         FrameSolid,
+		`{"frame_style":"solid-sidebar"}`: FrameSolidSidebar,
+		`{}`:                              FrameSeeThrough,
+		`{"frame_style":"glass"}`:         FrameSeeThrough,
+	} {
+		if err := os.WriteFile(path(), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := Load().FrameStyle; got != want {
+			t.Errorf("%s: FrameStyle = %q, want %q", body, got, want)
+		}
+	}
+}
+
+func TestNormalizeChannel(t *testing.T) {
+	for _, ch := range Channels {
+		if got := NormalizeChannel(ch); got != ch {
+			t.Errorf("NormalizeChannel(%q) = %q, want it unchanged", ch, got)
+		}
+	}
+	for _, bad := range []string{"", "Main", "stable", "release"} {
+		if got := NormalizeChannel(bad); got != DefaultChannel {
+			t.Errorf("NormalizeChannel(%q) = %q, want %q", bad, got, DefaultChannel)
+		}
+	}
+	if d := Defaults(); d.UpdateChannel != DefaultChannel {
+		t.Errorf("default UpdateChannel = %q, want %q", d.UpdateChannel, DefaultChannel)
+	}
+}
+
+// TestSaveKeepsWhatItDoesNotKnow: a key this build has no field for — the
+// assistant's, written by the full application and read by the minimal one —
+// survives a save, and the keys it does know are written fresh.
+func TestSaveKeepsWhatItDoesNotKnow(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(path()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path(), []byte(`{"from_the_other_build":{"a":1},"theme":"old"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := Load()
+	s.Theme = "dracula"
+	if err := Save(s); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	var kept bytes.Buffer
+	if err := json.Compact(&kept, m["from_the_other_build"]); err != nil || kept.String() != `{"a":1}` {
+		t.Errorf("unknown key = %s, want it kept", m["from_the_other_build"])
+	}
+	if string(m["theme"]) != `"dracula"` {
+		t.Errorf("theme = %s, want the new value", m["theme"])
+	}
+}
+
+// TestSaveOverNull: a settings file that is only `null` is replaced, not kept.
+func TestSaveOverNull(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(path()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path(), []byte("null"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(Defaults()); err != nil {
+		t.Fatalf("Save over a null file: %v", err)
 	}
 }

@@ -7,6 +7,8 @@ import (
 	"github.com/diamondburned/gotk4/pkg/gio/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 	"github.com/diamondburned/gotk4/pkg/pango"
+
+	"atlas-monitor/internal/config"
 )
 
 // What a copy of Atlas that it must not overwrite offers instead of an update.
@@ -85,7 +87,7 @@ func (a *App) showManagedUpdate(in Install) {
 	// Where there is no command to run, there is a page to go to. This is the
 	// Windows path: the new build is a download rather than a package.
 	if cmd == "" {
-		if url := downloadPage(); url != "" {
+		if url := downloadPage(config.NormalizeChannel(a.settings.UpdateChannel)); url != "" {
 			link := gtk.NewLabel(url)
 			link.SetXAlign(0)
 			link.SetWrap(true)

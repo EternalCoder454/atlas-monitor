@@ -1,9 +1,10 @@
 package ui
 
 import (
+	"cmp"
 	"fmt"
-	"sort"
-	"strings"
+	"slices"
+	"strconv"
 
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
@@ -39,13 +40,15 @@ type energyView struct {
 	appGroup *adw.PreferencesGroup
 	appRows  map[string]*energyAppRow
 	appKey   string
+	appKeyB  []byte
 	appsNone *gtk.Label
 
 	// The other programs, by process.
 	group *adw.PreferencesGroup
 	empty *gtk.Label
 	shown string
-	snap  []process.Proc
+	cand  []process.Proc // candidates, reused every tick
+	keyB  []byte         // the key under construction, reused every tick
 	// eased remembers what this session has already eased off, by pid and start
 	// time: a pid on its own is reused, and easing off the wrong program later
 	// because it inherited a number would be a nasty surprise.
@@ -55,6 +58,7 @@ type energyView struct {
 type energyAppRow struct {
 	row *adw.ActionRow
 	app ease.App
+	sub string // the subtitle now set, so an unchanged one is not set again
 }
 
 // energyCandidates is how many programs the page will argue with at once.
@@ -167,12 +171,16 @@ func (v *energyView) updateApps() {
 		}
 		all = keep
 	}
-	var key strings.Builder
+	key := v.appKeyB[:0]
 	for _, a := range all {
-		fmt.Fprintf(&key, "%s:%d;", a.ID, a.Status)
+		key = append(key, a.ID...)
+		key = append(key, ':')
+		key = strconv.AppendInt(key, int64(a.Status), 10)
+		key = append(key, ';')
 	}
-	if key.String() != v.appKey {
-		v.appKey = key.String()
+	v.appKeyB = key
+	if string(key) != v.appKey {
+		v.appKey = string(key)
 		old := v.appGroup
 		v.appGroup = adw.NewPreferencesGroup()
 		v.appGroup.SetTitle("Apps")
@@ -187,7 +195,10 @@ func (v *energyView) updateApps() {
 	}
 	for _, a := range all {
 		if r := v.appRows[a.ID]; r != nil {
-			r.row.SetSubtitle(appStatus(a, v.settings.EnergyAuto))
+			if sub := appStatus(a, v.settings.EnergyAuto); sub != r.sub {
+				r.sub = sub
+				r.row.SetSubtitle(sub)
+			}
 		}
 	}
 	v.appsNone.SetVisible(len(all) == 0)
@@ -198,7 +209,8 @@ func (v *energyView) updateApps() {
 func (v *energyView) appRow(a ease.App) *energyAppRow {
 	row := adw.NewActionRow()
 	row.SetTitle(a.Name)
-	row.SetSubtitle(appStatus(a, v.settings.EnergyAuto))
+	sub := appStatus(a, v.settings.EnergyAuto)
+	row.SetSubtitle(sub)
 	row.SetSubtitleLines(2)
 	if ai := v.apps.of(a.Unit); ai != nil && ai.icon != "" {
 		img := gtk.NewImage()
@@ -223,6 +235,11 @@ func (v *energyView) appRow(a ease.App) *energyAppRow {
 		}
 		if err != nil {
 			row.SetSubtitle("Could not do that: " + err.Error())
+			// The row's remembered subtitle is no longer what it shows, so the
+			// next tick's status replaces the message, as it always did.
+			if r := v.appRows[id]; r != nil {
+				r.sub = ""
+			}
 			return
 		}
 		v.appKey = "" // rebuild with the new status
@@ -251,7 +268,7 @@ func (v *energyView) appRow(a ease.App) *energyAppRow {
 	more.SetVAlign(gtk.AlignCenter)
 	more.AddCSSClass("flat")
 	row.AddSuffix(more)
-	return &energyAppRow{row: row, app: a}
+	return &energyAppRow{row: row, app: a, sub: sub}
 }
 
 // appStatus says what Energy Saver is doing about an application, and why.
@@ -293,31 +310,40 @@ func contains(list []string, s string) bool {
 // updateOthers rebuilds the per-process list when what it would say has changed.
 // With an easer, applications are its business and this lists the rest.
 func (v *energyView) updateOthers() {
-	var candidates []process.Proc
-	v.snap = v.proc.SnapshotInto(v.snap)
-	for _, p := range v.snap {
-		if v.easer != nil && v.apps.of(p.Unit) != nil {
-			continue
+	candidates := v.cand[:0]
+	v.proc.View(func(procs []process.Proc) {
+		for i := range procs {
+			p := &procs[i]
+			if v.easer != nil && v.apps.of(p.Unit) != nil {
+				continue
+			}
+			if p.Impact() >= process.ImpactModerate {
+				candidates = append(candidates, *p)
+			}
 		}
-		if p.Impact() >= process.ImpactModerate {
-			candidates = append(candidates, p)
-		}
-	}
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].PowerScore() > candidates[j].PowerScore()
+	})
+	slices.SortFunc(candidates, func(a, b process.Proc) int {
+		return cmp.Compare(b.PowerScore(), a.PowerScore())
 	})
 	if len(candidates) > energyCandidates {
 		candidates = candidates[:energyCandidates]
 	}
+	v.cand = candidates
 
-	key := ""
+	key := v.keyB[:0]
 	for _, p := range candidates {
-		key += fmt.Sprintf("%d:%s:%d;", p.PID, p.Name, p.Impact())
+		key = strconv.AppendInt(key, int64(p.PID), 10)
+		key = append(key, ':')
+		key = append(key, p.Name...)
+		key = append(key, ':')
+		key = strconv.AppendInt(key, int64(p.Impact()), 10)
+		key = append(key, ';')
 	}
-	if key == v.shown {
+	v.keyB = key
+	if string(key) == v.shown {
 		return
 	}
-	v.shown = key
+	v.shown = string(key)
 
 	old := v.group
 	v.group = adw.NewPreferencesGroup()

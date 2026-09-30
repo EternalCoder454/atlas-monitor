@@ -18,6 +18,14 @@ var transparencyLevels = []struct{ Value, Label string }{
 	{config.TransparencyStrong, "Strong"},
 }
 
+// frameStyles are the choices for the sidebar and title bar under transparency,
+// in the order Settings lists them.
+var frameStyles = []struct{ Value, Label string }{
+	{config.FrameSeeThrough, "See-through"},
+	{config.FrameSolidSidebar, "Solid sidebar"},
+	{config.FrameSolid, "Solid"},
+}
+
 // transparencyAvailable says whether the window can be made see-through, and if
 // not, why in words the Settings row can show.
 //

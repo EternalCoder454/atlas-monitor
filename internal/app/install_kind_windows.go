@@ -1,5 +1,7 @@
 package app
 
+import "atlas-monitor/internal/config"
+
 // Updating on Windows.
 //
 // Atlas cannot update itself here, and it is worth being precise about why rather
@@ -29,5 +31,14 @@ func platformWording(Install) (heading, body string, ok bool) {
 			"with Atlas closed.", true
 }
 
-// downloadPage is where the new build is. The dialog offers to open it.
-func downloadPage() string { return repoURL + "/releases/latest" }
+// downloadPage is where the new build for a channel is. The dialog offers to
+// open it. Not /releases/latest for Minimal: GitHub resolves that to the newest
+// release of either build, which is usually the full application's. Minimal
+// releases are tagged vX.Y.Z-minimal, and a search for them lists the newest
+// first.
+func downloadPage(channel string) string {
+	if channel == config.ChannelMinimal {
+		return repoURL + "/releases?q=minimal&expanded=true"
+	}
+	return repoURL + "/releases/latest"
+}

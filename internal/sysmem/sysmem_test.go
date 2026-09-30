@@ -109,3 +109,17 @@ func rssKB(t *testing.T) int {
 	t.Skip("VmRSS not reported")
 	return 0
 }
+
+// TestReleaseCodeLeavesTheProcessWorking pages out the test binary's own code
+// and then runs more of it: every page it needs has to fault back in.
+func TestReleaseCodeLeavesTheProcessWorking(t *testing.T) {
+	ReleaseCode()
+	sum := 0
+	for i := range 1000 {
+		sum += i
+	}
+	if sum != 499500 {
+		t.Fatalf("sum = %d after ReleaseCode", sum)
+	}
+	ReleaseCode() // twice in a row is fine too
+}

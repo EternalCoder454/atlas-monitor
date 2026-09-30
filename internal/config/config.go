@@ -60,6 +60,30 @@ func NormalizeRefresh(seconds int) int {
 	return DefaultRefreshSeconds
 }
 
+// Update channels: the branch an update pulls. Release and Beta are the full
+// application, the first stable and the second ahead of it; Minimal is Atlas
+// without the assistant. Choosing another one and pressing Update moves this
+// copy onto it.
+const (
+	ChannelRelease = "main"
+	ChannelBeta    = "beta"
+	ChannelMinimal = "minimal"
+)
+
+// Channels are the channels offered in Settings, in its order.
+var Channels = []string{ChannelRelease, ChannelBeta, ChannelMinimal}
+
+// NormalizeChannel maps anything that is not a channel onto this build's
+// default.
+func NormalizeChannel(ch string) string {
+	for _, c := range Channels {
+		if ch == c {
+			return ch
+		}
+	}
+	return DefaultChannel
+}
+
 // Window transparency levels, as stored in settings. Off is the default and
 // leaves the window opaque, which is how Atlas has always looked.
 const (
@@ -84,6 +108,31 @@ func NormalizeTransparency(level string) string {
 		}
 	}
 	return TransparencyOff
+}
+
+// Frame styles, as stored in settings: how the sidebar and title bar look while
+// the window is see-through. See-through, the default, lets the desktop show
+// through them as well as the page. Solid sidebar keeps the sidebar opaque and
+// the title bar see-through, which is how the first transparent release looked.
+// Solid keeps both opaque, so only the page shows the desktop.
+const (
+	FrameSeeThrough   = "see-through"
+	FrameSolidSidebar = "solid-sidebar"
+	FrameSolid        = "solid"
+)
+
+// FrameChoices are the frame styles offered in Settings, in its order.
+var FrameChoices = []string{FrameSeeThrough, FrameSolidSidebar, FrameSolid}
+
+// NormalizeFrame maps anything that is not one of the offered styles onto
+// see-through, for the same reason as NormalizeTransparency.
+func NormalizeFrame(style string) string {
+	for _, c := range FrameChoices {
+		if style == c {
+			return style
+		}
+	}
+	return FrameSeeThrough
 }
 
 // QuickPrompt is one entry in the assistant's quick-prompts dropdown: a display
@@ -120,7 +169,7 @@ type Settings struct {
 	UpdateCheck    bool   `json:"update_check"`
 	AssistantTitle string `json:"assistant_title"` // page header / chat label; sidebar stays "Assistant"
 	SystemPrompt   string `json:"system_prompt"`
-	UpdateChannel  string `json:"update_channel"` // "main" (Release) or "beta" (newest features/fixes)
+	UpdateChannel  string `json:"update_channel"` // one of the Channel constants
 	RenderMode     string `json:"render_mode"`    // see gfx: "software" (default), "gpu", "system"
 
 	// Theme is the colour theme's id — see internal/theme. Empty means Atlas
@@ -132,6 +181,11 @@ type Settings struct {
 	// the Transparency constants. Text and charts stay solid at every level. It
 	// only takes effect where the display composites; see ui.TransparencyAvailable.
 	WindowTransparency string `json:"window_transparency"`
+
+	// FrameStyle is how the sidebar and title bar look while the window is
+	// see-through: one of the Frame constants. It does nothing while
+	// transparency is off.
+	FrameStyle string `json:"frame_style"`
 
 	// RefreshSeconds is how often every collector samples and the visible page
 	// redraws. It also stretches the graphs: they keep 60 samples either way, so
@@ -172,7 +226,7 @@ func Defaults() Settings {
 		UpdateCheck:    true,
 		AssistantTitle: "Assistant",
 		SystemPrompt:   DefaultSystemPrompt,
-		UpdateChannel:  "main",
+		UpdateChannel:  DefaultChannel,
 		RenderMode:     gfx.ModeSoftware,
 		RefreshSeconds: DefaultRefreshSeconds,
 		WindowWidth:    DefaultWindowWidth,
@@ -182,6 +236,7 @@ func Defaults() Settings {
 		QuickPrompts:   DefaultQuickPrompts(),
 
 		WindowTransparency: TransparencyOff,
+		FrameStyle:         FrameSeeThrough,
 	}
 }
 
@@ -245,13 +300,12 @@ func Load() Settings {
 		}
 		s.SystemPrompt = strings.TrimSpace(s.SystemPrompt)
 	}
-	if s.UpdateChannel != "main" && s.UpdateChannel != "beta" {
-		s.UpdateChannel = "main" // default/repair: Release channel
-	}
+	s.UpdateChannel = NormalizeChannel(s.UpdateChannel)
 	s.RenderMode = gfx.Normalize(s.RenderMode)
 	s.TextRendering = gfx.NormalizeText(s.TextRendering)
 	s.RefreshSeconds = NormalizeRefresh(s.RefreshSeconds)
 	s.WindowTransparency = NormalizeTransparency(s.WindowTransparency)
+	s.FrameStyle = NormalizeFrame(s.FrameStyle)
 	if s.WindowWidth < MinWindowWidth {
 		s.WindowWidth = DefaultWindowWidth
 	}
@@ -279,7 +333,7 @@ func Save(s Settings) error {
 	if err := os.MkdirAll(dir(), 0o755); err != nil {
 		return err
 	}
-	b, err := json.MarshalIndent(s, "", "  ")
+	b, err := merged(s)
 	if err != nil {
 		return err
 	}
@@ -335,4 +389,36 @@ func without(names []string, drop ...string) []string {
 		}
 	}
 	return out
+}
+
+// merged is the settings as JSON, on top of whatever the file already holds that
+// this build does not know about.
+//
+// The full application and the minimal one share a settings file, and the
+// minimal one has no assistant, so it knows nothing of the model, the prompt or
+// the quick prompts. Saving only what it knows would drop them, and someone who
+// tried the Minimal channel and came back would find the assistant reset. Keys
+// this build does not have are kept as they were; the ones it has are written
+// fresh.
+func merged(s Settings) ([]byte, error) {
+	fresh, err := json.Marshal(s)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]json.RawMessage{}
+	if old, err := os.ReadFile(path()); err == nil {
+		// A damaged file has nothing to keep — and `null` would leave the map
+		// nil, which could not be written to.
+		if json.Unmarshal(old, &out) != nil || out == nil {
+			out = map[string]json.RawMessage{}
+		}
+	}
+	var mine map[string]json.RawMessage
+	if err := json.Unmarshal(fresh, &mine); err != nil {
+		return nil, err
+	}
+	for k, v := range mine {
+		out[k] = v
+	}
+	return json.MarshalIndent(out, "", "  ")
 }

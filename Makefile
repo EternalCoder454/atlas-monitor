@@ -12,6 +12,16 @@ ICONACT := $(PREFIX)/share/icons/hicolor/scalable/actions
 # a generic name here would lose to the system theme and never be used.
 ICONS   := cpu memory disk gpu assistant network wifi battery apps services settings prompts update trash reset menu warning startup energy sensors theme opacity text timer branch folder document
 
+# LAUNCHER goes in front of the binary in the app menu entry. It is empty for a
+# normal install. setup.sh sets it, through $(DATADIR)/launcher, when Atlas is
+# built inside a distrobox container on a distribution whose GTK is too old:
+# the entry then starts Atlas through the container. Read from the file so that
+# an in-app update, which runs `make install` itself, keeps it.
+# Only for an install into the home folder, which is the only kind setup.sh
+# makes, so a leftover file cannot reach a package built with PREFIX=/usr; and
+# `make LAUNCHER=` overrides it.
+LAUNCHER ?= $(if $(filter $(HOME)/%,$(PREFIX)),$(strip $(shell cat $(DATADIR)/launcher 2>/dev/null)))
+
 # TAGS is passed to the Go build. `noai` drops the Assistant page, the Ollama
 # client and the Markdown renderer — see `make build-lean`.
 TAGS    ?=
@@ -62,7 +72,7 @@ install: build
 		install -Dm644 assets/icons/atlas-$$icon-symbolic.svg $(ICONACT)/atlas-$$icon-symbolic.svg; \
 	done
 	install -d $(APPDIR)
-	sed 's|@BIN@|$(PREFIX)/bin/$(BINARY)|g' assets/$(APPID).desktop > $(APPDIR)/$(APPID).desktop
+	sed 's|@BIN@|$(strip $(LAUNCHER) $(PREFIX)/bin/$(BINARY))|g' assets/$(APPID).desktop > $(APPDIR)/$(APPID).desktop
 	chmod 644 $(APPDIR)/$(APPID).desktop
 	-update-desktop-database $(APPDIR) 2>/dev/null || true
 	-gtk4-update-icon-cache -f -t $(PREFIX)/share/icons/hicolor 2>/dev/null || true
