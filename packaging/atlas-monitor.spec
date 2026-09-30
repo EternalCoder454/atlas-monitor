@@ -8,7 +8,7 @@
 %global debug_package %{nil}
 
 Name:           atlas-monitor
-Version:        %{?_version}%{!?_version:0.12.0}
+Version:        %{?_version}%{!?_version:0.13.0}
 Release:        1%{?dist}
 Summary:        Lightweight system monitor for GNOME — CPU, memory, disk, network, GPU
 
@@ -75,6 +75,11 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/com.atlas.Monitor.des
 %{_datadir}/icons/hicolor/scalable/actions/atlas-*-symbolic.svg
 
 %changelog
+* Wed Sep 30 2026 EternalHell <77252745+EternalCoder454@users.noreply.github.com> - 0.13.0-1
+- Settings is a single page in the window, laid out like Task Manager's
+- Optional window transparency, and ruled tables sized to each theme
+- Much less work to draw each second, most of all on Settings and Apps
+
 * Tue Sep 29 2026 EternalHell <77252745+EternalCoder454@users.noreply.github.com> - 0.12.0-1
 - A new look modelled on the Windows 11 Task Manager
 - The Apps list shades busy programs by how busy they are
