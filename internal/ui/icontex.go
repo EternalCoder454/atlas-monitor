@@ -8,7 +8,8 @@ package ui
 // will be shown at, into a texture in the software renderer's own pixel format.
 // NULL when there is no such icon, or when it is symbolic: a symbolic icon is
 // coloured from the widget showing it, which a texture made here cannot know.
-static GdkTexture *atlas_icon_texture(GtkWidget *w, const char *name, int size, int scale) {
+static GdkTexture *atlas_icon_texture(uintptr_t handle, const char *name, int size, int scale) {
+	GtkWidget *w = (GtkWidget *)handle;
 	GdkDisplay *display = gtk_widget_get_display(w);
 	GtkIconTheme *theme = gtk_icon_theme_get_for_display(display);
 	GtkIconPaintable *icon;
@@ -135,7 +136,7 @@ func iconTexture(img *gtk.Image, name string, size int) gdk.Paintabler {
 	}
 	cname := C.CString(name)
 	defer C.free(unsafe.Pointer(cname))
-	ptr := C.atlas_icon_texture((*C.GtkWidget)(unsafe.Pointer(img.Object.Native())), cname, C.int(size), C.int(scale))
+	ptr := C.atlas_icon_texture(C.uintptr_t(img.Object.Native()), cname, C.int(size), C.int(scale))
 	var tex gdk.Paintabler
 	if ptr != nil {
 		// Cast builds gotk4's own wrapper for the texture's actual type.
