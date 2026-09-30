@@ -431,3 +431,41 @@ func TestEnergyAutoDefaultsOn(t *testing.T) {
 		t.Errorf("loaded %+v", s)
 	}
 }
+
+func TestNormalizeFrame(t *testing.T) {
+	for _, style := range FrameChoices {
+		if got := NormalizeFrame(style); got != style {
+			t.Errorf("NormalizeFrame(%q) = %q, want it unchanged", style, got)
+		}
+	}
+	for _, bad := range []string{"", "Solid", "opaque", " solid"} {
+		if got := NormalizeFrame(bad); got != FrameSeeThrough {
+			t.Errorf("NormalizeFrame(%q) = %q, want %q", bad, got, FrameSeeThrough)
+		}
+	}
+	if d := Defaults(); d.FrameStyle != FrameSeeThrough {
+		t.Errorf("default FrameStyle = %q, want %q", d.FrameStyle, FrameSeeThrough)
+	}
+}
+
+// TestFrameStyleLoads: a saved style comes back, and a file from before the
+// option existed comes back see-through, which is how those windows looked.
+func TestFrameStyleLoads(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(path()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for body, want := range map[string]string{
+		`{"frame_style":"solid"}`:         FrameSolid,
+		`{"frame_style":"solid-sidebar"}`: FrameSolidSidebar,
+		`{}`:                              FrameSeeThrough,
+		`{"frame_style":"glass"}`:         FrameSeeThrough,
+	} {
+		if err := os.WriteFile(path(), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := Load().FrameStyle; got != want {
+			t.Errorf("%s: FrameStyle = %q, want %q", body, got, want)
+		}
+	}
+}

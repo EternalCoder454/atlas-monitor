@@ -505,6 +505,21 @@ window.am-glass .am-shell {
   border-bottom-right-radius: var(--window-radius);
 }
 
+/* Settings, Appearance, "Sidebar and title bar": either can stay solid while
+   the page lets the desktop through. The sidebar's pane takes the frame's
+   colour back, with the window's bottom-left corner, since it now reaches it;
+   a solid title bar takes the colour over whatever level the window is at. */
+window.am-glass.am-sidebar-solid .am-shell .sidebar-pane,
+window.am-glass.am-frame-solid .am-shell .sidebar-pane {
+  background-color: @sidebar_bg_color;
+  border-bottom-left-radius: var(--window-radius);
+}
+
+window.am-glass.am-frame-solid toolbarview.am-frame > .top-bar,
+window.am-glass.am-frame-solid toolbarview.am-frame > .top-bar:backdrop {
+  background-color: @sidebar_bg_color;
+}
+
 /* In a narrow window the sidebar slides over the page instead of beside it, and
    see-through there would put the page's text under the sidebar's. It is kept
    nearly solid while it overlays; see am-collapsed in internal/ui/window.go. */

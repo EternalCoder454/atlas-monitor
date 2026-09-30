@@ -86,6 +86,31 @@ func NormalizeTransparency(level string) string {
 	return TransparencyOff
 }
 
+// Frame styles, as stored in settings: how the sidebar and title bar look while
+// the window is see-through. See-through, the default, lets the desktop show
+// through them as well as the page. Solid sidebar keeps the sidebar opaque and
+// the title bar see-through, which is how the first transparent release looked.
+// Solid keeps both opaque, so only the page shows the desktop.
+const (
+	FrameSeeThrough   = "see-through"
+	FrameSolidSidebar = "solid-sidebar"
+	FrameSolid        = "solid"
+)
+
+// FrameChoices are the frame styles offered in Settings, in its order.
+var FrameChoices = []string{FrameSeeThrough, FrameSolidSidebar, FrameSolid}
+
+// NormalizeFrame maps anything that is not one of the offered styles onto
+// see-through, for the same reason as NormalizeTransparency.
+func NormalizeFrame(style string) string {
+	for _, c := range FrameChoices {
+		if style == c {
+			return style
+		}
+	}
+	return FrameSeeThrough
+}
+
 // QuickPrompt is one entry in the assistant's quick-prompts dropdown: a display
 // name and the message sent when it is chosen. Both are user-editable.
 type QuickPrompt struct {
@@ -132,6 +157,11 @@ type Settings struct {
 	// the Transparency constants. Text and charts stay solid at every level. It
 	// only takes effect where the display composites; see ui.TransparencyAvailable.
 	WindowTransparency string `json:"window_transparency"`
+
+	// FrameStyle is how the sidebar and title bar look while the window is
+	// see-through: one of the Frame constants. It does nothing while
+	// transparency is off.
+	FrameStyle string `json:"frame_style"`
 
 	// RefreshSeconds is how often every collector samples and the visible page
 	// redraws. It also stretches the graphs: they keep 60 samples either way, so
@@ -182,6 +212,7 @@ func Defaults() Settings {
 		QuickPrompts:   DefaultQuickPrompts(),
 
 		WindowTransparency: TransparencyOff,
+		FrameStyle:         FrameSeeThrough,
 	}
 }
 
@@ -252,6 +283,7 @@ func Load() Settings {
 	s.TextRendering = gfx.NormalizeText(s.TextRendering)
 	s.RefreshSeconds = NormalizeRefresh(s.RefreshSeconds)
 	s.WindowTransparency = NormalizeTransparency(s.WindowTransparency)
+	s.FrameStyle = NormalizeFrame(s.FrameStyle)
 	if s.WindowWidth < MinWindowWidth {
 		s.WindowWidth = DefaultWindowWidth
 	}

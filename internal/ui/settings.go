@@ -81,7 +81,7 @@ func newSettingsView(s *config.Settings, h SettingsHooks) *settingsView {
 
 	settingsSection(page, "Appearance",
 		themeCard(s, h),
-		settingsCard(transparencyRow(s, h)),
+		transparencyCard(s, h),
 		settingsCard(fontRow(s, h)))
 
 	v.usage = memoryRow()
@@ -366,6 +366,54 @@ func themeCard(s *config.Settings, h SettingsHooks) *gtk.ListBox {
 
 	sync()
 	return settingsCard(head, blockRow(circles))
+}
+
+// transparencyCard is the transparency level with, beneath it, how the sidebar
+// and title bar take it. The second row only means something while the window is
+// see-through, so it is greyed the rest of the time, with the reason.
+func transparencyCard(s *config.Settings, h SettingsHooks) *gtk.ListBox {
+	level := transparencyRow(s, h)
+	frame := frameRow(s, h)
+	available, _ := TransparencyAvailable()
+	sync := func() {
+		on := available && config.NormalizeTransparency(s.WindowTransparency) != config.TransparencyOff
+		frame.SetSensitive(on)
+		if on {
+			frame.SetSubtitle("Whether the desktop shows through them as well as the page")
+		} else {
+			frame.SetSubtitle("Takes effect while the window is see-through")
+		}
+	}
+	level.NotifyProperty("selected", sync)
+	sync()
+	return settingsCard(level, frame)
+}
+
+// frameRow is how the sidebar and title bar look under transparency.
+func frameRow(s *config.Settings, h SettingsHooks) *adw.ComboRow {
+	labels := make([]string, len(frameStyles))
+	selected := 0
+	current := config.NormalizeFrame(s.FrameStyle)
+	for i, f := range frameStyles {
+		labels[i] = f.Label
+		if f.Value == current {
+			selected = i
+		}
+	}
+	row := adw.NewComboRow()
+	row.SetTitle("Sidebar and title bar")
+	indented(&row.ActionRow)
+	row.SetModel(gtk.NewStringList(labels))
+	row.SetSelected(uint(selected))
+	row.NotifyProperty("selected", func() {
+		idx := int(row.Selected())
+		if idx < 0 || idx >= len(frameStyles) || frameStyles[idx].Value == s.FrameStyle {
+			return
+		}
+		s.FrameStyle = frameStyles[idx].Value
+		save(s, h)
+	})
+	return row
 }
 
 // transparencyRow is the window transparency dropdown. Where transparency cannot
