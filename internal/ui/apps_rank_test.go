@@ -3,7 +3,6 @@ package ui
 import (
 	"testing"
 
-	"github.com/diamondburned/gotk4/pkg/core/gioutil"
 	coreglib "github.com/diamondburned/gotk4/pkg/core/glib"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
@@ -73,15 +72,15 @@ func rankedView() (*appsView, *gtk.SortListModel) {
 	v.ranks = newRankTable()
 	sorter := v.ranks.newSorter()
 	v.activeSorter, v.activeLess = sorter, byCPU
-	return v, gtk.NewSortListModel(v.model, sorter)
+	return v, gtk.NewSortListModel(v.model.store, sorter)
 }
 
-func rowFromObject(o *coreglib.Object) *procRow { return gioutil.ObjectValue[*procRow](o) }
+func rowFromObject(v *appsView, o *coreglib.Object) *procRow { return v.model.row(o) }
 
 func sortedPIDs(v *appsView, m *gtk.SortListModel) []int {
 	var out []int
 	for i := uint(0); i < m.NItems(); i++ {
-		out = append(out, rowFromObject(m.Item(i)).proc.PID)
+		out = append(out, rowFromObject(v, m.Item(i)).proc.PID)
 	}
 	return out
 }

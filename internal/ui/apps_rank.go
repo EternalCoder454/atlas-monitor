@@ -51,8 +51,23 @@ static int atlas_ranks_reserve(atlasRanks *t, size_t n) {
 	return 1;
 }
 
-static void atlas_tag(uintptr_t obj, size_t idx) {
-	g_object_set_qdata((GObject *)obj, atlas_idx_quark(), GSIZE_TO_POINTER(idx + 1));
+static size_t atlas_index(uintptr_t obj) {
+	return GPOINTER_TO_SIZE(g_object_get_qdata((GObject *)obj, atlas_idx_quark()));
+}
+
+// atlas_store_append adds n plain GObjects to the store, item i carrying the
+// index first+i. A GListStore hands its items out without calling back into Go,
+// which the gioutil model this replaces did for every fetch.
+static void atlas_store_append(uintptr_t store, size_t first, size_t n) {
+	GObject **items = g_new(GObject *, n);
+	for (size_t i = 0; i < n; i++) {
+		items[i] = g_object_new(G_TYPE_OBJECT, NULL);
+		g_object_set_qdata(items[i], atlas_idx_quark(), GSIZE_TO_POINTER(first + i + 1));
+	}
+	GListStore *ls = (GListStore *)store;
+	g_list_store_splice(ls, g_list_model_get_n_items(G_LIST_MODEL(ls)), 0, (gpointer *)items, n);
+	for (size_t i = 0; i < n; i++) g_object_unref(items[i]);
+	g_free(items);
 }
 */
 import "C"
@@ -62,6 +77,7 @@ import (
 	"unsafe"
 
 	coreglib "github.com/diamondburned/gotk4/pkg/core/glib"
+	"github.com/diamondburned/gotk4/pkg/gio/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
 	"atlas-monitor/internal/process"
@@ -103,10 +119,44 @@ func (t *rankTable) set(rows []*procRow, less func(a, b *process.Proc) bool) {
 	t.perm = rankRows(rows, less, t.perm, ranks)
 }
 
-// tag gives a newly added row's list-model object its index, which is how the
-// C comparison finds the row's rank.
-func tagRow(obj *coreglib.Object, idx int) {
-	C.atlas_tag(C.uintptr_t(obj.Native()), C.size_t(idx))
+// rowModel is the table's base list model: a GListStore of plain GObjects, each
+// carrying only its row's index in rows (as object data, the same tag the C
+// sorter reads). Nothing in it calls back into Go, so a sort or filter pass,
+// which asks the model for every item, stays in C. rows is parallel to the store
+// and only grows: retired rows are recycled, never removed.
+type rowModel struct {
+	store *gio.ListStore
+	rows  []*procRow
+}
+
+func newRowModel() *rowModel {
+	return &rowModel{store: gio.NewListStore(coreglib.TypeObject)}
+}
+
+func (m *rowModel) Len() int { return len(m.rows) }
+
+func (m *rowModel) At(i int) *procRow { return m.rows[i] }
+
+// Append adds rows at the end of the model.
+func (m *rowModel) Append(rows ...*procRow) {
+	if len(rows) == 0 {
+		return
+	}
+	first := len(m.rows)
+	m.rows = append(m.rows, rows...)
+	C.atlas_store_append(C.uintptr_t(m.store.Native()), C.size_t(first), C.size_t(len(rows)))
+}
+
+// row maps one of the model's items back to its row, or nil.
+func (m *rowModel) row(obj *coreglib.Object) *procRow {
+	if obj == nil {
+		return nil
+	}
+	idx := int(C.atlas_index(C.uintptr_t(obj.Native())))
+	if idx == 0 || idx > len(m.rows) {
+		return nil
+	}
+	return m.rows[idx-1]
 }
 
 // rankRows writes into ranks[i] the position row i takes when the rows are
