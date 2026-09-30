@@ -3,6 +3,8 @@ package app
 import (
 	"strings"
 	"testing"
+
+	"atlas-monitor/internal/config"
 )
 
 // TestWindowsNeverOffersToInstallOverItself.
@@ -48,10 +50,19 @@ func TestWindowsWordingExplainsTheRealReason(t *testing.T) {
 
 // TestDownloadPageIsAReleaseURL: it is what the dialog's button opens, so a wrong
 // one sends the user somewhere unhelpful.
+//
+// Minimal's is not /releases/latest: GitHub resolves that to the newest release
+// of either build, which is usually the full application.
 func TestDownloadPageIsAReleaseURL(t *testing.T) {
-	url := downloadPage()
-	if !strings.HasPrefix(url, "https://") || !strings.Contains(url, "/releases") {
-		t.Errorf("downloadPage() = %q, want an https releases URL", url)
+	for _, channel := range config.Channels {
+		url := downloadPage(channel)
+		if !strings.HasPrefix(url, "https://") || !strings.Contains(url, "/releases") {
+			t.Errorf("downloadPage(%q) = %q, want an https releases URL", channel, url)
+		}
+		minimal := channel == config.ChannelMinimal
+		if minimal == strings.HasSuffix(url, "/releases/latest") || minimal != strings.Contains(url, "minimal") {
+			t.Errorf("downloadPage(%q) = %q, want the releases of that channel's build", channel, url)
+		}
 	}
 	// And the minimal ones: /releases/latest is usually the full application.
 	if strings.HasSuffix(url, "/releases/latest") || !strings.Contains(url, "minimal") {
