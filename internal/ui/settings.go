@@ -831,22 +831,37 @@ func updateCards(s *config.Settings, h SettingsHooks) []gtk.Widgetter {
 	})
 	status.AddSuffix(update)
 
-	channelIDs := []string{"main", "beta"}
+	// The channel is which Atlas this copy is: moving to another one is
+	// choosing it here and pressing Update, and the description says in one
+	// sentence what the chosen one is.
+	current := config.NormalizeChannel(s.UpdateChannel)
+	labels := make([]string, len(updateChannels))
+	selected := 0
+	for i, c := range updateChannels {
+		labels[i] = c.Label
+		if c.Value == current {
+			selected = i
+		}
+	}
 	channel := adw.NewComboRow()
 	channel.SetTitle("Update channel")
-	channel.SetSubtitle("Release is the stable main branch. Beta has the newest features and fixes")
+	channel.SetSubtitle(updateChannels[selected].Detail)
 	withIcon(&channel.ActionRow, "atlas-branch-symbolic")
-	channel.SetModel(gtk.NewStringList([]string{"Release", "Beta"}))
-	if s.UpdateChannel == "beta" {
-		channel.SetSelected(1)
-	}
+	channel.SetModel(gtk.NewStringList(labels))
+	channel.SetSelected(uint(selected))
 	channel.NotifyProperty("selected", func() {
 		idx := int(channel.Selected())
-		if idx < 0 || idx >= len(channelIDs) || channelIDs[idx] == s.UpdateChannel {
+		if idx < 0 || idx >= len(updateChannels) || updateChannels[idx].Value == s.UpdateChannel {
 			return
 		}
-		s.UpdateChannel = channelIDs[idx]
-		status.SetSubtitle(onChannel())
+		c := updateChannels[idx]
+		s.UpdateChannel = c.Value
+		channel.SetSubtitle(c.Detail)
+		if c.Value == current {
+			status.SetSubtitle(onChannel())
+		} else {
+			status.SetSubtitle("Press Update to switch to " + c.Label)
+		}
 		save(s, h)
 	})
 
@@ -880,9 +895,19 @@ func updateCards(s *config.Settings, h SettingsHooks) []gtk.Widgetter {
 	}
 }
 
+// updateChannels are the channels Settings offers, each with what it is in one
+// sentence.
+var updateChannels = []struct{ Value, Label, Detail string }{
+	{config.ChannelRelease, "Release", "The full Atlas with the assistant, in its stable version"},
+	{config.ChannelBeta, "Beta", "The full Atlas with the newest features and fixes, before they reach Release"},
+	{config.ChannelMinimal, "Minimal", "Atlas without the AI assistant: lighter, with nothing to set up"},
+}
+
 func channelName(ch string) string {
-	if ch == "beta" {
-		return "Beta"
+	for _, c := range updateChannels {
+		if c.Value == ch {
+			return c.Label
+		}
 	}
 	return "Release"
 }

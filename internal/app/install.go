@@ -13,6 +13,8 @@ import (
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 	"github.com/diamondburned/gotk4/pkg/pango"
+
+	"atlas-monitor/internal/config"
 )
 
 // Installing an update.
@@ -167,10 +169,7 @@ func (a *App) startUpdate(done func(ok bool)) {
 // main loop.
 func (a *App) installUpdate(status func(string), finished func(error)) {
 	in := a.install()
-	branch := a.settings.UpdateChannel
-	if branch != "main" && branch != "beta" {
-		branch = "main"
-	}
+	branch := config.NormalizeChannel(a.settings.UpdateChannel)
 	// The new version installs back over the one that is running, whatever
 	// prefix that is under. Left to the Makefile's default a copy installed in
 	// /usr/local would be rebuilt into ~/.local, and which of the two launched

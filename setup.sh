@@ -12,7 +12,7 @@
 #
 # Options:
 #   --beta          follow the Beta channel instead of Release
-#   --minimal       the build without the assistant, from the minimal branch
+#   --minimal       follow the Minimal channel: Atlas without the AI assistant
 #   --yes           do not ask before installing packages or removing things
 #   --container     build in a Fedora container even if this system could build natively
 #   --native        never use a container; stop if the system libraries are too old

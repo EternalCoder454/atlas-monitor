@@ -12,4 +12,4 @@ func platformWording(Install) (heading, body string, ok bool) { return "", "", f
 
 // downloadPage is empty on Linux: there is always either a package manager to
 // name or a rebuild to offer, so nothing needs to send the user to a browser.
-func downloadPage() string { return "" }
+func downloadPage(string) string { return "" }

@@ -405,10 +405,15 @@ all AI activity.
 ## Updating
 
 Open **Settings** and use the **Update** button under **Updates**.
-There are two channels:
+Settings → Updates → **Update channel** chooses which Atlas this copy is:
 
-- **Release (main)** — the stable `main` branch (the default).
-- **Beta (beta)** — the newest features and fixes, for trying things early.
+- **Release** — the full Atlas with the assistant, in its stable version (the default).
+- **Beta** — the full Atlas with the newest features and fixes, before they reach Release.
+- **Minimal** — Atlas without the AI assistant: lighter, with nothing to set up.
+
+To move to another one, choose it and press **Update**: Atlas rebuilds itself
+from that channel and restarts into it. Your settings come along, including the
+assistant's, which are kept while you are on Minimal in case you come back.
 
 What happens when you click it depends on how Atlas was installed, which it works
 out for itself:
