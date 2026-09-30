@@ -235,6 +235,11 @@ func (v *energyView) appRow(a ease.App) *energyAppRow {
 		}
 		if err != nil {
 			row.SetSubtitle("Could not do that: " + err.Error())
+			// The row's remembered subtitle is no longer what it shows, so the
+			// next tick's status replaces the message, as it always did.
+			if r := v.appRows[id]; r != nil {
+				r.sub = ""
+			}
 			return
 		}
 		v.appKey = "" // rebuild with the new status
