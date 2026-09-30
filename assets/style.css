@@ -338,12 +338,13 @@ columnview > listview.separators > row:not(.separator) {
 
 /* ---- Task Manager tables (Apps, Services) ----------------------------
 
-   Taller headers in the regular weight, columns divided by hairlines and rows
-   not divided at all, and every cell in a resource column shaded: faintly at
+   Taller headers in the regular weight, columns divided by lines and rows by
+   fainter ones, and every cell in a resource column shaded: faintly at
    rest, deeper as the reading rises (see cellHeatClasses). The shading is the
    theme's accent, so it is Task Manager's blue on a blue theme and the theme's
-   own hue on any other; the hottest step borrows the warning colour, as Task
-   Manager turns orange.
+   own hue on any other, deepening in three steps. It stays in the accent all
+   the way up: Task Manager's early builds shaded busy cells mustard yellow,
+   Windows Insiders disliked it, and it moved to the accent colour.
 
    The cells lose their padding and their children carry it (.am-cell), so a
    shaded cell is shaded edge to edge instead of inside a frame of padding. The
@@ -356,7 +357,7 @@ columnview.am-table > listview {
 
 columnview.am-table > header > button {
   padding: 10px 10px 8px 10px;
-  border-color: alpha(currentColor, 0.07);
+  border-color: var(--am-divider);
 }
 
 columnview.am-table > header > button > box {
@@ -367,10 +368,18 @@ columnview.am-table header button label {
   font-weight: normal;
 }
 
-/* All four sides one colour, for the reason given for the cell borders below. */
+/* The lines. Dividers between columns and fainter lines between rows, their
+   colours worked out per theme so they read the same on every one — see
+   internal/theme/lines.go, which sets --am-divider and --am-rowline. Each rule
+   gives all four sides one colour, for the reason given for the cell borders
+   below: a border whose sides differ in colour takes GTK's slowest path. */
 columnview.am-table > listview > row > cell {
   padding: 0;
-  border-color: alpha(currentColor, 0.07);
+  border-color: var(--am-divider);
+}
+
+columnview.am-table > listview.separators > row:not(.separator) {
+  border-color: var(--am-rowline);
 }
 
 .am-table .am-cell {
@@ -381,20 +390,23 @@ columnview.am-table > listview > row > cell {
   margin: 0 10px;
 }
 
+/* The four shades are worked out per theme, and from the desktop's accent when
+   following it, so the text on the hottest keeps 4.5:1: internal/theme sets
+   --am-heat-0 to --am-heat-3. See tableCSS in internal/theme/lines.go. */
 .am-metric {
-  background-color: alpha(@accent_bg_color, 0.10);
+  background-color: var(--am-heat-0);
 }
 
 .am-metric.am-heat-1 {
-  background-color: alpha(@accent_bg_color, 0.24);
+  background-color: var(--am-heat-1);
 }
 
 .am-metric.am-heat-2 {
-  background-color: alpha(@accent_bg_color, 0.42);
+  background-color: var(--am-heat-2);
 }
 
 .am-metric.am-heat-3 {
-  background-color: alpha(@warning_color, 0.42);
+  background-color: var(--am-heat-3);
 }
 
 /* ---- Command bars ----------------------------------------------------
@@ -421,6 +433,74 @@ columnview.am-table > listview > row > cell {
 .am-command-separator {
   margin: 8px 6px;
   background-color: alpha(currentColor, 0.14);
+}
+
+/* ---- Transparency (Settings, App, Window transparency) ------------------
+
+   True translucency, not a blur: the window's surfaces let the desktop show
+   through, and everything drawn on them — text, charts, the table's shading —
+   stays solid. The window's own background goes; the frame (title bar and
+   sidebar) and the page take its place at partial opacity. The page sits on the
+   frame, so its opacity compounds with the frame's and it ends up the more
+   solid of the two, which is where the reading is. Cards on the page keep more
+   of their colour still. Dialogs and popovers are left alone: they are read,
+   not glanced through.
+
+   Only set when the display composites and the system is not Windows; see
+   ui.TransparencyAvailable. */
+window.am-glass,
+window.am-glass.background {
+  background-color: transparent;
+}
+
+window.am-glass .am-sidebar {
+  background-color: transparent;
+}
+
+/* In a narrow window the sidebar slides over the page instead of beside it, and
+   see-through there would put the page's text under the sidebar's. It is kept
+   nearly solid while it overlays; see am-collapsed in internal/ui/window.go. */
+window.am-glass .am-shell.am-collapsed .am-sidebar {
+  background-color: alpha(@sidebar_bg_color, 0.97);
+}
+
+window.am-glass-subtle toolbarview.am-frame > .top-bar,
+window.am-glass-subtle .am-shell {
+  background-color: alpha(@sidebar_bg_color, 0.90);
+}
+
+window.am-glass-subtle .am-content {
+  background-color: alpha(@window_bg_color, 0.55);
+}
+
+window.am-glass-subtle .am-content list.boxed-list {
+  background-color: alpha(@card_bg_color, 0.85);
+}
+
+window.am-glass-medium toolbarview.am-frame > .top-bar,
+window.am-glass-medium .am-shell {
+  background-color: alpha(@sidebar_bg_color, 0.78);
+}
+
+window.am-glass-medium .am-content {
+  background-color: alpha(@window_bg_color, 0.45);
+}
+
+window.am-glass-medium .am-content list.boxed-list {
+  background-color: alpha(@card_bg_color, 0.75);
+}
+
+window.am-glass-strong toolbarview.am-frame > .top-bar,
+window.am-glass-strong .am-shell {
+  background-color: alpha(@sidebar_bg_color, 0.62);
+}
+
+window.am-glass-strong .am-content {
+  background-color: alpha(@window_bg_color, 0.40);
+}
+
+window.am-glass-strong .am-content list.boxed-list {
+  background-color: alpha(@card_bg_color, 0.65);
 }
 
 /* ---- Cards -------------------------------------------------------------

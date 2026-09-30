@@ -4,6 +4,7 @@ import (
 	"os"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/diamondburned/gotk4/pkg/core/gioutil"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
@@ -493,5 +494,86 @@ func TestCellHeatHasAStylePerLevel(t *testing.T) {
 	}
 	if got := gpuHeat(&process.Proc{GPU: -1}); got != 0 {
 		t.Errorf("gpuHeat(no handle) = %d, want 0", got)
+	}
+}
+
+// TestHeldOrderKeepsItsKeys: while the order is held, rows keep the key they
+// were last sorted on though their readings move; a new process arrives with its
+// own reading as its key; and a row GTK still has in its sorted list is not given
+// to a new process in the same tick. Releasing the hold catches every key up.
+func TestHeldOrderKeepsItsKeys(t *testing.T) {
+	v := newTestAppsView()
+	snap := procs(1, 2, 3)
+	snap[0].CPU = 10
+	v.applyRows(snap)
+	row3 := v.byPID[3]
+
+	v.hover, v.lastMotion = true, time.Now()
+	snap = procs(1, 2, 3, 4)
+	snap[0].CPU, snap[3].CPU = 80, 50
+	v.applyRows(snap)
+	if r := v.byPID[1]; r.proc.CPU != 80 || r.key.CPU != 10 {
+		t.Errorf("held row: reading %.0f, key %.0f; want the reading to move and the key to stay at 10", r.proc.CPU, r.key.CPU)
+	}
+	if r := v.byPID[4]; r.key.CPU != 50 {
+		t.Errorf("new row's key is %.0f, want its own reading, 50", r.key.CPU)
+	}
+
+	// Process 3 exits and 5 starts in the same tick. 3's row is retired but
+	// GTK has not been told yet, so it is still in the sorted list.
+	v.applyRows(procs(1, 2, 4, 5))
+	if v.byPID[5] == row3 {
+		t.Error("a row still in the sorted list was handed to a new process while the order was held")
+	}
+
+	v.hover = false
+	v.releaseHold()
+	for _, r := range v.order {
+		if r.live && r.key != r.proc {
+			t.Errorf("pid %d: key still differs from its reading after the hold was released", r.proc.PID)
+		}
+	}
+}
+
+// TestHeldOrderReusesHiddenRows: while held, a new process may still take a
+// vacant row — one GTK already has out of its sorted list — and it takes the new
+// process's reading as its key. That is what lets a held table recycle rows
+// instead of growing for as long as the pointer stays on it.
+func TestHeldOrderReusesHiddenRows(t *testing.T) {
+	v := newTestAppsView()
+	v.applyRows(procs(1, 2, 3))
+	row3 := v.byPID[3]
+	v.applyRows(procs(1, 2)) // 3 exits; its row is retired and hidden
+	if row3.shown {
+		t.Fatal("the retired row is still marked as shown after the tick")
+	}
+
+	v.hover, v.lastMotion = true, time.Now()
+	snap := procs(1, 2, 9)
+	snap[2].CPU = 42
+	v.applyRows(snap)
+	if v.byPID[9] != row3 {
+		t.Error("a hidden vacant row was not reused while the order was held")
+	}
+	if got := v.byPID[9].key.CPU; got != 42 {
+		t.Errorf("the reused row's key is %.0f, want the new process's reading, 42", got)
+	}
+}
+
+// TestStillPointerStopsHolding: a pointer left resting on the table holds the
+// order only for holdGrace, not for as long as it stays there.
+func TestStillPointerStopsHolding(t *testing.T) {
+	v := newTestAppsView()
+	v.hover, v.lastMotion = true, time.Now()
+	if !v.holding() {
+		t.Fatal("a pointer that just moved over the table does not hold the order")
+	}
+	v.lastMotion = time.Now().Add(-holdGrace - time.Second)
+	if v.holding() {
+		t.Error("a pointer still for longer than holdGrace still holds the order")
+	}
+	v.menuOpen = true
+	if !v.holding() {
+		t.Error("an open menu does not hold the order")
 	}
 }

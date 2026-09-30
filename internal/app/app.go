@@ -51,11 +51,18 @@ type App struct {
 	// themeCSS carries the chosen theme's colour overrides. It is kept so that
 	// changing theme can replace its contents instead of stacking another
 	// provider on the display for every change.
-	themeCSS *gtk.CSSProvider
+	themeCSS       *gtk.CSSProvider
+	loadedThemeCSS string // what themeCSS holds; see reloadThemeCSS
 	// appliedTheme is the setting last put into effect, so applyTheme can tell
 	// when there is nothing to do. See applyTheme for why that matters.
 	appliedTheme string
 	themeApplied bool
+
+	// appliedGlass is the transparency class last put on the window, or "" for
+	// none, so applyTransparency can tell when there is nothing to do. It has no
+	// separate "applied yet" flag: a window that has been given nothing and one
+	// that has been told to have nothing are the same window.
+	appliedGlass string
 
 	// easer is Energy Saver's automatic half, or nil where the system cannot
 	// support it (easeErr says why). It ticks on a goroutine of its own, window
@@ -168,6 +175,7 @@ func (a *App) activate() {
 	toolbar.AddTopBar(header)
 	toolbar.SetContent(root)
 	win.SetContent(toolbar)
+	a.applyTransparency()
 
 	// Pause/resume all collection based on window visibility (0% CPU hidden).
 	win.ConnectMap(func() { a.content.SetVisible(true) })
@@ -225,6 +233,7 @@ func (a *App) onSettingsChanged() {
 	a.content.RefreshQuickPrompts()
 	a.content.SetRefreshInterval(
 		time.Duration(config.NormalizeRefresh(a.settings.RefreshSeconds)) * time.Second)
+	a.applyTransparency()
 }
 
 // saveWindowState records the geometry and the open page so the next launch
@@ -380,7 +389,44 @@ func (a *App) loadCSS() {
 	// competing with their customisations on nothing but load order.
 	gtk.StyleContextAddProviderForDisplay(
 		display, a.themeCSS, gtk.STYLE_PROVIDER_PRIORITY_APPLICATION+1)
+
+	// The table colours are worked out from the window colours and the accent
+	// (see theme.CSS), and following the desktop both of those can change under
+	// Atlas: the desktop switches to dark in the evening, or the accent is
+	// changed in its settings. Rather than rely on a CSS media query — GTK only
+	// has prefers-color-scheme from 4.20, and libadwaita 1.6, which Atlas
+	// supports, runs on older — they are recomputed here when either changes.
+	if mgr := adw.StyleManagerGetDefault(); mgr != nil {
+		mgr.NotifyProperty("dark", a.reloadThemeCSS)
+		mgr.NotifyProperty("accent-color-rgba", a.reloadThemeCSS)
+	}
 	a.applyTheme()
+}
+
+// reloadThemeCSS loads the CSS for the theme in effect, with the desktop's
+// current accent colour. applyTheme calls it when the choice changes; the
+// style manager calls it when the desktop's scheme or accent does.
+func (a *App) reloadThemeCSS() {
+	mgr := adw.StyleManagerGetDefault()
+	if mgr == nil || a.themeCSS == nil {
+		return
+	}
+	accent := ""
+	if c := mgr.AccentColorRGBA(); c != nil {
+		accent = theme.HexOf(c.Red(), c.Green(), c.Blue())
+	}
+	css := theme.FollowCSS(mgr.Dark(), accent)
+	if !theme.IsFollowing(a.settings.Theme) {
+		css = theme.Resolve(a.settings.Theme, mgr.Dark()).CSS(accent)
+	}
+	// Reloading a provider restyles every widget in the window, and this is
+	// called more often than the CSS changes: forcing a theme's scheme fires
+	// notify::dark, and then applyTheme calls it again.
+	if css == a.loadedThemeCSS {
+		return
+	}
+	a.loadedThemeCSS = css
+	a.themeCSS.LoadFromString(css)
 }
 
 // applyTheme puts the chosen theme into effect, live.
@@ -416,20 +462,65 @@ func (a *App) applyTheme() {
 
 	if theme.IsFollowing(a.settings.Theme) {
 		mgr.SetColorScheme(adw.ColorSchemeDefault)
-		if a.themeCSS != nil {
-			a.themeCSS.LoadFromString("")
-		}
-		return
-	}
-
-	t := theme.Resolve(a.settings.Theme, mgr.Dark())
-	if t.Dark {
+	} else if theme.Resolve(a.settings.Theme, mgr.Dark()).Dark {
 		mgr.SetColorScheme(adw.ColorSchemeForceDark)
 	} else {
 		mgr.SetColorScheme(adw.ColorSchemeForceLight)
 	}
-	if a.themeCSS != nil {
-		a.themeCSS.LoadFromString(t.CSS())
+	a.reloadThemeCSS()
+}
+
+// glassClasses are the style classes window transparency uses: the general one,
+// which the stylesheet turns the backgrounds see-through with, and one per level
+// for how far. They are all listed so that a change of level can clear the old
+// one without remembering what it was.
+var glassClasses = []string{"am-glass", "am-glass-subtle", "am-glass-medium", "am-glass-strong"}
+
+// glassLevelClass is the class for one level, or "" for off and for anything
+// unrecognised.
+func glassLevelClass(level string) string {
+	switch config.NormalizeTransparency(level) {
+	case config.TransparencySubtle:
+		return "am-glass-subtle"
+	case config.TransparencyMedium:
+		return "am-glass-medium"
+	case config.TransparencyStrong:
+		return "am-glass-strong"
+	default:
+		return ""
+	}
+}
+
+// applyTransparency makes the main window see-through to the chosen level, or
+// opaque again.
+//
+// It is all done with style classes on the window; the stylesheet decides what
+// each one means. Nothing is applied when the setting is off, and nothing where
+// the display cannot show it — the saved choice is left alone in that case, so it
+// takes effect again on a desktop that can.
+//
+// Like applyTheme it does nothing when the effective level has not changed. This
+// runs on every settings change, and adding or removing a class restyles the
+// whole window whether or not the result is any different.
+func (a *App) applyTransparency() {
+	if a.win == nil {
+		return
+	}
+	want := glassLevelClass(a.settings.WindowTransparency)
+	if ok, _ := ui.TransparencyAvailable(); !ok {
+		want = ""
+	}
+	if want == a.appliedGlass {
+		return
+	}
+	a.appliedGlass = want
+
+	for _, c := range glassClasses {
+		a.win.RemoveCSSClass(c)
+	}
+	if want != "" {
+		a.win.AddCSSClass("am-glass")
+		a.win.AddCSSClass(want)
 	}
 }
 

@@ -262,10 +262,12 @@ func (w *Window) Build() gtk.Widgetter {
 		adw.BreakpointConditionMaxWidth, narrowWidth, adw.LengthUnitPx))
 	bp.ConnectApply(func() {
 		split.SetCollapsed(true)
+		split.AddCSSClass("am-collapsed") // the overlaid sidebar stays solid under glass
 		w.menuBtn.SetVisible(true)
 	})
 	bp.ConnectUnapply(func() {
 		split.SetCollapsed(false)
+		split.RemoveCSSClass("am-collapsed")
 		split.SetShowSidebar(true)
 		w.menuBtn.SetVisible(false)
 	})

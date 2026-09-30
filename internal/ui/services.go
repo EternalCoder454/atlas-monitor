@@ -125,10 +125,10 @@ func newServicesView() *servicesView {
 	filterModel := gtk.NewFilterListModel(v.model, &v.filter.Filter)
 	v.selection = gtk.NewSingleSelection(filterModel)
 
-	// The same Task Manager table as Apps: columns divided, rows not. See
-	// am-table in assets/style.css.
+	// The same ruled table as Apps: dividers between the columns, fainter lines
+	// between the rows. See am-table in assets/style.css.
 	cv := gtk.NewColumnView(v.selection)
-	cv.SetShowRowSeparators(false)
+	cv.SetShowRowSeparators(true)
 	cv.SetShowColumnSeparators(true)
 	cv.AddCSSClass("am-table")
 	cv.AppendColumn(v.statusColumn())

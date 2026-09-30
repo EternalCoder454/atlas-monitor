@@ -369,6 +369,15 @@ func newAppPage(s *config.Settings, h SettingsHooks) *appPage {
 	}
 
 	p.page.Add(themeGroup(s, h))
+	// Right under the theme, because it is the other half of how the window
+	// looks: the theme picks the colours and this decides how much of the
+	// desktop shows through them. A group of its own, not a row in the theme's:
+	// a group puts its rows above its other content, which left the row between
+	// the theme's name and its circles.
+	winGroup := adw.NewPreferencesGroup()
+	winGroup.SetTitle("Window")
+	winGroup.Add(transparencyRow(s, h))
+	p.page.Add(winGroup)
 	p.page.Add(perfGroup(s, h))
 
 	updGroup := adw.NewPreferencesGroup()
@@ -629,6 +638,42 @@ func themeGroup(s *config.Settings, h SettingsHooks) *adw.PreferencesGroup {
 	g.Add(content)
 	sync()
 	return g
+}
+
+// transparencyRow is the window transparency dropdown. Where transparency cannot
+// work — see TransparencyAvailable — the row stays, greyed, with the reason in
+// place of its description, so that the option is not simply missing with nothing
+// to say why.
+func transparencyRow(s *config.Settings, h SettingsHooks) *adw.ComboRow {
+	labels := make([]string, len(transparencyLevels))
+	selected := 0
+	current := config.NormalizeTransparency(s.WindowTransparency)
+	for i, l := range transparencyLevels {
+		labels[i] = l.Label
+		if l.Value == current {
+			selected = i
+		}
+	}
+
+	row := adw.NewComboRow()
+	row.SetTitle("Window transparency")
+	row.SetSubtitle("See the desktop through the window. Text and charts stay solid")
+	row.SetModel(gtk.NewStringList(labels))
+	row.SetSelected(uint(selected))
+	if ok, why := TransparencyAvailable(); !ok {
+		row.SetSubtitle(why)
+		row.SetSensitive(false)
+	}
+	row.NotifyProperty("selected", func() {
+		idx := int(row.Selected())
+		if idx < 0 || idx >= len(transparencyLevels) || transparencyLevels[idx].Value == s.WindowTransparency {
+			return
+		}
+		s.WindowTransparency = transparencyLevels[idx].Value
+		_ = config.Save(*s)
+		fire(h.OnChange)
+	})
+	return row
 }
 
 // perfGroup builds the rendering-mode selector and the live self-memory

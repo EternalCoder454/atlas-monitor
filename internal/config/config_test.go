@@ -25,6 +25,9 @@ func TestDefaultsAreValid(t *testing.T) {
 	if len(d.QuickPrompts) != 3 {
 		t.Errorf("got %d quick prompts, want 3", len(d.QuickPrompts))
 	}
+	if d.WindowTransparency != TransparencyOff {
+		t.Errorf("default WindowTransparency = %q, want %q", d.WindowTransparency, TransparencyOff)
+	}
 }
 
 func TestNormalizeRefresh(t *testing.T) {
@@ -37,6 +40,55 @@ func TestNormalizeRefresh(t *testing.T) {
 		if got := NormalizeRefresh(bad); got != DefaultRefreshSeconds {
 			t.Errorf("NormalizeRefresh(%d) = %d, want the default %d", bad, got, DefaultRefreshSeconds)
 		}
+	}
+}
+
+func TestNormalizeTransparency(t *testing.T) {
+	for _, level := range TransparencyChoices {
+		if got := NormalizeTransparency(level); got != level {
+			t.Errorf("NormalizeTransparency(%q) = %q, want it unchanged", level, got)
+		}
+	}
+	for _, bad := range []string{"", "Strong", "opaque", "50", " subtle"} {
+		if got := NormalizeTransparency(bad); got != TransparencyOff {
+			t.Errorf("NormalizeTransparency(%q) = %q, want %q", bad, got, TransparencyOff)
+		}
+	}
+}
+
+// TestWindowTransparencyLoads covers the setting through the file: a saved level
+// comes back, and a file from before the option existed, or with a value nobody
+// offers, comes back off rather than as an empty string the window would have to
+// guess about.
+func TestWindowTransparencyLoads(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(path()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for body, want := range map[string]string{
+		`{"window_transparency":"medium"}`: TransparencyMedium,
+		`{"window_transparency":"strong"}`: TransparencyStrong,
+		`{"window_transparency":"glassy"}`: TransparencyOff,
+		`{"window_transparency":""}`:       TransparencyOff,
+		`{"window_transparency":7}`:        TransparencyOff,
+		`{"refresh_seconds":2}`:            TransparencyOff,
+	} {
+		if err := os.WriteFile(path(), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := Load().WindowTransparency; got != want {
+			t.Errorf("%s: WindowTransparency = %q, want %q", body, got, want)
+		}
+	}
+
+	// And it survives a save.
+	s := Defaults()
+	s.WindowTransparency = TransparencySubtle
+	if err := Save(s); err != nil {
+		t.Fatal(err)
+	}
+	if got := Load().WindowTransparency; got != TransparencySubtle {
+		t.Errorf("after a save WindowTransparency = %q, want %q", got, TransparencySubtle)
 	}
 }
 
@@ -55,6 +107,8 @@ func TestLoadRepairsBadValues(t *testing.T) {
 		"update_channel":  "nightly",
 		"ollama_url":      "",
 		"model":           "",
+
+		"window_transparency": "frosted",
 	}
 	raw, err := json.Marshal(bad)
 	if err != nil {
@@ -86,6 +140,9 @@ func TestLoadRepairsBadValues(t *testing.T) {
 	}
 	if s.OllamaURL == "" || s.Model == "" {
 		t.Error("empty Ollama URL/model were not repaired")
+	}
+	if s.WindowTransparency != TransparencyOff {
+		t.Errorf("WindowTransparency = %q, want repaired to %q", s.WindowTransparency, TransparencyOff)
 	}
 }
 
@@ -176,6 +233,9 @@ func TestLoadSurvivesACorruptFile(t *testing.T) {
 			}
 			if s.UpdateChannel != "main" && s.UpdateChannel != "beta" {
 				t.Errorf("UpdateChannel = %q", s.UpdateChannel)
+			}
+			if s.WindowTransparency != NormalizeTransparency(s.WindowTransparency) {
+				t.Errorf("WindowTransparency = %q, not an offered level", s.WindowTransparency)
 			}
 			if s.OllamaURL == "" || s.Model == "" || s.AssistantTitle == "" || s.SystemPrompt == "" {
 				t.Error("a text field the assistant needs came back empty")

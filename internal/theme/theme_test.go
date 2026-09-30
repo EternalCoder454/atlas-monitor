@@ -67,8 +67,14 @@ func TestLightAndDarkCarryNoOverrides(t *testing.T) {
 		if len(th.colors) != 0 {
 			t.Errorf("%s overrides %d colours; it should be libadwaita's own", id, len(th.colors))
 		}
-		if th.CSS() != "" {
-			t.Errorf("%s produced CSS", id)
+		// Only their lines: no palette, but the table and list lines still
+		// have to be sized to libadwaita's colours. See LineColors.
+		css := th.CSS("")
+		if strings.Contains(css, "@define-color") || strings.Contains(css, "--window-bg-color") {
+			t.Errorf("%s overrides colours in its CSS:\n%s", id, css)
+		}
+		if !strings.Contains(css, "--am-divider") || !strings.Contains(css, "--am-rowline") {
+			t.Errorf("%s carries no line colours:\n%s", id, css)
 		}
 	}
 }
@@ -85,7 +91,7 @@ func TestThemedCSSCarriesBothSyntaxes(t *testing.T) {
 		if len(th.colors) == 0 {
 			continue
 		}
-		css := th.CSS()
+		css := th.CSS("")
 		if !strings.Contains(css, ":root {") {
 			t.Errorf("%s: no :root block, so nothing reading var(--accent-color) follows the theme", th.ID)
 		}
