@@ -946,7 +946,7 @@ func (v *appsView) matches(item *coreglib.Object) bool {
 // matchesRow is the predicate itself, separate from unwrapping the list item so
 // the tests can exercise it without a GObject.
 func (v *appsView) matchesRow(r *procRow) bool {
-	if !r.live {
+	if r == nil || !r.live {
 		return false // a retired row waiting on the free list
 	}
 	if v.search == "" {
