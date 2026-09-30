@@ -158,6 +158,21 @@ func (a *App) activate() {
 	// and more than half of the CPU page's.
 	win.SetOverflow(gtk.OverflowVisible)
 	win.AddCSSClass("am-main")
+	// High contrast, as a class the stylesheet can see. Its cards replace
+	// libadwaita's shadow and so its high-contrast one too; see "Cards" in
+	// assets/style.css. A class, not an @media query, because GTK only reads
+	// those from 4.20 and Atlas supports older.
+	if mgr := adw.StyleManagerGetDefault(); mgr != nil {
+		syncContrast := func() {
+			if mgr.HighContrast() {
+				win.AddCSSClass("am-hc")
+			} else {
+				win.RemoveCSSClass("am-hc")
+			}
+		}
+		syncContrast()
+		mgr.NotifyProperty("high-contrast", syncContrast)
+	}
 	win.SetDefaultSize(a.settings.WindowWidth, a.settings.WindowHeight)
 	win.SetSizeRequest(config.MinWindowWidth, config.MinWindowHeight)
 	if a.settings.WindowMaximized {

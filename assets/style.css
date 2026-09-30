@@ -639,6 +639,31 @@ row.am-setting > box.header {
    at either end — and a radius changed in some of them and not the rest leaves
    a 12px corner poking out of a 7px card. So every one of its rules is here,
    selector for selector (from libadwaita 1.9's stylesheet), at 7px. */
+
+/* A card is drawn with libadwaita's hairline ring and without its two blurred
+   shadow layers. Task Manager's cards are flat, and on the default software
+   renderer a blurred shadow is one of the dearest things there is to draw: it is
+   drawn with every frame, and on Wayland every frame redraws the whole window
+   (see "The frame"). Measured on a captured frame, dropping the blur took 14% off
+   Settings and 9% off Sensors. The ring is the edge a card is seen by, so it
+   stays: stronger than libadwaita's, which leaned on the blur to show a white
+   card on a near-white page, and about the grey of Task Manager's own card
+   border there. Under high contrast it is at full strength, as libadwaita's
+   own is. */
+list.boxed-list,
+list.content,
+list.boxed-list-separate > row,
+.card {
+  box-shadow: 0 0 0 1px rgba(0, 0, 6, 0.08);
+}
+
+window.am-hc list.boxed-list,
+window.am-hc list.content,
+window.am-hc list.boxed-list-separate > row,
+window.am-hc .card {
+  box-shadow: 0 0 0 1px alpha(currentColor, 0.5);
+}
+
 list.boxed-list > row:first-child,
 list.content > row:first-child,
 list.boxed-list > row:first-child.expander row.header,
