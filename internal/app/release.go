@@ -76,7 +76,7 @@ func (a *App) checkRemote(channel string) (UpdateInfo, error) {
 		info.Available = true
 		info.Switch = true
 		info.Version = version
-		info.Summary = fmt.Sprintf("Switch to %s (v%s)", name, version)
+		info.Summary = fmt.Sprintf("Switch to %s: v%s → v%s", name, local, version)
 		return info, nil
 	}
 
