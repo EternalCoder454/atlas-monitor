@@ -377,7 +377,17 @@ func (w *Window) RefreshQuickPrompts() {
 func (w *Window) StartRefresh() {
 	w.lastTrim = time.Now()
 	w.installTick()
+	// Once, when starting up is over: the code that did it is not needed
+	// again, and without this it stays resident. See sysmem.ReleaseCode.
+	glib.TimeoutAdd(uint(codeReleaseDelay/time.Millisecond), func() bool {
+		go sysmem.ReleaseCode()
+		return false
+	})
 }
+
+// codeReleaseDelay is how long after the window opens its start-up code is
+// paged out: long enough for the first page's first ticks to have run.
+const codeReleaseDelay = 20 * time.Second
 
 // SetRefreshInterval re-times the UI tick and both collectors after the
 // interval is changed in Settings.

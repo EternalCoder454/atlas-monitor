@@ -55,9 +55,10 @@ func Tune() { C.atlas_tune() }
 func Trim() { C.atlas_trim() }
 
 // Release is the full sweep used when the window is hidden: return unused Go
-// spans to the OS, then trim the C heap. A backgrounded Atlas should cost the
-// system almost nothing.
+// spans to the OS, trim the C heap, and page out the executable's idle code. A
+// backgrounded Atlas should cost the system almost nothing.
 func Release() {
 	debug.FreeOSMemory()
 	C.atlas_trim()
+	ReleaseCode()
 }
