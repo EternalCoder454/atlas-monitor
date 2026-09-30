@@ -17,7 +17,7 @@
 # only thing that actually works for a locally built package.
 
 pkgname=atlas-monitor
-pkgver=0.13.0
+pkgver=0.14.0
 pkgrel=1
 pkgdesc="Lightweight system monitor — CPU, memory, disk, network, GPU, processes and services"
 arch=('x86_64' 'aarch64')
@@ -31,7 +31,7 @@ optdepends=(
     'ollama: runs the local model the optional assistant talks to'
 )
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
-sha256sums=('e13a24fb7f04de392a7ee634e43c4bad52caddedd07dfa198fd2825dec82c775')
+sha256sums=('6dc21e0f977fbd0462e7282375cd6b74bc8c17fa92c2b24731759c563b37277b')
 
 # Atlas's own symbolic icons. All atlas-prefixed on purpose: icon lookup falls
 # back to hicolor last, so a generic name here would lose to whatever icon theme
