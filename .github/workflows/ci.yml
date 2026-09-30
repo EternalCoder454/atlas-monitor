@@ -53,7 +53,11 @@ jobs:
         id: cachetools
         run: |
           echo "keepcache=1" >> /etc/dnf/dnf.conf
-          dnf install -y --setopt=install_weak_deps=False --nodocs tar zstd
+          # The Fedora image has both today, and asking dnf anyway cost 7 seconds
+          # of loading repository metadata to be told "Nothing to do".
+          if ! command -v tar >/dev/null || ! command -v zstd >/dev/null; then
+            dnf install -y --setopt=install_weak_deps=False --nodocs tar zstd
+          fi
           echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
 
       - name: Cache dnf packages
@@ -165,7 +169,11 @@ jobs:
         id: cachetools
         run: |
           echo "keepcache=1" >> /etc/dnf/dnf.conf
-          dnf install -y --setopt=install_weak_deps=False --nodocs tar zstd
+          # The Fedora image has both today, and asking dnf anyway cost 7 seconds
+          # of loading repository metadata to be told "Nothing to do".
+          if ! command -v tar >/dev/null || ! command -v zstd >/dev/null; then
+            dnf install -y --setopt=install_weak_deps=False --nodocs tar zstd
+          fi
           echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
 
       - name: Cache dnf packages
