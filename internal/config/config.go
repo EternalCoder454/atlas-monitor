@@ -214,6 +214,10 @@ type Settings struct {
 	HiddenColumns []string `json:"hidden_columns"`
 
 	QuickPrompts []QuickPrompt `json:"quick_prompts"` // exactly 3, shown in the assistant dropdown
+
+	// ShowIntro plays the Atlas mark and the app's name when the window opens.
+	// It is skipped anyway when the desktop has animations turned off.
+	ShowIntro bool `json:"show_intro"`
 }
 
 // Defaults returns the built-in defaults.
@@ -234,6 +238,7 @@ func Defaults() Settings {
 		HiddenColumns:  []string{"Disk Read", "Disk Write"},
 		EnergyAuto:     true,
 		QuickPrompts:   DefaultQuickPrompts(),
+		ShowIntro:      true,
 
 		WindowTransparency: TransparencyOff,
 		FrameStyle:         FrameSeeThrough,

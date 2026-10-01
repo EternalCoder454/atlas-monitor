@@ -3,6 +3,11 @@
 Written for the people who use Atlas Monitor rather than the people who build
 it. One short line per change, no jargon — this is what the update prompt shows.
 
+## 0.15.0
+
+- A new icon: the Atlas mark, shared with Atlas Notes
+- Atlas opens with a short intro of its logo; a click skips it, and Settings can turn it off
+
 ## 0.14.0
 
 - One command installs, updates or removes Atlas on Fedora, Ubuntu, Debian, Mint, Arch and more

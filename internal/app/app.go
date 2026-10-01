@@ -203,7 +203,13 @@ func (a *App) activate() {
 	toolbar.AddCSSClass("am-frame")
 	toolbar.AddTopBar(header)
 	toolbar.SetContent(root)
-	win.SetContent(toolbar)
+	// The intro covers the whole window, title bar too, and fades into it. Not
+	// when ATLAS_VIEW picks the page, which is a development capture.
+	if a.settings.ShowIntro && ui.IntroEnabled() && os.Getenv("ATLAS_VIEW") == "" {
+		win.SetContent(ui.NewIntro(toolbar, "Monitor", nil).Widget())
+	} else {
+		win.SetContent(toolbar)
+	}
 	a.applyTransparency()
 
 	// Pause/resume all collection based on window visibility (0% CPU hidden).

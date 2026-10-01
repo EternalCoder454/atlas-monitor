@@ -71,6 +71,10 @@ package() {
     install -Dm644 assets/style.css "$pkgdir/usr/share/$pkgname/style.css"
     install -Dm644 assets/icon.svg \
         "$pkgdir/usr/share/icons/hicolor/scalable/apps/com.atlas.Monitor.svg"
+    install -Dm644 assets/icon-16.svg \
+        "$pkgdir/usr/share/icons/hicolor/16x16/apps/com.atlas.Monitor.svg"
+    install -Dm644 assets/icon-symbolic.svg \
+        "$pkgdir/usr/share/icons/hicolor/symbolic/apps/com.atlas.Monitor-symbolic.svg"
 
     local icon
     for icon in "${_icons[@]}"; do

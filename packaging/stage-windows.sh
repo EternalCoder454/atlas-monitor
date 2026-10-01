@@ -124,6 +124,9 @@ icondir="$dist/share/icons/hicolor/scalable/actions"
 mkdir -p "$icondir" "$dist/share/icons/hicolor/scalable/apps"
 cp assets/icons/atlas-*-symbolic.svg "$icondir/"
 cp assets/icon.svg "$dist/share/icons/hicolor/scalable/apps/com.atlas.Monitor.svg"
+mkdir -p "$dist/share/icons/hicolor/16x16/apps" "$dist/share/icons/hicolor/symbolic/apps"
+cp assets/icon-16.svg "$dist/share/icons/hicolor/16x16/apps/com.atlas.Monitor.svg"
+cp assets/icon-symbolic.svg "$dist/share/icons/hicolor/symbolic/apps/com.atlas.Monitor-symbolic.svg"
 gtk4-update-icon-cache -f -t "$dist/share/icons/hicolor" || true
 
 staged_icons=$(ls "$icondir"/atlas-*-symbolic.svg 2>/dev/null | wc -l)
