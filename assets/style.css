@@ -792,3 +792,23 @@ list.boxed-list-separate > row,
 .am-quiet-button:hover {
   opacity: 1;
 }
+
+/* The intro (internal/ui/intro.go) covers the window while the content under
+   it is hidden, so it brings its own background, rounded as the window is and
+   as see-through as the frame. */
+.atlas-intro {
+  background-color: @window_bg_color;
+  border-radius: var(--window-radius);
+}
+
+window.am-glass-subtle .atlas-intro {
+  background-color: alpha(@window_bg_color, 0.90);
+}
+
+window.am-glass-medium .atlas-intro {
+  background-color: alpha(@window_bg_color, 0.78);
+}
+
+window.am-glass-strong .atlas-intro {
+  background-color: alpha(@window_bg_color, 0.62);
+}

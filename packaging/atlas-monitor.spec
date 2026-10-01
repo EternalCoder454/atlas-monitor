@@ -55,6 +55,8 @@ go build -buildmode=pie -trimpath -ldflags="-s -w" -o %{name} .
 install -Dm755 %{name}                       %{buildroot}%{_bindir}/%{name}
 install -Dm644 assets/style.css              %{buildroot}%{_datadir}/%{name}/style.css
 install -Dm644 assets/icon.svg               %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/com.atlas.Monitor.svg
+install -Dm644 assets/icon-16.svg            %{buildroot}%{_datadir}/icons/hicolor/16x16/apps/com.atlas.Monitor.svg
+install -Dm644 assets/icon-symbolic.svg      %{buildroot}%{_datadir}/icons/hicolor/symbolic/apps/com.atlas.Monitor-symbolic.svg
 for icon in cpu memory disk gpu assistant network wifi battery apps services settings prompts update trash reset menu warning startup energy sensors theme opacity text timer branch folder document; do
     install -Dm644 assets/icons/atlas-$icon-symbolic.svg \
         %{buildroot}%{_datadir}/icons/hicolor/scalable/actions/atlas-$icon-symbolic.svg
@@ -73,6 +75,8 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/com.atlas.Monitor.des
 %{_datadir}/%{name}/
 %{_datadir}/applications/com.atlas.Monitor.desktop
 %{_datadir}/icons/hicolor/scalable/apps/com.atlas.Monitor.svg
+%{_datadir}/icons/hicolor/16x16/apps/com.atlas.Monitor.svg
+%{_datadir}/icons/hicolor/symbolic/apps/com.atlas.Monitor-symbolic.svg
 %{_datadir}/icons/hicolor/scalable/actions/atlas-*-symbolic.svg
 
 %changelog

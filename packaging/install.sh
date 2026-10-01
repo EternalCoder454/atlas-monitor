@@ -32,6 +32,8 @@ here="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 DATADIR="$PREFIX/share/atlas-monitor"
 APPDIR="$PREFIX/share/applications"
 ICONDIR="$PREFIX/share/icons/hicolor/scalable/apps"
+ICON16DIR="$PREFIX/share/icons/hicolor/16x16/apps"
+ICONSYMDIR="$PREFIX/share/icons/hicolor/symbolic/apps"
 ICONACT="$PREFIX/share/icons/hicolor/scalable/actions"
 
 refresh_caches() {
@@ -40,7 +42,7 @@ refresh_caches() {
 }
 
 if [ "$action" = uninstall ]; then
-    rm -f "$PREFIX/bin/$BINARY" "$APPDIR/$APPID.desktop" "$ICONDIR/$APPID.svg"
+    rm -f "$PREFIX/bin/$BINARY" "$APPDIR/$APPID.desktop" "$ICONDIR/$APPID.svg" "$ICON16DIR/$APPID.svg" "$ICONSYMDIR/$APPID-symbolic.svg"
     for icon in $ICONS; do rm -f "$ICONACT/atlas-$icon-symbolic.svg"; done
     rm -rf "$DATADIR"
     refresh_caches
@@ -84,6 +86,8 @@ fi
 install -Dm755 "$here/$BINARY"            "$PREFIX/bin/$BINARY"
 install -Dm644 "$here/assets/style.css"   "$DATADIR/style.css"
 install -Dm644 "$here/assets/icon.svg"    "$ICONDIR/$APPID.svg"
+install -Dm644 "$here/assets/icon-16.svg" "$ICON16DIR/$APPID.svg"
+install -Dm644 "$here/assets/icon-symbolic.svg" "$ICONSYMDIR/$APPID-symbolic.svg"
 for icon in $ICONS; do
     install -Dm644 "$here/assets/icons/atlas-$icon-symbolic.svg" "$ICONACT/atlas-$icon-symbolic.svg"
 done

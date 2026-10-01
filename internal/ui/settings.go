@@ -82,7 +82,8 @@ func newSettingsView(s *config.Settings, h SettingsHooks) *settingsView {
 	settingsSection(page, "Appearance",
 		themeCard(s, h),
 		transparencyCard(s, h),
-		settingsCard(fontRow(s, h)))
+		settingsCard(fontRow(s, h)),
+		settingsCard(introRow(s, h)))
 
 	v.usage = memoryRow()
 	settingsSection(page, "Performance",
@@ -477,6 +478,24 @@ func fontRow(s *config.Settings, h SettingsHooks) *adw.ComboRow {
 		}
 		s.TextRendering = gfx.TextModes[idx].Value
 		row.SetSubtitle(gfx.TextModes[idx].Detail + " Restart Atlas to apply.")
+		save(s, h)
+	})
+	return row
+}
+
+// introRow turns the intro at startup on and off. It takes effect at the next
+// launch; the window that is open has already had its intro.
+func introRow(s *config.Settings, h SettingsHooks) *adw.SwitchRow {
+	row := adw.NewSwitchRow()
+	row.SetTitle("Intro at startup")
+	row.SetSubtitle("Plays the Atlas logo for a moment when Atlas opens. A click or any key skips it.")
+	withIcon(&row.ActionRow, "atlas-startup-symbolic")
+	row.SetActive(s.ShowIntro)
+	row.NotifyProperty("active", func() {
+		if s.ShowIntro == row.Active() {
+			return
+		}
+		s.ShowIntro = row.Active()
 		save(s, h)
 	})
 	return row

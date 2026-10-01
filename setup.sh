@@ -448,6 +448,8 @@ do_uninstall() {
 	rm -f "$PREFIX/bin/atlas-monitor" \
 		"$PREFIX/share/applications/com.atlas.Monitor.desktop" \
 		"$PREFIX/share/icons/hicolor/scalable/apps/com.atlas.Monitor.svg" \
+		"$PREFIX/share/icons/hicolor/16x16/apps/com.atlas.Monitor.svg" \
+		"$PREFIX/share/icons/hicolor/symbolic/apps/com.atlas.Monitor-symbolic.svg" \
 		"$PREFIX"/share/icons/hicolor/scalable/actions/atlas-*-symbolic.svg
 	rm -rf "$DATA"
 	have update-desktop-database && update-desktop-database "$PREFIX/share/applications" 2>/dev/null || true
