@@ -166,6 +166,10 @@ type Settings struct {
 	// two disk ones start hidden: they count blocks that reach the drive, which
 	// on anything with a page cache is nothing for nearly every process.
 	HiddenColumns []string `json:"hidden_columns"`
+
+	// ShowIntro plays the Atlas mark and the app's name when the window opens.
+	// It is skipped anyway when the desktop has animations turned off.
+	ShowIntro bool `json:"show_intro"`
 }
 
 // Defaults returns the built-in defaults.
@@ -180,6 +184,7 @@ func Defaults() Settings {
 		WindowHeight:   DefaultWindowHeight,
 		HiddenColumns:  []string{"Disk Read", "Disk Write"},
 		EnergyAuto:     true,
+		ShowIntro:      true,
 
 		WindowTransparency: TransparencyOff,
 		FrameStyle:         FrameSeeThrough,

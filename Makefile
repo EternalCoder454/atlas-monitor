@@ -5,6 +5,8 @@ PREFIX  ?= $(HOME)/.local
 DATADIR := $(PREFIX)/share/atlas-monitor
 APPDIR  := $(PREFIX)/share/applications
 ICONDIR := $(PREFIX)/share/icons/hicolor/scalable/apps
+SMALLICONDIR := $(PREFIX)/share/icons/hicolor/16x16/apps
+SYMBOLICDIR := $(PREFIX)/share/icons/hicolor/symbolic/apps
 ICONACT := $(PREFIX)/share/icons/hicolor/scalable/actions
 
 # Atlas's own symbolic icons, installed into the actions icon directory. They
@@ -58,6 +60,8 @@ install: build
 	printf '%s\n' "$(CURDIR)" > $(DATADIR)/source   # record source dir for in-app "Update and restart"
 	printf '%s\n' "$(TAGS)" > $(DATADIR)/buildtags  # so an in-app update rebuilds the same flavour
 	install -Dm644 assets/icon.svg $(ICONDIR)/$(APPID).svg
+	install -Dm644 assets/icon-16.svg $(SMALLICONDIR)/$(APPID).svg
+	install -Dm644 assets/icon-symbolic.svg $(SYMBOLICDIR)/$(APPID)-symbolic.svg
 	for icon in $(ICONS); do \
 		install -Dm644 assets/icons/atlas-$$icon-symbolic.svg $(ICONACT)/atlas-$$icon-symbolic.svg; \
 	done
@@ -71,7 +75,7 @@ install: build
 uninstall:
 	rm -f $(PREFIX)/bin/$(BINARY)
 	rm -f $(APPDIR)/$(APPID).desktop
-	rm -f $(ICONDIR)/$(APPID).svg
+	rm -f $(ICONDIR)/$(APPID).svg $(SMALLICONDIR)/$(APPID).svg $(SYMBOLICDIR)/$(APPID)-symbolic.svg
 	for icon in $(ICONS); do rm -f $(ICONACT)/atlas-$$icon-symbolic.svg; done
 	rm -rf $(DATADIR)
 	-update-desktop-database $(APPDIR) 2>/dev/null || true
