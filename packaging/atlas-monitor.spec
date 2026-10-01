@@ -8,7 +8,7 @@
 %global debug_package %{nil}
 
 Name:           atlas-monitor
-Version:        %{?_version}%{!?_version:0.14.0}
+Version:        %{?_version}%{!?_version:0.15.0}
 Release:        1%{?dist}
 Summary:        Lightweight system monitor for GNOME — CPU, memory, disk, network, GPU
 
@@ -80,6 +80,10 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/com.atlas.Monitor.des
 %{_datadir}/icons/hicolor/scalable/actions/atlas-*-symbolic.svg
 
 %changelog
+* Wed Sep 30 2026 EternalHell <77252745+EternalCoder454@users.noreply.github.com> - 0.15.0-1
+- The new Atlas mark is the app icon, with 16 px and symbolic versions
+- An intro plays the logo at startup; it can be skipped or turned off
+
 * Wed Sep 30 2026 EternalHell <77252745+EternalCoder454@users.noreply.github.com> - 0.14.0-1
 - setup.sh installs, updates and removes Atlas on any distribution
 - Release, Beta and Minimal are channels chosen in Settings
